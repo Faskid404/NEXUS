@@ -1,42 +1,41 @@
 import React, { useState, useEffect } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Toaster } from "@/components/ui/toaster";
-import { TooltipProvider } from "@/components/ui/tooltip";
 import LockScreen from "@/components/LockScreen";
 import MainLab from "@/components/MainLab";
 
-const queryClient = new QueryClient();
+const AUTH_KEY = "nxauth_v5";
+const AUTH_VAL = "omowoli12345@";
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: 1,
+      staleTime: 0,
+    },
+  },
+});
 
 function AppContent() {
   const [unlocked, setUnlocked] = useState(false);
 
   useEffect(() => {
-    if (sessionStorage.getItem("nxauth") === "omowoli12345@") {
+    if (sessionStorage.getItem(AUTH_KEY) === AUTH_VAL) {
       setUnlocked(true);
     }
   }, []);
 
   const handleUnlock = () => {
-    sessionStorage.setItem("nxauth", "omowoli12345@");
+    sessionStorage.setItem(AUTH_KEY, AUTH_VAL);
     setUnlocked(true);
   };
 
   return unlocked ? <MainLab /> : <LockScreen onUnlock={handleUnlock} />;
 }
 
-function App() {
-  useEffect(() => {
-    document.documentElement.classList.add("dark");
-  }, []);
-
+export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <AppContent />
-        <Toaster />
-      </TooltipProvider>
+      <AppContent />
     </QueryClientProvider>
   );
 }
-
-export default App;

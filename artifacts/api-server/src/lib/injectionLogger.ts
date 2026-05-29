@@ -4,7 +4,7 @@ import { join } from "path";
 const LOG_FILE = join(process.cwd(), "injection_logs.json");
 
 if (!existsSync(LOG_FILE)) {
-  writeFileSync(LOG_FILE, JSON.stringify([], null, 2));
+  writeFileSync(LOG_FILE, "[]");
 }
 
 export interface InjectionLogEntry {
@@ -23,31 +23,37 @@ export function logInjection(
   responseTime: number
 ): void {
   try {
-    const raw = readFileSync(LOG_FILE, "utf8");
-    const logs: InjectionLogEntry[] = JSON.parse(raw || "[]");
+    const raw = readFileSync(LOG_FILE, "utf8").trim() || "[]";
+    const logs: InjectionLogEntry[] = JSON.parse(raw);
     logs.unshift({
       id: Date.now(),
       timestamp: new Date().toISOString(),
-      command: String(command).slice(0, 200),
+      command: String(command).slice(0, 300),
       engine,
       mode,
       responseTime,
     });
-    writeFileSync(LOG_FILE, JSON.stringify(logs.slice(0, 500), null, 2));
+    writeFileSync(LOG_FILE, JSON.stringify(logs.slice(0, 1000), null, 2));
   } catch {
-    // ignore write errors on read-only FS
+    try {
+      writeFileSync(LOG_FILE, "[]");
+    } catch {
+      /* readonly fs */
+    }
   }
 }
 
 export function readLogs(): InjectionLogEntry[] {
   try {
     if (!existsSync(LOG_FILE)) return [];
-    return JSON.parse(readFileSync(LOG_FILE, "utf8") || "[]");
+    const raw = readFileSync(LOG_FILE, "utf8").trim();
+    if (!raw) return [];
+    return JSON.parse(raw);
   } catch {
     return [];
   }
 }
 
 export function clearLogs(): void {
-  writeFileSync(LOG_FILE, JSON.stringify([], null, 2));
+  writeFileSync(LOG_FILE, "[]");
 }

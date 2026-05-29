@@ -279,8 +279,13 @@ export default function MainLab() {
   const [copyId, setCopyId]     = useState<string | null>(null);
   const [libTab, setLibTab]     = useState(0);
 
-  const termRef = useRef<HTMLDivElement>(null);
-  const wsRef   = useRef<WebSocket | null>(null);
+  const [scanMode, setScanMode] = useState<"common" | "web" | "full">("common");
+  const [isScanning, setScanning] = useState(false);
+  const [openPorts, setOpenPorts] = useState<number[]>([]);
+
+  const termRef  = useRef<HTMLDivElement>(null);
+  const wsRef    = useRef<WebSocket | null>(null);
+  const scanWsRef = useRef<WebSocket | null>(null);
 
   const { data: hubStatus } = useGetHubStatus({ query: { refetchInterval: 10000, queryKey: getGetHubStatusQueryKey() } });
   const { data: engines }   = useGetEngines({ query: { refetchInterval: 20000, queryKey: getGetEnginesQueryKey() } });
@@ -295,6 +300,45 @@ export default function MainLab() {
   useEffect(() => {
     if (termRef.current) termRef.current.scrollTop = termRef.current.scrollHeight;
   }, [output]);
+
+  const handleScan = useCallback(() => {
+    if (!target.trim() || isScanning) return;
+    scanWsRef.current?.close();
+    scanWsRef.current = null;
+    setOpenPorts([]);
+
+    setOutput(prev => prev + `\nroot@nexus:~# portscan ${target} --mode ${scanMode}\n`);
+    setScanning(true);
+
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const ws = new WebSocket(`${proto}//${window.location.host}/api/ws/scan`);
+    scanWsRef.current = ws;
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ target, mode: scanMode }));
+    };
+
+    ws.onmessage = (ev) => {
+      const msg = JSON.parse(ev.data as string) as {
+        type: string; chunk?: string; message?: string; code?: number; openPorts?: number[];
+      };
+      if (msg.type === "data" && msg.chunk) {
+        setOutput(prev => prev + msg.chunk);
+      } else if (msg.type === "end") {
+        setOpenPorts(msg.openPorts ?? []);
+        setScanning(false);
+        setOutput(prev => prev + "\n");
+        scanWsRef.current = null;
+      } else if (msg.type === "error") {
+        setOutput(prev => prev + `[SCAN ERROR] ${msg.message}\n\n`);
+        setScanning(false);
+        scanWsRef.current = null;
+      }
+    };
+
+    ws.onerror = () => { setOutput(prev => prev + `[SCAN] connection error\n\n`); setScanning(false); };
+    ws.onclose = () => { setScanning(false); scanWsRef.current = null; };
+  }, [target, scanMode, isScanning]);
 
   const handleInject = useCallback(() => {
     if (!cmd.trim() || isRunning) return;
@@ -446,6 +490,41 @@ export default function MainLab() {
                 className="w-full bg-black border border-zinc-800 px-2 py-1 text-[11px] text-purple-300 placeholder-zinc-700 focus:outline-none focus:border-purple-800"
                 autoComplete="off"
               />
+            </div>
+
+            <div className="border border-zinc-800 bg-black p-2">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[10px] text-zinc-500 uppercase tracking-wider">Port Scanner</span>
+                {isScanning && <span className="text-[10px] text-cyan-400 animate-pulse">SCANNING...</span>}
+              </div>
+              <div className="flex gap-0.5 mb-2">
+                {(["common", "web", "full"] as const).map(m => (
+                  <button key={m} onClick={() => setScanMode(m)}
+                    className={`flex-1 py-0.5 text-[9px] uppercase border transition-colors ${scanMode === m ? "border-cyan-700 text-cyan-400 bg-cyan-950/30" : "border-zinc-800 text-zinc-600 hover:border-zinc-700"}`}>
+                    {m}
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={isScanning ? () => { scanWsRef.current?.close(); setScanning(false); } : handleScan}
+                disabled={!target.trim()}
+                className={`w-full py-1.5 text-[11px] font-bold uppercase transition-colors disabled:opacity-30 ${isScanning ? "border border-red-700 text-red-500 hover:bg-red-950/40" : "bg-cyan-900/40 border border-cyan-700/60 text-cyan-400 hover:bg-cyan-900/70"}`}>
+                {isScanning ? "ABORT SCAN" : "SCAN TARGET"}
+              </button>
+              {openPorts.length > 0 && (
+                <div className="mt-2">
+                  <div className="text-[9px] text-zinc-600 uppercase mb-1">{openPorts.length} open port(s)</div>
+                  <div className="flex flex-wrap gap-1">
+                    {openPorts.map(p => (
+                      <button key={p} onClick={() => setCmd(`nc -zv ${target} ${p} 2>&1`)}
+                        title={`Click to probe port ${p}`}
+                        className="px-1.5 py-0.5 bg-cyan-950/40 border border-cyan-800/60 text-cyan-400 text-[9px] hover:bg-cyan-900/60 transition-colors">
+                        {p}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div>

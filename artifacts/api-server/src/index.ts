@@ -3,6 +3,7 @@ import { WebSocketServer } from "ws";
 import app from "./app.js";
 import { logger } from "./lib/logger.js";
 import { handleStreamExec } from "./ws/streamExec.js";
+import { handleScanTarget } from "./ws/scanTarget.js";
 
 const rawPort = process.env["PORT"];
 
@@ -23,6 +24,10 @@ server.on("upgrade", (req, socket, head) => {
   if (req.url === "/api/ws/exec") {
     wss.handleUpgrade(req, socket as import("stream").Duplex, head, (ws) => {
       handleStreamExec(ws);
+    });
+  } else if (req.url === "/api/ws/scan") {
+    wss.handleUpgrade(req, socket as import("stream").Duplex, head, (ws) => {
+      handleScanTarget(ws);
     });
   } else {
     socket.destroy();

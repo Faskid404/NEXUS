@@ -1,22 +1,26 @@
 openapi: 3.1.0
 info:
-  # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: NEXUSFORGE API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: hub
+    description: Injection engine operations
+  - name: logs
+    description: Log operations
+  - name: suggestions
+    description: Payload AI suggestions
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,6 +28,104 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /hub/health:
+    get:
+      operationId: getHubStatus
+      tags: [hub]
+      summary: Hub status including version and available engines
+      responses:
+        "200":
+          description: Hub online
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HubStatus"
+
+  /hub/engines:
+    get:
+      operationId: getEngines
+      tags: [hub]
+      summary: Check which engines are available on this host
+      responses:
+        "200":
+          description: Engine availability map
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EngineMap"
+
+  /hub/exec:
+    post:
+      operationId: execPayload
+      tags: [hub]
+      summary: Execute a payload through the selected engine
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExecInput"
+      responses:
+        "200":
+          description: Execution output
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExecResult"
+        "400":
+          description: Bad request
+
+  /logs:
+    get:
+      operationId: getLogs
+      tags: [logs]
+      summary: Get injection logs
+      responses:
+        "200":
+          description: List of injection logs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/InjectionLog"
+    delete:
+      operationId: clearLogs
+      tags: [logs]
+      summary: Clear all injection logs
+      responses:
+        "200":
+          description: Logs cleared
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClearResult"
+
+  /suggestions:
+    get:
+      operationId: getSuggestions
+      tags: [suggestions]
+      summary: Get AI payload suggestions for a given mode
+      parameters:
+        - name: mode
+          in: query
+          schema:
+            type: string
+        - name: cmd
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of suggestions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+
 components:
   schemas:
     HealthStatus:
@@ -34,3 +136,110 @@ components:
       required:
         - status
 
+    HubStatus:
+      type: object
+      properties:
+        status:
+          type: string
+        version:
+          type: string
+        timestamp:
+          type: string
+        engines:
+          type: array
+          items:
+            type: string
+      required:
+        - status
+        - version
+        - timestamp
+        - engines
+
+    EngineMap:
+      type: object
+      properties:
+        php:
+          type: boolean
+        node:
+          type: boolean
+        python:
+          type: boolean
+        java:
+          type: boolean
+        cpp:
+          type: boolean
+        powershell:
+          type: boolean
+        bash:
+          type: boolean
+      required:
+        - php
+        - node
+        - python
+        - java
+        - cpp
+        - powershell
+        - bash
+
+    ExecInput:
+      type: object
+      properties:
+        cmd:
+          type: string
+        engine:
+          type: string
+        mode:
+          type: string
+        attacker:
+          type: string
+      required:
+        - cmd
+        - engine
+
+    ExecResult:
+      type: object
+      properties:
+        output:
+          type: string
+        engine:
+          type: string
+        mode:
+          type: string
+        elapsed:
+          type: integer
+      required:
+        - output
+        - engine
+        - mode
+        - elapsed
+
+    InjectionLog:
+      type: object
+      properties:
+        id:
+          type: integer
+        timestamp:
+          type: string
+        command:
+          type: string
+        engine:
+          type: string
+        mode:
+          type: string
+        responseTime:
+          type: integer
+      required:
+        - id
+        - timestamp
+        - command
+        - engine
+        - mode
+        - responseTime
+
+    ClearResult:
+      type: object
+      properties:
+        ok:
+          type: boolean
+      required:
+        - ok

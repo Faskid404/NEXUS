@@ -37,7 +37,7 @@ app.use("/api", router);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const frontendDist = path.resolve(__dirname, "../../../nexus/dist");
+const frontendDist = path.resolve(__dirname, "../../../nexus/dist/public");
 
 if (existsSync(frontendDist)) {
   app.use(express.static(frontendDist, { maxAge: 0 }));

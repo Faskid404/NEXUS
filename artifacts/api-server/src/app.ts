@@ -14,16 +14,10 @@ app.use(
     logger,
     serializers: {
       req(req) {
-        return {
-          id: req.id,
-          method: req.method,
-          url: req.url?.split("?")[0],
-        };
+        return { id: req.id, method: req.method, url: req.url?.split("?")[0] };
       },
       res(res) {
-        return {
-          statusCode: res.statusCode,
-        };
+        return { statusCode: res.statusCode };
       },
     },
   }),
@@ -37,7 +31,11 @@ app.use("/api", router);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const frontendDist = path.resolve(__dirname, "../../../nexus/dist/public");
+
+// Built server is at artifacts/api-server/dist/index.mjs
+// Frontend build is at artifacts/nexus/dist/public/
+// Two levels up from dist/ lands at artifacts/, then into nexus/dist/public
+const frontendDist = path.resolve(__dirname, "../../nexus/dist/public");
 
 if (existsSync(frontendDist)) {
   app.use(express.static(frontendDist, { maxAge: 0 }));

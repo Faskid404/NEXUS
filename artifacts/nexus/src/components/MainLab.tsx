@@ -283,8 +283,13 @@ export default function MainLab() {
   const [isScanning, setScanning] = useState(false);
   const [openPorts, setOpenPorts] = useState<number[]>([]);
 
-  const termRef  = useRef<HTMLDivElement>(null);
-  const wsRef    = useRef<WebSocket | null>(null);
+  const [injectionUrl,   setInjectionUrl]   = useState("");
+  const [injectParam,    setInjectParam]     = useState("cmd");
+  const [httpMethod,     setHttpMethod]      = useState("GET");
+  const [customHeaders,  setCustomHeaders]   = useState("");
+
+  const termRef   = useRef<HTMLDivElement>(null);
+  const wsRef     = useRef<WebSocket | null>(null);
   const scanWsRef = useRef<WebSocket | null>(null);
 
   const { data: hubStatus } = useGetHubStatus({ query: { refetchInterval: 10000, queryKey: getGetHubStatusQueryKey() } });
@@ -345,7 +350,10 @@ export default function MainLab() {
     wsRef.current?.close();
     wsRef.current = null;
 
-    const prompt = `root@${target || "nexus"}:~# `;
+    const isRemote = injectionUrl.trim().length > 0;
+    const prompt = isRemote
+      ? `[REMOTE] ${httpMethod} ${injectionUrl.trim()} ?${injectParam}=`
+      : `root@${target || "nexus"}:~# `;
     setOutput(prev => prev + `${prompt}${cmd}\n`);
     setRunning(true);
     setChain(cmd.split(/[;&|`$(){}]/).map(s => s.trim()).filter(s => s.length > 1 && s.length < 60));
@@ -355,7 +363,15 @@ export default function MainLab() {
     wsRef.current = ws;
 
     ws.onopen = () => {
-      ws.send(JSON.stringify({ cmd, engine, mode, target, attackerIp, attackerPort }));
+      ws.send(JSON.stringify({
+        cmd, engine, mode, target,
+        injectionUrl: injectionUrl.trim(),
+        injectParam,
+        httpMethod,
+        customHeaders,
+        attackerIp,
+        attackerPort,
+      }));
     };
 
     ws.onmessage = (ev) => {
@@ -384,7 +400,7 @@ export default function MainLab() {
 
     ws.onerror = () => { setOutput(prev => prev + `[WS] connection error\n\n`); setRunning(false); };
     ws.onclose = () => { setRunning(false); wsRef.current = null; };
-  }, [cmd, engine, mode, target, attackerIp, attackerPort, isRunning, queryClient]);
+  }, [cmd, engine, mode, target, injectionUrl, injectParam, httpMethod, customHeaders, attackerIp, attackerPort, isRunning, queryClient]);
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) handleInject(); };
@@ -413,7 +429,10 @@ export default function MainLab() {
           <span className="text-zinc-700">|</span>
           <span className={`w-2 h-2 rounded-full inline-block ${hubStatus?.status === "online" ? "bg-green-500" : "bg-zinc-600"}`} />
           <span className="text-zinc-500 uppercase">{hubStatus?.status ?? "connecting"}</span>
-          {target && <><span className="text-zinc-700">|</span><span className="text-red-400">TGT: {target}</span></>}
+          {injectionUrl
+            ? <><span className="text-zinc-700">|</span><span className="text-orange-400 font-bold">REMOTE: {injectionUrl.slice(0, 40)}{injectionUrl.length > 40 ? "…" : ""}</span></>
+            : target && <><span className="text-zinc-700">|</span><span className="text-red-400">TGT: {target}</span></>
+          }
           {attackerIp && <><span className="text-zinc-700">|</span><span className="text-purple-400">C2: {attackerIp}:{attackerPort}</span></>}
         </div>
         <div className="flex items-center gap-2 text-xs">
@@ -492,6 +511,65 @@ export default function MainLab() {
               />
             </div>
 
+            <div className="border border-orange-900/50 bg-black p-2">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[10px] text-orange-600 uppercase tracking-wider">HTTP Injection Target</span>
+                {injectionUrl.trim() && <span className="text-[9px] text-orange-400 font-bold uppercase">REMOTE</span>}
+              </div>
+              <div className="text-[9px] text-zinc-600 mb-1.5">Vulnerable endpoint — payload injected into param</div>
+              <input
+                type="text"
+                value={injectionUrl}
+                onChange={e => setInjectionUrl(e.target.value)}
+                placeholder="http://target.com/api/search"
+                className="w-full bg-black border border-orange-900/40 px-2 py-1 text-[11px] text-orange-300 placeholder-zinc-700 focus:outline-none focus:border-orange-600 mb-1.5"
+                autoComplete="off"
+                spellCheck={false}
+              />
+              <div className="grid grid-cols-2 gap-1.5 mb-1.5">
+                <div>
+                  <div className="text-[9px] text-zinc-600 uppercase mb-0.5">Parameter</div>
+                  <input
+                    type="text"
+                    value={injectParam}
+                    onChange={e => setInjectParam(e.target.value)}
+                    placeholder="cmd"
+                    className="w-full bg-black border border-zinc-800 px-2 py-1 text-[11px] text-orange-300 placeholder-zinc-700 focus:outline-none focus:border-orange-700"
+                    autoComplete="off"
+                  />
+                </div>
+                <div>
+                  <div className="text-[9px] text-zinc-600 uppercase mb-0.5">Method</div>
+                  <select
+                    value={httpMethod}
+                    onChange={e => setHttpMethod(e.target.value)}
+                    className="w-full bg-black border border-zinc-800 px-2 py-1 text-[11px] text-orange-300 focus:outline-none focus:border-orange-700"
+                  >
+                    <option value="GET">GET</option>
+                    <option value="POST">POST</option>
+                    <option value="JSON">JSON</option>
+                    <option value="PUT">PUT</option>
+                  </select>
+                </div>
+              </div>
+              <div className="text-[9px] text-zinc-600 uppercase mb-0.5">Custom Headers (Key: Value)</div>
+              <textarea
+                value={customHeaders}
+                onChange={e => setCustomHeaders(e.target.value)}
+                placeholder={"Cookie: session=abc\nX-Forwarded-For: 127.0.0.1"}
+                className="w-full h-12 bg-black border border-zinc-800 px-2 py-1 text-[10px] text-zinc-400 placeholder-zinc-700 focus:outline-none focus:border-zinc-600 resize-none font-mono"
+                spellCheck={false}
+              />
+              {injectionUrl.trim() && (
+                <button
+                  onClick={() => { setInjectionUrl(""); setCustomHeaders(""); }}
+                  className="mt-1.5 w-full text-[9px] text-zinc-600 hover:text-red-400 uppercase"
+                >
+                  clear — switch to local execution
+                </button>
+              )}
+            </div>
+
             <div className="border border-zinc-800 bg-black p-2">
               <div className="flex items-center justify-between mb-1.5">
                 <span className="text-[10px] text-zinc-500 uppercase tracking-wider">Port Scanner</span>
@@ -544,9 +622,13 @@ export default function MainLab() {
                 <button
                   onClick={handleInject}
                   disabled={isRunning || !cmd.trim()}
-                  className="flex-1 bg-red-900 text-white font-bold py-2 text-xs uppercase hover:bg-red-800 disabled:opacity-40 transition-colors"
+                  className={`flex-1 font-bold py-2 text-xs uppercase disabled:opacity-40 transition-colors ${
+                    injectionUrl.trim()
+                      ? "bg-orange-900/60 border border-orange-700 text-orange-300 hover:bg-orange-900"
+                      : "bg-red-900 text-white hover:bg-red-800"
+                  }`}
                 >
-                  {isRunning ? "STREAMING..." : "INJECT"}
+                  {isRunning ? "STREAMING..." : injectionUrl.trim() ? "INJECT REMOTE" : "INJECT LOCAL"}
                 </button>
                 <button
                   onClick={() => fetchSuggestions()}

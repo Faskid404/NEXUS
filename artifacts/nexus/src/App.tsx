@@ -3,8 +3,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import LockScreen from "@/components/LockScreen";
 import MainLab from "@/components/MainLab";
 
-const AUTH_KEY = "nxauth_v5";
-const AUTH_VAL = "omowoli12345@";
+const AUTH_KEY = "nxauth_v6";
+const AUTH_VAL = "omowoli12345@*";
 
 const queryClient = new QueryClient({
   defaultOptions: {

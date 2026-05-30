@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
 
-const PASS = "omowoli12345@";
+const PASS = "omowoli12345@*";
 
 export default function LockScreen({ onUnlock }: { onUnlock: () => void }) {
   const [value, setValue]   = useState("");

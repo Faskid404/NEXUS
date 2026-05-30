@@ -423,6 +423,11 @@ export default function MainLab() {
   const [scanTotal,   setScanTotal]   = useState(0);
   const [scanOpenCount, setScanOpenCount] = useState(0);
 
+  const [chainTarget,  setChainTarget]  = useState("");
+  const [chainRunning, setChainRunning] = useState(false);
+  const [chainSteps,   setChainSteps]   = useState<Array<{step:number;service:string;port:number;action:string;result:string;status:"success"|"failed";elapsed:number}>>([]);
+  const [chainDone,    setChainDone]    = useState(false);
+
   const termRef   = useRef<HTMLDivElement>(null);
   const wsRef     = useRef<WebSocket|null>(null);
   const scanWsRef = useRef<WebSocket|null>(null);
@@ -606,6 +611,29 @@ export default function MainLab() {
     if (scanWsRef.current) { scanWsRef.current.close(); scanWsRef.current = null; }
     setScanning(false);
     setScanDone(true);
+  };
+
+  const handleExploitChain = async () => {
+    const tgt = (chainTarget || target).trim();
+    if (!tgt || chainRunning) return;
+    setChainRunning(true);
+    setChainDone(false);
+    setChainSteps([]);
+    try {
+      const r = await fetch("/api/hub/chain", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target: tgt }),
+      });
+      const d = await r.json() as { steps?: typeof chainSteps; target?: string };
+      setChainSteps(d.steps ?? []);
+      setChainDone(true);
+    } catch (e: unknown) {
+      setChainSteps([{ step:1, service:"network", port:0, action:"Chain failed", result: (e as Error).message, status:"failed", elapsed:0 }]);
+      setChainDone(true);
+    } finally {
+      setChainRunning(false);
+    }
   };
 
   const sub = (s: string) => s.replace(/ATTACKER_IP/g,attIp||"ATTACKER_IP").replace(/ATTACKER_PORT/g,attPort||"4444");
@@ -876,6 +904,56 @@ export default function MainLab() {
       </div>
       <div className="text-[9px] text-zinc-700 shrink-0">
         {libSearch.trim()?`${libFiltered.length} results across all categories`:`${libFiltered.length} payloads in ${libEntry.cat}`} — click to inject
+      </div>
+
+      <div className="shrink-0 border border-red-900/40 bg-black p-2 mt-1">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-[10px] text-red-500 uppercase tracking-wider">Auto Exploit Chain</span>
+          <span className="text-[9px] text-zinc-600">K8s · Docker · etcd · Redis · Cloud Meta</span>
+        </div>
+        <div className="flex gap-1.5 mb-2">
+          <input
+            value={chainTarget||target}
+            onChange={e=>setChainTarget(e.target.value)}
+            placeholder="Target IP (192.168.1.1)"
+            className="flex-1 bg-zinc-950 border border-zinc-800 px-2 py-1 text-[11px] text-red-300 font-mono focus:outline-none focus:border-red-600 placeholder-zinc-700"
+          />
+          <button
+            onClick={handleExploitChain}
+            disabled={chainRunning}
+            className="px-3 py-1 bg-red-900 text-white text-[11px] uppercase font-bold hover:bg-red-800 disabled:opacity-40 transition-colors whitespace-nowrap"
+          >
+            {chainRunning ? (
+              <span className="flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-ping inline-block"/>
+                RUNNING
+              </span>
+            ) : "CHAIN EXPLOIT"}
+          </button>
+        </div>
+        {chainSteps.length > 0 && (
+          <div className="border border-zinc-900 bg-zinc-950 max-h-48 overflow-y-auto">
+            {chainSteps.map((step, i) => (
+              <div key={i} className={`border-b border-zinc-900 px-2 py-1.5 ${step.status==="success"?"bg-green-950/10":"bg-zinc-950"}`}>
+                <div className="flex items-center gap-2 mb-0.5">
+                  <span className={`text-[8px] font-bold w-4 ${step.status==="success"?"text-green-400":"text-red-500"}`}>
+                    {step.status==="success"?"✓":"✗"}
+                  </span>
+                  <span className="text-[9px] text-zinc-500 border border-zinc-800 px-1 uppercase shrink-0">{step.service}</span>
+                  {step.port > 0 && <span className="text-[9px] text-zinc-700">:{step.port}</span>}
+                  <span className={`text-[10px] font-mono flex-1 truncate ${step.status==="success"?"text-green-300":"text-zinc-500"}`}>{step.action}</span>
+                  <span className="text-[8px] text-zinc-700 shrink-0">{step.elapsed}ms</span>
+                </div>
+                {step.status==="success" && step.result && (
+                  <pre className="text-[9px] text-lime-400 font-mono whitespace-pre-wrap break-words ml-6 max-h-20 overflow-y-auto bg-black border border-zinc-900 px-1.5 py-1 mt-0.5">{step.result.slice(0, 600)}</pre>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+        {chainDone && chainSteps.length === 0 && (
+          <div className="text-[10px] text-zinc-600 text-center py-2">No open services found on target.</div>
+        )}
       </div>
     </div>
   );

@@ -419,9 +419,13 @@ export default function MainLab() {
   const [scanning,    setScanning]    = useState(false);
   const [scanDone,    setScanDone]    = useState(false);
   const [scanMs,      setScanMs]      = useState(0);
+  const [scanScanned, setScanScanned] = useState(0);
+  const [scanTotal,   setScanTotal]   = useState(0);
+  const [scanOpenCount, setScanOpenCount] = useState(0);
 
-  const termRef = useRef<HTMLDivElement>(null);
-  const wsRef   = useRef<WebSocket|null>(null);
+  const termRef   = useRef<HTMLDivElement>(null);
+  const wsRef     = useRef<WebSocket|null>(null);
+  const scanWsRef = useRef<WebSocket|null>(null);
 
   const { data: hubStatus } = useGetHubStatus({ query:{refetchInterval:15000,queryKey:getGetHubStatusQueryKey()} });
   const { data: engines   } = useGetEngines(  { query:{refetchInterval:30000,queryKey:getGetEnginesQueryKey()} });
@@ -520,9 +524,10 @@ export default function MainLab() {
     setFuzzing(false);
   };
 
-  const handleScan = async () => {
+  const handleScan = () => {
     const tgt = (scanTarget||target).trim();
     if (!tgt) return;
+
     let ports: number[];
     if (scanPreset === "CUSTOM") {
       ports = scanCustom.split(/[\s,]+/).map(Number).filter(p=>p>0&&p<65536);
@@ -530,18 +535,77 @@ export default function MainLab() {
     } else {
       ports = SCAN_PRESETS[scanPreset] ?? SCAN_PRESETS["TOP 40"]!;
     }
-    setScanning(true); setScanResults([]); setScanDone(false);
+
+    // Close any existing scan WS
+    if (scanWsRef.current) { scanWsRef.current.close(); scanWsRef.current = null; }
+
+    setScanResults([]); setScanDone(false);
+    setScanScanned(0);  setScanTotal(ports.length);
+    setScanOpenCount(0); setScanMs(0);
+    setScanning(true);
+
     const t0 = Date.now();
-    try {
-      const r = await fetch("/api/hub/scan",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({target:tgt,ports,timeout:scanTimeout,concurrency:30})});
-      const d = await r.json() as {results:ScanResult[]};
-      setScanResults(d.results ?? []);
-      setScanMs(Date.now()-t0);
-      setScanDone(true);
-    } catch {
-      setScanResults([{port:0,open:false,service:"error",banner:"Network error — check target and connectivity"}]);
-    }
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const ws = new WebSocket(`${proto}//${window.location.host}/api/ws/scan`);
+    scanWsRef.current = ws;
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ target: tgt, ports, timeout: scanTimeout, concurrency: 30 }));
+    };
+
+    ws.onmessage = (ev) => {
+      const msg = JSON.parse(ev.data as string) as {
+        type: string;
+        port?: number; open?: boolean; service?: string; banner?: string;
+        scanned?: number; total?: number; openCount?: number;
+        elapsed?: number; message?: string;
+      };
+
+      if (msg.type === "portResult") {
+        const result: ScanResult = {
+          port:    msg.port    ?? 0,
+          open:    msg.open    ?? false,
+          service: msg.service ?? "unknown",
+          banner:  msg.banner  ?? "",
+        };
+        // Open ports appear immediately at the top; closed accumulate below
+        setScanResults(prev =>
+          result.open
+            ? [result, ...prev.filter(r => !r.open), ...prev.filter(r => r.open === false && r.port !== result.port)]
+            : [...prev, result]
+        );
+        setScanScanned(msg.scanned ?? 0);
+        setScanOpenCount(msg.openCount ?? 0);
+
+      } else if (msg.type === "end") {
+        setScanMs(msg.elapsed ?? Date.now() - t0);
+        setScanDone(true);
+        setScanning(false);
+        scanWsRef.current = null;
+
+      } else if (msg.type === "error") {
+        setScanResults([{ port: 0, open: false, service: "error", banner: msg.message ?? "scan error" }]);
+        setScanning(false);
+        scanWsRef.current = null;
+      }
+    };
+
+    ws.onerror = () => {
+      setScanResults([{ port: 0, open: false, service: "error", banner: "WebSocket connection failed — check server" }]);
+      setScanning(false);
+      scanWsRef.current = null;
+    };
+
+    ws.onclose = () => {
+      setScanning(false);
+      scanWsRef.current = null;
+    };
+  };
+
+  const handleAbortScan = () => {
+    if (scanWsRef.current) { scanWsRef.current.close(); scanWsRef.current = null; }
     setScanning(false);
+    setScanDone(true);
   };
 
   const sub = (s: string) => s.replace(/ATTACKER_IP/g,attIp||"ATTACKER_IP").replace(/ATTACKER_PORT/g,attPort||"4444");
@@ -855,47 +919,105 @@ export default function MainLab() {
         )}
       </div>
 
-      <div className="flex items-center gap-3">
-        <button onClick={handleScan} disabled={scanning||!(scanTarget||target).trim()}
-          className="px-5 py-2 bg-red-900 text-white text-xs uppercase font-bold hover:bg-red-800 disabled:opacity-40 transition-colors">
-          {scanning?"SCANNING…":"SCAN"}
+      {/* Controls row */}
+      <div className="flex items-center gap-2 shrink-0 flex-wrap">
+        <button
+          onClick={scanning ? handleAbortScan : handleScan}
+          disabled={!scanning && !(scanTarget||target).trim()}
+          className={`px-5 py-2 text-xs uppercase font-bold transition-colors disabled:opacity-40 ${
+            scanning
+              ? "bg-zinc-900 border border-red-700 text-red-400 hover:bg-red-950/40"
+              : "bg-red-900 text-white hover:bg-red-800"
+          }`}
+        >
+          {scanning ? "■ ABORT" : "SCAN"}
         </button>
-        {scanDone&&!scanning&&(
-          <div className="flex items-center gap-3 text-xs">
-            <span className="text-green-400 font-bold">{openPorts.length} open</span>
-            <span className="text-zinc-600">/ {scanResults.length} ports</span>
-            <span className="text-zinc-700">{(scanMs/1000).toFixed(1)}s</span>
+
+        {(scanning || scanDone) && (
+          <div className="flex items-center gap-3 text-xs flex-1 min-w-0">
+            {scanning && (
+              <>
+                <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse shrink-0"/>
+                <span className="text-zinc-500 shrink-0">{scanScanned}/{scanTotal}</span>
+              </>
+            )}
+            {scanOpenCount > 0 && (
+              <span className="text-green-400 font-bold shrink-0">
+                {scanOpenCount} open
+              </span>
+            )}
+            {scanDone && !scanning && (
+              <span className="text-zinc-600 shrink-0">
+                {scanResults.length} ports · {(scanMs/1000).toFixed(1)}s
+              </span>
+            )}
           </div>
         )}
-        {scanning&&<div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-red-500 animate-pulse"/><span className="text-xs text-zinc-500">Probing {SCAN_PRESETS[scanPreset]?.length??0} ports…</span></div>}
       </div>
 
-      {scanResults.length>0&&(
+      {/* Progress bar — visible while scanning */}
+      {scanning && scanTotal > 0 && (
+        <div className="shrink-0">
+          <div className="h-1.5 bg-zinc-900 w-full overflow-hidden">
+            <div
+              className="h-full bg-red-600 transition-all duration-100"
+              style={{ width: `${Math.round((scanScanned / scanTotal) * 100)}%` }}
+            />
+          </div>
+          <div className="flex justify-between mt-0.5 text-[9px] text-zinc-700">
+            <span>{Math.round((scanScanned / scanTotal) * 100)}%</span>
+            <span>{scanTotal - scanScanned} remaining</span>
+          </div>
+        </div>
+      )}
+
+      {/* Results table — streams in real time */}
+      {scanResults.length > 0 && (
         <div className="flex-1 min-h-0 border border-zinc-900 bg-black overflow-auto">
           <table className="w-full text-[10px]">
-            <thead className="bg-zinc-900 text-zinc-600 sticky top-0">
+            <thead className="bg-zinc-900 text-zinc-600 sticky top-0 z-10">
               <tr>
-                <th className="px-2 py-1.5 text-left font-normal">STATUS</th>
-                <th className="px-2 py-1.5 text-left font-normal">PORT</th>
-                <th className="px-2 py-1.5 text-left font-normal">SERVICE</th>
-                <th className="px-2 py-1.5 text-left font-normal">BANNER</th>
-                <th className="px-2 py-1.5 font-normal">ACT</th>
+                <th className="px-2 py-1.5 text-left font-normal w-16">STATUS</th>
+                <th className="px-2 py-1.5 text-left font-normal w-14">PORT</th>
+                <th className="px-2 py-1.5 text-left font-normal w-28">SERVICE</th>
+                <th className="px-2 py-1.5 text-left font-normal">BANNER / INFO</th>
+                <th className="px-2 py-1.5 font-normal w-12">ACT</th>
               </tr>
             </thead>
             <tbody>
-              {scanResults.filter(r=>r.open).map((r,i)=>(
-                <tr key={i} className="border-t border-zinc-900 bg-green-950/10 hover:bg-green-950/20">
-                  <td className="px-2 py-1"><span className="text-green-400 font-bold">OPEN</span></td>
+              {/* Open ports — streamed in first, highlighted */}
+              {scanResults.filter(r => r.open).map((r, i) => (
+                <tr key={`o${r.port}${i}`} className="border-t border-zinc-900 bg-green-950/15 hover:bg-green-950/25 animate-[fadeIn_0.15s_ease]">
+                  <td className="px-2 py-1">
+                    <span className="text-green-400 font-bold tracking-wider">OPEN</span>
+                  </td>
                   <td className="px-2 py-1 text-white font-bold font-mono">{r.port}</td>
                   <td className="px-2 py-1 text-cyan-400">{r.service}</td>
-                  <td className="px-2 py-1 text-zinc-500 font-mono max-w-[200px] truncate" title={r.banner}>{r.banner||<span className="text-zinc-700">—</span>}</td>
+                  <td className="px-2 py-1 text-zinc-400 font-mono max-w-[220px] truncate" title={r.banner}>
+                    {r.banner || <span className="text-zinc-700">—</span>}
+                  </td>
                   <td className="px-2 py-1 text-center">
-                    <button onClick={()=>{setCmd(`nc -zv ${scanTarget||target} ${r.port}`);setTab("TERMINAL");}} className="text-[9px] text-zinc-600 hover:text-lime-400 uppercase">→ NC</button>
+                    <button
+                      onClick={() => { setCmd(`nc -zv ${(scanTarget||target).trim()} ${r.port}`); setTab("TERMINAL"); }}
+                      className="text-[9px] text-zinc-600 hover:text-lime-400 uppercase"
+                      title="Send to terminal"
+                    >NC</button>
                   </td>
                 </tr>
               ))}
-              {scanResults.filter(r=>!r.open).slice(0,15).map((r,i)=>(
-                <tr key={`c${i}`} className="border-t border-zinc-900 opacity-30 hover:opacity-50">
+
+              {/* Divider when both open and closed exist */}
+              {scanResults.some(r => r.open) && scanResults.some(r => !r.open) && (
+                <tr className="border-t border-zinc-800">
+                  <td colSpan={5} className="px-2 py-0.5 text-[9px] text-zinc-700 bg-zinc-950">
+                    ── closed / filtered ──────────────────────────────────────
+                  </td>
+                </tr>
+              )}
+
+              {/* Closed ports — dimmed */}
+              {scanResults.filter(r => !r.open).slice(0, 20).map((r, i) => (
+                <tr key={`c${r.port}${i}`} className="border-t border-zinc-900/50 opacity-25 hover:opacity-50 transition-opacity">
                   <td className="px-2 py-0.5 text-zinc-700">CLOSED</td>
                   <td className="px-2 py-0.5 text-zinc-600 font-mono">{r.port}</td>
                   <td className="px-2 py-0.5 text-zinc-700">{r.service}</td>
@@ -903,10 +1025,10 @@ export default function MainLab() {
                   <td/>
                 </tr>
               ))}
-              {scanResults.filter(r=>!r.open).length>15&&(
+              {scanResults.filter(r => !r.open).length > 20 && (
                 <tr className="border-t border-zinc-900">
-                  <td colSpan={5} className="px-2 py-1 text-zinc-700 text-center text-[9px]">
-                    …{scanResults.filter(r=>!r.open).length-15} more closed ports hidden
+                  <td colSpan={5} className="px-2 py-1.5 text-zinc-700 text-center text-[9px]">
+                    …{scanResults.filter(r => !r.open).length - 20} more closed ports hidden
                   </td>
                 </tr>
               )}
@@ -915,10 +1037,13 @@ export default function MainLab() {
         </div>
       )}
 
-      {scanDone&&openPorts.length===0&&(
-        <div className="border border-zinc-900 bg-black p-6 text-center">
+      {/* Empty state */}
+      {scanDone && !scanning && scanResults.filter(r => r.open).length === 0 && (
+        <div className="border border-zinc-900 bg-black p-6 text-center shrink-0">
           <div className="text-zinc-600 text-sm">No open ports detected</div>
-          <div className="text-zinc-700 text-xs mt-1">Try a longer timeout or verify the target is reachable</div>
+          <div className="text-zinc-700 text-xs mt-1">
+            Try a longer timeout or verify the target is reachable
+          </div>
         </div>
       )}
     </div>

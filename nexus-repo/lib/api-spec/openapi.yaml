@@ -1,0 +1,618 @@
+openapi: 3.1.0
+info:
+  title: Api
+  version: 0.1.0
+  description: NEXUSFORGE API
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: auth
+    description: Authentication operations
+  - name: hub
+    description: Injection engine operations
+  - name: logs
+    description: Injection log operations
+  - name: suggestions
+    description: Payload AI suggestions
+  - name: oob
+    description: Out-of-band callback operations
+  - name: scanner
+    description: Port scanner operations
+  - name: chainlog
+    description: Exploit chain log operations
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /auth/login:
+    post:
+      operationId: authLogin
+      tags: [auth]
+      summary: Authenticate with password and receive a session token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginInput"
+      responses:
+        "200":
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResult"
+        "401":
+          description: Invalid credentials
+
+  /auth/verify:
+    get:
+      operationId: authVerify
+      tags: [auth]
+      summary: Verify a session token
+      responses:
+        "200":
+          description: Token valid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VerifyResult"
+        "401":
+          description: Unauthorized
+
+  /hub/health:
+    get:
+      operationId: getHubStatus
+      tags: [hub]
+      summary: Hub status including version and available engines
+      responses:
+        "200":
+          description: Hub online
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HubStatus"
+
+  /hub/engines:
+    get:
+      operationId: getEngines
+      tags: [hub]
+      summary: Check which engines are available on this host
+      responses:
+        "200":
+          description: Engine availability map
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EngineMap"
+
+  /hub/exec:
+    post:
+      operationId: execPayload
+      tags: [hub]
+      summary: Execute a payload through the selected engine
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExecInput"
+      responses:
+        "200":
+          description: Execution output
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExecResult"
+        "400":
+          description: Bad request
+
+  /hub/bypass:
+    post:
+      operationId: buildBypass
+      tags: [hub]
+      summary: Generate WAF bypass variants for a payload
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BypassInput"
+      responses:
+        "200":
+          description: Bypass variants
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BypassResult"
+
+  /hub/shells:
+    post:
+      operationId: buildShells
+      tags: [hub]
+      summary: Generate reverse shell payloads for a given attacker IP and port
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ShellsInput"
+      responses:
+        "200":
+          description: Reverse shell payloads
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShellsResult"
+
+  /hub/suggest:
+    post:
+      operationId: getHubSuggestions
+      tags: [hub]
+      summary: Get AI payload suggestions for a given mode and command
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuggestInput"
+      responses:
+        "200":
+          description: Suggested payloads
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuggestResult"
+
+  /logs:
+    get:
+      operationId: getLogs
+      tags: [logs]
+      summary: Get injection logs
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 200
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: List of injection logs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/InjectionLog"
+    delete:
+      operationId: clearLogs
+      tags: [logs]
+      summary: Clear all injection logs
+      responses:
+        "200":
+          description: Logs cleared
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClearResult"
+
+  /suggestions:
+    get:
+      operationId: getSuggestions
+      tags: [suggestions]
+      summary: Get AI payload suggestions for a given mode
+      parameters:
+        - name: mode
+          in: query
+          schema:
+            type: string
+        - name: cmd
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of suggestions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+
+  /oob/token:
+    get:
+      operationId: getOobToken
+      tags: [oob]
+      summary: Generate an OOB callback token and payload examples
+      responses:
+        "200":
+          description: OOB token and callback payloads
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OobTokenResult"
+
+  /oob/hits:
+    get:
+      operationId: getOobHits
+      tags: [oob]
+      summary: Get recorded OOB callback hits
+      responses:
+        "200":
+          description: OOB hits
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/OobHit"
+    delete:
+      operationId: clearOobHits
+      tags: [oob]
+      summary: Clear all OOB callback hits
+      responses:
+        "200":
+          description: Hits cleared
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClearResult"
+
+  /scanner/scan:
+    post:
+      operationId: scanTarget
+      tags: [scanner]
+      summary: Scan a target host for open ports and service banners
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScanInput"
+      responses:
+        "200":
+          description: Scan results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScanResult"
+
+  /chainlog:
+    get:
+      operationId: getChainLog
+      tags: [chainlog]
+      summary: Get exploit chain run history
+      responses:
+        "200":
+          description: Chain runs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ChainRun"
+    delete:
+      operationId: clearChainLog
+      tags: [chainlog]
+      summary: Clear all chain run history
+      responses:
+        "200":
+          description: Chain log cleared
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClearResult"
+
+  /chainlog/export:
+    get:
+      operationId: exportChainLog
+      tags: [chainlog]
+      summary: Export chain log as JSON file download
+      responses:
+        "200":
+          description: Chain log JSON file
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required: [status]
+
+    LoginInput:
+      type: object
+      properties:
+        password:
+          type: string
+      required: [password]
+
+    LoginResult:
+      type: object
+      properties:
+        token:
+          type: string
+      required: [token]
+
+    VerifyResult:
+      type: object
+      properties:
+        ok:
+          type: boolean
+      required: [ok]
+
+    HubStatus:
+      type: object
+      properties:
+        status:
+          type: string
+        version:
+          type: string
+        timestamp:
+          type: string
+        engines:
+          type: array
+          items:
+            type: string
+      required: [status, version, timestamp, engines]
+
+    EngineMap:
+      type: object
+      properties:
+        php:
+          type: boolean
+        node:
+          type: boolean
+        python:
+          type: boolean
+        java:
+          type: boolean
+        cpp:
+          type: boolean
+        powershell:
+          type: boolean
+        bash:
+          type: boolean
+        ruby:
+          type: boolean
+        perl:
+          type: boolean
+      required: [php, node, python, java, cpp, powershell, bash, ruby, perl]
+
+    ExecInput:
+      type: object
+      properties:
+        cmd:
+          type: string
+        engine:
+          type: string
+        mode:
+          type: string
+        attacker:
+          type: string
+      required: [cmd, engine]
+
+    ExecResult:
+      type: object
+      properties:
+        output:
+          type: string
+        engine:
+          type: string
+        mode:
+          type: string
+        elapsed:
+          type: integer
+      required: [output, engine, mode, elapsed]
+
+    BypassInput:
+      type: object
+      properties:
+        payload:
+          type: string
+      required: [payload]
+
+    BypassResult:
+      type: object
+      properties:
+        variants:
+          type: array
+          items:
+            type: string
+      required: [variants]
+
+    ShellsInput:
+      type: object
+      properties:
+        attackerIp:
+          type: string
+        attackerPort:
+          type: string
+      required: [attackerIp, attackerPort]
+
+    ShellsResult:
+      type: object
+      properties:
+        shells:
+          type: array
+          items:
+            $ref: "#/components/schemas/ShellEntry"
+      required: [shells]
+
+    ShellEntry:
+      type: object
+      properties:
+        label:
+          type: string
+        payload:
+          type: string
+      required: [label, payload]
+
+    SuggestInput:
+      type: object
+      properties:
+        mode:
+          type: string
+        cmd:
+          type: string
+        attackerIp:
+          type: string
+        attackerPort:
+          type: string
+      required: [mode]
+
+    SuggestResult:
+      type: object
+      properties:
+        suggestions:
+          type: array
+          items:
+            type: string
+      required: [suggestions]
+
+    InjectionLog:
+      type: object
+      properties:
+        id:
+          type: integer
+        timestamp:
+          type: string
+        command:
+          type: string
+        engine:
+          type: string
+        mode:
+          type: string
+        responseTime:
+          type: integer
+      required: [id, timestamp, command, engine, mode, responseTime]
+
+    ClearResult:
+      type: object
+      properties:
+        ok:
+          type: boolean
+      required: [ok]
+
+    OobTokenResult:
+      type: object
+      properties:
+        token:
+          type: string
+        cbUrl:
+          type: string
+        payloads:
+          type: object
+          additionalProperties:
+            type: string
+      required: [token, cbUrl, payloads]
+
+    OobHit:
+      type: object
+      properties:
+        token:
+          type: string
+        sourceIp:
+          type: string
+        decoded:
+          type: string
+        ts:
+          type: integer
+      required: [token, sourceIp, decoded, ts]
+
+    ScanInput:
+      type: object
+      properties:
+        host:
+          type: string
+        ports:
+          type: array
+          items:
+            type: integer
+        timeoutMs:
+          type: integer
+      required: [host]
+
+    ScanResult:
+      type: object
+      properties:
+        host:
+          type: string
+        open:
+          type: array
+          items:
+            $ref: "#/components/schemas/PortResult"
+        closed:
+          type: array
+          items:
+            type: integer
+        elapsed:
+          type: integer
+      required: [host, open, closed, elapsed]
+
+    PortResult:
+      type: object
+      properties:
+        port:
+          type: integer
+        service:
+          type: string
+        banner:
+          type: string
+      required: [port, service, banner]
+
+    ChainRun:
+      type: object
+      properties:
+        id:
+          type: string
+        target:
+          type: string
+        startedAt:
+          type: string
+        finishedAt:
+          type: string
+        steps:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChainStep"
+      required: [id, target, startedAt, steps]
+
+    ChainStep:
+      type: object
+      properties:
+        step:
+          type: integer
+        service:
+          type: string
+        port:
+          type: integer
+        action:
+          type: string
+        result:
+          type: string
+        status:
+          type: string
+        elapsed:
+          type: integer
+      required: [step, service, port, action, result, status, elapsed]

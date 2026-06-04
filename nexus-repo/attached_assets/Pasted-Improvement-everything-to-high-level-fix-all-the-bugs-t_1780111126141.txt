@@ -1,0 +1,28 @@
+Improvement everything to high level fix all the bugs that needed to be fixed correct all bugs and errors.. Let it show where to put the direct target input URL or IP address to run the command injector not locally.  it should work on the target that will be put there.. improvement to high grade powerful tools that mordern website is not match for it and it payload it and it engine upgrades everything to large blueprint scale.. with raw codes no errors.. .✅ The error is still from the catch-all route.
+Even /* doesn't work properly with Express 5.2.1 + path-to-regexp@8.
+Fix It (Correct Way)
+Edit the file: artifacts/api-server/src/app.ts
+Change this block (lines 39-42):
+app.use(express.static(frontendDist));
+    app.get("*", (_req, res) => {
+      res.sendFile(path.join(frontendDist, "index.html"));
+    });
+Replace it with this:
+app.use(express.static(frontendDist));
+    
+    // SPA fallback - must come AFTER static middleware
+    app.get("*", (_req, res) => {
+      res.sendFile(path.join(frontendDist, "index.html"));
+    });
+Important: Make sure the app.get("*", ...) is after app.use(express.static(...))
+Alternative (Safer for Express 5):
+Replace the catch-all with:
+app.use(express.static(frontendDist));
+    app.get("/*", (_req, res) => {
+      res.sendFile(path.join(frontendDist, "index.html"));
+    });
+Try the second one first.
+
+Make sure everything is working no errors no fakes no placeholder no comment no illusion no demostration... Let all the command work on the target and improvement everything to powerful grade command injector.. add a service banner grabber that connects to each open port after the scan completes and reads the first 256 bytes — so you get version/service info (SSH banner, HTTP server header, etc.) alongside the port numbers
+Makes to high novel command injector level that is powerful grades that it powerful in exploit bypass mordern website or protection... Improvement to high grade level 
+..no placeholder no comment no fakes codes no illusion no demostration.. USed real functional working codes.. and check if there not any errors after check push it back to gitub.. use many method and make sure you push it back to gitub without no errors or crash. 

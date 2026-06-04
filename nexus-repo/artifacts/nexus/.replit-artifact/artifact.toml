@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "NEXUSFORGE"
+version = "1.0.0"
+id = "artifacts/nexus"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 18245
+
+[services.development]
+run = "pnpm --filter @workspace/nexus run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/nexus", "run", "build" ]
+publicDir = "artifacts/nexus/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "18245"
+BASE_PATH = "/"

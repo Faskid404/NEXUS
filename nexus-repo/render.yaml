@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: nexus-api
+    env: node
+    rootDir: artifacts/api-server
+    buildCommand: npm install -g pnpm && pnpm install --frozen-lockfile=false && pnpm run build
+    startCommand: node --enable-source-maps ./dist/index.mjs
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: AUTH_PASS
+        sync: false
+      - key: SESSION_SECRET
+        sync: false
+
+  - type: static
+    name: nexus-frontend
+    rootDir: artifacts/nexus
+    buildCommand: npm install -g pnpm && cd ../.. && pnpm install --frozen-lockfile=false && BASE_PATH=/ pnpm --filter @workspace/nexus run build
+    staticPublishPath: dist/public
+    envVars:
+      - key: VITE_API_URL
+        value: https://nexus-api.onrender.com

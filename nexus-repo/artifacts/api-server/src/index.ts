@@ -2,6 +2,7 @@ import { createServer } from "http";
 import { WebSocketServer } from "ws";
 import app from "./app.js";
 import { logger } from "./lib/logger.js";
+import { setTunnelUrl } from "./lib/tunnelUrl.js";
 import { handleStreamExec }   from "./ws/streamExec.js";
 import { handleScanTarget }   from "./ws/scanTarget.js";
 import { handleExploitChain } from "./ws/exploitChain.js";
@@ -29,5 +30,21 @@ server.on("upgrade", (req, socket, head) => {
   else socket.destroy();
 });
 
-server.listen(port, () => { logger.info({ port }, "Server listening"); });
+server.listen(port, () => {
+  logger.info({ port }, "Server listening");
+  const ngrokToken = process.env["NGROK_AUTH_TOKEN"];
+  if (ngrokToken) {
+    import("@ngrok/ngrok").then(({ default: ngrok }) => {
+      ngrok.connect({ authtoken: ngrokToken, addr: port, proto: "http" })
+        .then(listener => {
+          const url = listener.url();
+          if (url) {
+            setTunnelUrl(`${url}/api/oob/cb`);
+            logger.info({ url }, "ngrok tunnel active — OOB callbacks will use this URL");
+          }
+        })
+        .catch(err => logger.warn({ err }, "ngrok tunnel failed — OOB callbacks will use Replit domain"));
+    }).catch(err => logger.warn({ err }, "ngrok module not available"));
+  }
+});
 server.on("error", (err) => { logger.error({ err }, "Server error"); process.exit(1); });

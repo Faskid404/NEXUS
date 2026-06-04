@@ -84,7 +84,7 @@ const MODE_DESC: Record<string, string> = {
 };
 
 // ─── TABS ─────────────────────────────────────────────────
-const TABS = ["TERMINAL","FUZZER","ENCODER","SHELLS","LIBRARY","SCANNER","OOB","AUTOCHAIN","REPLAYS","CVE"] as const;
+const TABS = ["AUTOCHAIN","TERMINAL","SCANNER","FUZZER","SHELLS","ENCODER","LIBRARY","OOB","REPLAYS","CVE"] as const;
 type Tab = typeof TABS[number];
 
 // ─── FUZZER ───────────────────────────────────────────────
@@ -454,7 +454,7 @@ export default function MainLab() {
   const qc = useQueryClient();
 
   // Core state
-  const [tab,      setTab]      = useState<Tab>("TERMINAL");
+  const [tab,      setTab]      = useState<Tab>("AUTOCHAIN");
   const [cmd,      setCmd]      = useState("");
   const [engine,   setEngine]   = useState("bash/bash");
   const [mode,     setMode]     = useState<Mode>("classic");
@@ -534,15 +534,16 @@ export default function MainLab() {
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); handleInject(); }
-      if (e.key === "F1") { e.preventDefault(); setTab("TERMINAL"); }
-      if (e.key === "F2") { e.preventDefault(); setTab("FUZZER"); }
-      if (e.key === "F3") { e.preventDefault(); setTab("ENCODER"); }
-      if (e.key === "F4") { e.preventDefault(); setTab("SHELLS"); }
-      if (e.key === "F5") { e.preventDefault(); setTab("LIBRARY"); }
-      if (e.key === "F6") { e.preventDefault(); setTab("SCANNER"); }
-      if (e.key === "F7") { e.preventDefault(); setTab("OOB"); }
-      if (e.key === "F8") { e.preventDefault(); setTab("AUTOCHAIN"); }
-        if (e.key === "F9") { e.preventDefault(); setTab("CVE"); }
+      if (e.key === "F1") { e.preventDefault(); setTab("AUTOCHAIN"); }
+      if (e.key === "F2") { e.preventDefault(); setTab("TERMINAL"); }
+      if (e.key === "F3") { e.preventDefault(); setTab("SCANNER"); }
+      if (e.key === "F4") { e.preventDefault(); setTab("FUZZER"); }
+      if (e.key === "F5") { e.preventDefault(); setTab("SHELLS"); }
+      if (e.key === "F6") { e.preventDefault(); setTab("ENCODER"); }
+      if (e.key === "F7") { e.preventDefault(); setTab("LIBRARY"); }
+      if (e.key === "F8") { e.preventDefault(); setTab("OOB"); }
+      if (e.key === "F9") { e.preventDefault(); setTab("REPLAYS"); }
+      if (e.key === "F10") { e.preventDefault(); setTab("CVE"); }
     };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);

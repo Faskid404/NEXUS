@@ -33,6 +33,13 @@ minimumReleaseAgeExclude:
   # this setting guards against does not apply to our own packages.
   - '@replit/*'
   - stripe-replit-sync
+  # xterm packages — required for the terminal UI, published by trusted xtermjs org
+  - '@xterm/xterm'
+  - '@xterm/addon-fit'
+  - '@xterm/addon-web-links'
+  # ngrok SDK — required for OOB callback tunnels
+  - '@ngrok/ngrok'
+  - '@ngrok/ngrok-linux-x64-gnu'
 
 packages:
   - artifacts/*

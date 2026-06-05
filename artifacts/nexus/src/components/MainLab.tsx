@@ -601,7 +601,7 @@ export default function MainLab() {
         setStats(p=>({...p, total:p.total+1, [mode]:((p as Record<string,number>)[mode]??0)+1}));
         setOutput(p=>p+`\n[exit:${msg.code??-1} | ${el}ms]\n\n`);
         setRunning(false);
-        qc.invalidateQueries({queryKey:["/api/logs"]});
+        qc.invalidateQueries({queryKey:getGetLogsQueryKey()});
       } else if (msg.type==="error") {
         setOutput(p=>p+`[ERROR] ${msg.message}\n\n`);
         setRunning(false);
@@ -625,6 +625,10 @@ export default function MainLab() {
 
   const handleFuzz = async () => {
     if (!fuzzTpl.includes("FUZZ")) return;
+    if (!injectionUrl.trim()) {
+      setFuzzRes([{payload:"[config]",output:"Set a Target URL in the TERMINAL tab before fuzzing.",elapsed:0,ok:false}]);
+      return;
+    }
     const payloads = FUZZ_SETS[fuzzSet] ?? [];
     fuzzAbort.current = false;
     setFuzzing(true); setFuzzRes([]); setFuzzProg(0);
@@ -634,9 +638,19 @@ export default function MainLab() {
       const injected = fuzzTpl.replace(/FUZZ/g, payload);
       const t0 = Date.now();
       try {
-        const r = await fetch("/api/hub/exec",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({cmd:injected,engine,mode})});
-        const d = await r.json() as {output?:string;elapsed?:number};
-        setFuzzRes(prev=>[...prev,{payload,output:(d.output??"").slice(0,120),elapsed:d.elapsed??Date.now()-t0,ok:r.ok}]);
+        const r = await fetch("/api/hub/exec",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+          cmd: injected,
+          engine,
+          mode,
+          targetUrl:     injectionUrl.trim(),
+          injectParam:   injectParam.trim() || "cmd",
+          httpMethod:    httpMethod || "GET",
+          customHeaders: customHeaders.trim() || undefined,
+          attackerIp:    attIp  || "127.0.0.1",
+          attackerPort:  attPort || "4444",
+        })});
+        const d = await r.json() as {output?:string;elapsed?:number;error?:string};
+        setFuzzRes(prev=>[...prev,{payload,output:(d.output??d.error??"").slice(0,120),elapsed:d.elapsed??Date.now()-t0,ok:r.ok}]);
       } catch {
         setFuzzRes(prev=>[...prev,{payload,output:"[network error]",elapsed:Date.now()-t0,ok:false}]);
       }

@@ -125,7 +125,7 @@ async function probePort(
   return tcp;
 }
 
-router.post("/hub/scan", async (req: Request, res: Response) => {
+router.post("/scanner/scan", async (req: Request, res: Response) => {
   const {
     target,
     ports,

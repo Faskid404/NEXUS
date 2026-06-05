@@ -25,4 +25,3 @@ router.use(cveRouter);
 router.use(aiRouter);
 
 export default router;
-  

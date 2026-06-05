@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: nexus
+    env: node
+    plan: free
+    buildCommand: >-
+      npm install -g pnpm &&
+      pnpm install --no-frozen-lockfile &&
+      pnpm run typecheck:libs &&
+      BASE_PATH=/ pnpm --filter @workspace/nexus run build &&
+      pnpm --filter @workspace/api-server run build
+    startCommand: node --enable-source-maps artifacts/api-server/dist/index.mjs
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SESSION_SECRET
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: NGROK_AUTH_TOKEN
+        sync: false
+      - key: DATABASE_URL
+        sync: false

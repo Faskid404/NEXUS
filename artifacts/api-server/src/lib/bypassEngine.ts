@@ -66,15 +66,32 @@ function varSlice(s: string): string {
 /* ─── Self-target guard ──────────────────────────────────────────────────── */
 export function isSelfTarget(url: string): boolean {
   const u = url.trim().toLowerCase();
-  return (
-    /https?:\/\/localhost[:/]/.test(u) ||
-    /https?:\/\/127\.\d+\.\d+\.\d+[:/]/.test(u) ||
-    /https?:\/\/0\.0\.0\.0[:/]/.test(u) ||
-    /https?:\/\/\[?::1\]?[:/]/.test(u) ||
-    /https?:\/\/\[?::ffff:127\./.test(u) ||
-    /https?:\/\/0[:/]/.test(u) ||
-    /https?:\/\/\[::1\]/.test(u)
-  );
+  let hostname = "";
+  try { hostname = new URL(u).hostname.replace(/^\[|\]$/g, ""); } catch { return false; }
+
+  if (
+    hostname === "localhost" ||
+    hostname === "0.0.0.0" ||
+    hostname === "::1" ||
+    hostname === "0" ||
+    hostname.startsWith("::ffff:127.")
+  ) return true;
+
+  const octets = hostname.split(".").map(Number);
+  if (octets.length === 4 && octets.every(n => !isNaN(n))) {
+    const [a, b] = octets as [number, number, number, number];
+    if (a === 127) return true;
+    if (a === 10)  return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 0)   return true;
+  }
+
+  const renderUrl = (process.env["RENDER_EXTERNAL_URL"] ?? "").toLowerCase().replace(/^https?:\/\//, "").split("/")[0] ?? "";
+  if (renderUrl && hostname === renderUrl) return true;
+
+  return false;
 }
 
 /* ─── Reverse-shell payloads ─────────────────────────────────────────────── */

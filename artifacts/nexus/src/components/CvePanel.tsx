@@ -120,8 +120,10 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
     const [running, setRunning] = useState(false);
     const [probe, setProbe]     = useState<ProbeResult | null>(null);
     const [diffs, setDiffs]     = useState<DiffResult[]>([]);
-    const [sessionId, setSessionId] = useState("");
-    const wsRef = useRef<WebSocket | null>(null);
+    const [sessionId, setSessionId]   = useState("");
+    const [shellReady, setShellReady] = useState(false);
+    const [shellCmd, setShellCmd]     = useState("");
+    const wsRef  = useRef<WebSocket | null>(null);
     const outRef = useRef<HTMLDivElement | null>(null);
 
     const append = useCallback((s: string) => {
@@ -144,6 +146,13 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
       wsRef.current?.close();
       wsRef.current = null;
       setRunning(false);
+      setShellReady(false);
+    };
+
+    const handleShellSend = () => {
+      if (!wsRef.current || wsRef.current.readyState !== 1 || !shellCmd.trim()) return;
+      wsRef.current.send(JSON.stringify({ mode: "shell", cmd: shellCmd.trim() }));
+      setShellCmd("");
     };
 
     function openWs(payload: object): WebSocket {
@@ -189,7 +198,16 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
             break;
           }
           case "sessionId": setSessionId(msg["sessionId"] as string); break;
-          case "done":      append("\n[ DONE ] confirmed=" + String(msg["confirmed"]) + " (" + String(msg["elapsed"]) + "ms)\n\n"); break;
+          case "done":
+            append("\n[ DONE ] confirmed=" + String(msg["confirmed"]) + " (" + String(msg["elapsed"]) + "ms)\n\n");
+            if (msg["persistent"]) {
+              setShellReady(true);
+              setRunning(false); // exploit finished; shell input takes over
+            }
+            break;
+          case "shellResult":
+            append("\n$ " + String(msg["cmd"]) + "\n" + String(msg["output"] ?? "") + "\n");
+            break;
           case "error":     append("\n[ ERROR ] " + String(msg["message"]) + "\n"); break;
         }
       };
@@ -395,6 +413,29 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
                   {d.confirmed ? "✓" : "?"} {d.method.toUpperCase()} Δt={d.timingDelta}ms
                 </span>
               ))}
+            </div>
+          )}
+
+          {/* Persistent shell — shown after a confirmed exploit */}
+          {shellReady && (
+            <div className="px-4 py-2 border-b border-green-900/50 bg-green-950/10 shrink-0 flex items-center gap-2">
+              <span className="text-green-500 text-[10px] font-bold shrink-0">SHELL ›</span>
+              <input
+                value={shellCmd}
+                onChange={e => setShellCmd(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") handleShellSend(); }}
+                className="flex-1 bg-transparent border-none text-green-400 text-xs font-mono focus:outline-none placeholder-green-900"
+                placeholder="id && whoami && uname -a"
+                autoFocus
+              />
+              <button onClick={handleShellSend}
+                className="px-2 py-0.5 border border-green-800 text-green-500 text-[10px] uppercase hover:bg-green-950/50 shrink-0">
+                EXEC
+              </button>
+              <button onClick={stopWs}
+                className="px-2 py-0.5 border border-red-800 text-red-500 text-[10px] uppercase hover:bg-red-950/50 shrink-0">
+                CLOSE
+              </button>
             </div>
           )}
 

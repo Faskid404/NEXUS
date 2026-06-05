@@ -489,6 +489,14 @@ export default function MainLab() {
   const [fuzzProg, setFuzzProg] = useState(0);
   const fuzzAbort = useRef(false);
 
+  // Fuzzer SSH state
+  const [fuzzMode,    setFuzzMode]    = useState<"http"|"ssh">("http");
+  const [fuzzSshHost, setFuzzSshHost] = useState("");
+  const [fuzzSshPort, setFuzzSshPort] = useState(22);
+  const [fuzzSshUser, setFuzzSshUser] = useState("root");
+  const [fuzzSshPass, setFuzzSshPass] = useState("");
+  const [fuzzSshKey,  setFuzzSshKey]  = useState("");
+
   // Encoder state
   const [encIn,  setEncIn]  = useState("");
   const [encOut, setEncOut] = useState("");
@@ -625,8 +633,12 @@ export default function MainLab() {
 
   const handleFuzz = async () => {
     if (!fuzzTpl.includes("FUZZ")) return;
-    if (!injectionUrl.trim()) {
+    if (fuzzMode === "http" && !injectionUrl.trim()) {
       setFuzzRes([{payload:"[config]",output:"Set a Target URL in the TERMINAL tab before fuzzing.",elapsed:0,ok:false}]);
+      return;
+    }
+    if (fuzzMode === "ssh" && !fuzzSshHost.trim()) {
+      setFuzzRes([{payload:"[config]",output:"Enter an SSH Host before fuzzing.",elapsed:0,ok:false}]);
       return;
     }
     const payloads = FUZZ_SETS[fuzzSet] ?? [];
@@ -634,21 +646,33 @@ export default function MainLab() {
     setFuzzing(true); setFuzzRes([]); setFuzzProg(0);
     for (let i=0;i<payloads.length;i++) {
       if (fuzzAbort.current) break;
-      const payload = payloads[i]!;
+      const payload  = payloads[i]!;
       const injected = fuzzTpl.replace(/FUZZ/g, payload);
       const t0 = Date.now();
       try {
-        const r = await fetch("/api/hub/exec",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
-          cmd: injected,
-          engine,
-          mode,
-          targetUrl:     injectionUrl.trim(),
-          injectParam:   injectParam.trim() || "cmd",
-          httpMethod:    httpMethod || "GET",
-          customHeaders: customHeaders.trim() || undefined,
-          attackerIp:    attIp  || "127.0.0.1",
-          attackerPort:  attPort || "4444",
-        })});
+        const body = fuzzMode === "ssh"
+          ? JSON.stringify({
+              cmd:         injected,
+              engine,
+              mode,
+              sshHost:     fuzzSshHost.trim(),
+              sshPort:     fuzzSshPort,
+              sshUser:     fuzzSshUser.trim() || "root",
+              sshPassword: fuzzSshPass.trim() || undefined,
+              sshKey:      fuzzSshKey.trim()  || undefined,
+            })
+          : JSON.stringify({
+              cmd:           injected,
+              engine,
+              mode,
+              targetUrl:     injectionUrl.trim(),
+              injectParam:   injectParam.trim() || "cmd",
+              httpMethod:    httpMethod || "GET",
+              customHeaders: customHeaders.trim() || undefined,
+              attackerIp:    attIp  || "127.0.0.1",
+              attackerPort:  attPort || "4444",
+            });
+        const r = await fetch("/api/hub/exec",{method:"POST",headers:{"Content-Type":"application/json"},body});
         const d = await r.json() as {output?:string;elapsed?:number;error?:string};
         setFuzzRes(prev=>[...prev,{payload,output:(d.output??d.error??"").slice(0,120),elapsed:d.elapsed??Date.now()-t0,ok:r.ok}]);
       } catch {
@@ -875,6 +899,57 @@ export default function MainLab() {
   // ── FUZZER ────────────────────────────────────────────
   const tabFuzzer = () => (
     <div className="flex-1 flex flex-col p-3 gap-3 overflow-y-auto">
+      {/* Target mode selector */}
+      <div className="flex items-center gap-0.5 border border-zinc-800 rounded p-0.5 w-fit">
+        <button onClick={()=>setFuzzMode("http")}
+          className={`px-3 py-1 text-[10px] uppercase font-bold transition-colors rounded-sm ${fuzzMode==="http"?"bg-red-900 text-red-200":"text-zinc-600 hover:text-zinc-400"}`}>
+          HTTP
+        </button>
+        <button onClick={()=>setFuzzMode("ssh")}
+          className={`px-3 py-1 text-[10px] uppercase font-bold transition-colors rounded-sm ${fuzzMode==="ssh"?"bg-cyan-900 text-cyan-200":"text-zinc-600 hover:text-zinc-400"}`}>
+          SSH
+        </button>
+      </div>
+
+      {/* SSH credential panel — visible only in SSH mode */}
+      {fuzzMode === "ssh" && (
+        <div className="border border-cyan-900/50 bg-cyan-950/10 rounded p-3 flex flex-col gap-2">
+          <div className="text-[9px] text-cyan-600 uppercase tracking-widest font-bold mb-0.5">SSH Target Credentials</div>
+          <div className="flex gap-2 flex-wrap">
+            <div className="flex flex-col gap-0.5">
+              <span className="text-[9px] text-zinc-600 uppercase">Host / IP</span>
+              <input value={fuzzSshHost} onChange={e=>setFuzzSshHost(e.target.value)}
+                className="bg-black border border-zinc-800 px-2 py-1 text-xs text-cyan-300 font-mono focus:outline-none focus:border-cyan-700 w-36"
+                placeholder="192.168.1.1"/>
+            </div>
+            <div className="flex flex-col gap-0.5">
+              <span className="text-[9px] text-zinc-600 uppercase">Port</span>
+              <input type="number" value={fuzzSshPort} onChange={e=>setFuzzSshPort(Number(e.target.value)||22)}
+                className="bg-black border border-zinc-800 px-2 py-1 text-xs text-cyan-300 font-mono focus:outline-none focus:border-cyan-700 w-16"
+                placeholder="22"/>
+            </div>
+            <div className="flex flex-col gap-0.5">
+              <span className="text-[9px] text-zinc-600 uppercase">Username</span>
+              <input value={fuzzSshUser} onChange={e=>setFuzzSshUser(e.target.value)}
+                className="bg-black border border-zinc-800 px-2 py-1 text-xs text-cyan-300 font-mono focus:outline-none focus:border-cyan-700 w-24"
+                placeholder="root"/>
+            </div>
+            <div className="flex flex-col gap-0.5">
+              <span className="text-[9px] text-zinc-600 uppercase">Password</span>
+              <input type="password" value={fuzzSshPass} onChange={e=>setFuzzSshPass(e.target.value)}
+                className="bg-black border border-zinc-800 px-2 py-1 text-xs text-cyan-300 font-mono focus:outline-none focus:border-cyan-700 w-28"
+                placeholder="(optional)"/>
+            </div>
+          </div>
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[9px] text-zinc-600 uppercase">Private Key — PEM (optional)</span>
+            <textarea value={fuzzSshKey} onChange={e=>setFuzzSshKey(e.target.value)}
+              className="bg-black border border-zinc-800 px-2 py-1 text-[10px] text-cyan-300 font-mono focus:outline-none focus:border-cyan-700 w-full h-16 resize-none"
+              placeholder={"-----BEGIN RSA PRIVATE KEY-----\n..."}/>
+          </div>
+        </div>
+      )}
+
       <div className="text-[10px] text-zinc-500 uppercase">Use FUZZ as placeholder — each payload replaces it and fires</div>
       <input value={fuzzTpl} onChange={e=>setFuzzTpl(e.target.value)}
         className="w-full bg-black border border-zinc-800 px-2 py-1.5 text-sm text-lime-400 font-mono focus:outline-none focus:border-red-700"

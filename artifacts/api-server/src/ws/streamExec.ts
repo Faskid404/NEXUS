@@ -149,6 +149,7 @@ async function fetchAttempt(
   attemptNum:   number,
   label:        string,
   baselineLen:  number,
+  baselineBody: string,
 ): Promise<AttemptResult> {
   const t0 = Date.now();
   const NO: AttemptResult = { blocked: false, done: false, responseLen: 0, successIndicator: false, elapsed: 0 };
@@ -217,9 +218,19 @@ async function fetchAttempt(
     send(ws, { type: "data", chunk: `  ${elapsed}ms\n` });
 
     if (execOutput) {
-      send(ws, { type: "data", chunk: `\n\u2714 EXECUTION CONFIRMED — command output detected in response\n` });
-      send(ws, { type: "data", chunk: `--- RESPONSE ---\n${text.slice(0, 2000)}\n` });
-      return { blocked: false, done: true, responseLen: rLen, successIndicator: true, elapsed };
+      // Differential false-positive guard: only fire CONFIRMED if the baseline did NOT
+      // already contain the same signatures, OR if the length change is significant
+      const baselineAlsoMatched = baselineBody.length > 100 && detectCommandOutput(baselineBody);
+      const lenDiff = baselineLen > 0 ? Math.abs(rLen - baselineLen) : 999;
+      if (baselineAlsoMatched && lenDiff < 150) {
+        send(ws, { type: "data", chunk: `\n  \u26a0 [FP-GUARD] Signature matched BUT baseline response also contained cmd-output patterns\n` });
+        send(ws, { type: "data", chunk: `  \u0394len=${lenDiff}b — possible false positive (documentation page?)\n` });
+        send(ws, { type: "data", chunk: `  Use OOB or timing mode for zero-noise confirmation\n` });
+      } else {
+        send(ws, { type: "data", chunk: `\n\u2714 EXECUTION CONFIRMED — command output detected (${baselineLen > 0 ? "\u0394len:" + lenDiff + "b vs baseline" : "no baseline reference"})\n` });
+        send(ws, { type: "data", chunk: `--- RESPONSE ---\n${text.slice(0, 2000)}\n` });
+        return { blocked: false, done: true, responseLen: rLen, successIndicator: true, elapsed };
+      }
     }
 
     if (text.length > 0 && text.length < 4096) {
@@ -304,8 +315,9 @@ async function handleRemoteInject(
     return "";
   })();
 
-  let baselineLen = -1;
-  let baselineMs  = 0;
+  let baselineLen  = -1;
+  let baselineMs   = 0;
+  let baselineBody = "";
   try {
     send(ws, { type: "data", chunk: "[BASELINE] Measuring clean response...\n" });
     const bUrl = new URL(injectionUrl);
@@ -325,10 +337,12 @@ async function handleRemoteInject(
       headers: bHdrs,
       signal:  AbortSignal.timeout(10000),
     });
-    const bText = await bRes.text();
-    baselineLen = bText.length;
-    baselineMs  = Date.now() - bT0;
-    send(ws, { type: "data", chunk: `[BASELINE] HTTP ${bRes.status} \u2014 ${baselineLen} bytes \u2014 ${baselineMs}ms\n\n` });
+    const bText  = await bRes.text();
+    baselineLen  = bText.length;
+    baselineBody = bText;
+    baselineMs   = Date.now() - bT0;
+    const bWarn = detectCommandOutput(bText) ? " \u26a0 baseline already contains cmd-output signatures — FP-guard active" : "";
+    send(ws, { type: "data", chunk: `[BASELINE] HTTP ${bRes.status} \u2014 ${baselineLen} bytes \u2014 ${baselineMs}ms${bWarn}\n\n` });
   } catch {
     send(ws, { type: "data", chunk: "[BASELINE] Could not measure — skipping diff analysis\n\n" });
   }
@@ -400,7 +414,7 @@ async function handleRemoteInject(
 
     const bypassTag = i === 0 ? "direct" : `bypass-${i}:${bypassHdrs["User-Agent"]?.split("/")[0] ?? ""}`;
     const label     = `${i + 1}/${MAX_ATTEMPTS} [${bypassTag}]`;
-    const result    = await fetchAttempt(ws, injectionUrl, injectParam, httpMethod, headers, payload, i, label, baselineLen);
+    const result    = await fetchAttempt(ws, injectionUrl, injectParam, httpMethod, headers, payload, i, label, baselineLen, baselineBody);
 
     if (result.elapsed > 5500 && baselineMs < 1500) {
       send(ws, { type: "data", chunk: `\n  [TIMING] ${result.elapsed}ms response (baseline: ${baselineMs}ms) — POSSIBLE BLIND RCE\n` });

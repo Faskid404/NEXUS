@@ -2,6 +2,7 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import {
   applyQuantumBypass,
   buildPayloadVariants,
+  buildPolymorphicPayload,
   buildWafBypass,
   buildReverseShells,
   buildChunkedBypass,
@@ -18,7 +19,7 @@ import { sshExec } from "../lib/sshExec.js";
 const router: IRouter = Router();
 
 const ALL_MODES = [
-  "classic","blind","oob","quantum","ifs","concat","hex","b64loop","env",
+  "classic","blind","oob","quantum","polymorphic","ifs","concat","hex","b64loop","env",
   "heredoc","unicode","null","wildcard","comment","double_enc",
   "brace","process_sub","arith","ansi_c","rev",
   "ssti","log4shell","xxe","polyglot",
@@ -172,7 +173,9 @@ router.post("/hub/exec", async (req: Request, res: Response) => {
       return;
     }
 
-    const variants = buildPayloadVariants(processed);
+    const variants = mode === "polymorphic"
+      ? [buildPolymorphicPayload(cmd, "quantum")]
+      : buildPayloadVariants(processed);
     const payload  = variants[0] ?? processed;
     const method   = httpMethod.toUpperCase();
 

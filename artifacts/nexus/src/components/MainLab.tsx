@@ -49,7 +49,7 @@ const MODES = [
   "blind","oob","hex","b64loop","unicode",
   "ansi_c","arith","heredoc","wildcard","comment",
   "null","brace","process_sub","rev","double_enc",
-  "quantum","ssti","log4shell","xxe","polyglot",
+  "quantum","polymorphic","ssti","log4shell","xxe","polyglot",
   "rev_shell","windows_rev","cloud","container",
   "windows","antiforensics",
 ] as const;
@@ -58,7 +58,7 @@ type Mode = typeof MODES[number];
 const MODE_COLOR: Record<string, string> = {
   timing:"text-green-400", windows_timing:"text-blue-300", stealth:"text-emerald-300",
   classic:"text-lime-400", blind:"text-yellow-400", oob:"text-orange-400",
-  quantum:"text-fuchsia-400", ifs:"text-cyan-400", concat:"text-blue-400",
+  quantum:"text-fuchsia-400", polymorphic:"text-purple-400", ifs:"text-cyan-400", concat:"text-blue-400",
   hex:"text-emerald-400", b64loop:"text-violet-400", env:"text-rose-400",
   heredoc:"text-amber-400",
   unicode:"text-sky-400", "null":"text-zinc-400", wildcard:"text-teal-400",
@@ -71,7 +71,7 @@ const MODE_COLOR: Record<string, string> = {
 };
 const MODE_DESC: Record<string, string> = {
   timing:"Sleep oracle", windows_timing:"Win sleep oracle", stealth:"Low-noise $0",
-  classic:"Direct",  blind:"Time-delay", oob:"OOB exfil",  quantum:"Multi-layer",
+  classic:"Direct",  blind:"Time-delay", oob:"OOB exfil",  quantum:"Multi-layer", polymorphic:"Poly junk",
   ifs:"IFS spaces",  concat:"Quote split", hex:"printf hex", b64loop:"Nested b64",
   env:"Env var",     heredoc:"Heredoc",
   unicode:"printf \\x", "null":"Null-byte", wildcard:"Shell glob",

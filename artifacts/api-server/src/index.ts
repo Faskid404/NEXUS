@@ -19,19 +19,40 @@ if (Number.isNaN(port) || port <= 0) throw new Error(`Invalid PORT value: "${raw
 const server = createServer(app);
 const wss    = new WebSocketServer({ noServer: true });
 
+const PING_INTERVAL_MS = 25_000;
+
+function attachHeartbeat(ws: import("ws").WebSocket): void {
+  let alive = true;
+
+  const interval = setInterval(() => {
+    if (!alive) {
+      ws.terminate();
+      return;
+    }
+    alive = false;
+    try { ws.ping(); } catch { /* ignore if already closing */ }
+  }, PING_INTERVAL_MS);
+
+  ws.on("pong", () => { alive = true; });
+  ws.on("close", () => clearInterval(interval));
+}
+
 server.on("upgrade", (req, socket, head) => {
   const pathname = (() => {
     try { return new URL(req.url ?? "/", "http://localhost").pathname; }
     catch { return req.url?.split("?")[0] ?? "/"; }
   })();
 
-  if      (pathname === "/api/ws/exec")        wss.handleUpgrade(req, socket as import("stream").Duplex, head, handleStreamExec);
-  else if (pathname === "/api/ws/scan")        wss.handleUpgrade(req, socket as import("stream").Duplex, head, handleScanTarget);
-  else if (pathname === "/api/ws/chain")       wss.handleUpgrade(req, socket as import("stream").Duplex, head, handleExploitChain);
-  else if (pathname === "/api/ws/probe")       wss.handleUpgrade(req, socket as import("stream").Duplex, head, handleProbeTarget);
-  else if (pathname === "/api/ws/autoexploit") wss.handleUpgrade(req, socket as import("stream").Duplex, head, handleAutoExploit);
-  else if (pathname === "/api/ws/postexploit") wss.handleUpgrade(req, socket as import("stream").Duplex, head, handlePostExploit);
-  else if (pathname === "/api/ws/cve")         wss.handleUpgrade(req, socket as import("stream").Duplex, head, handleCveExploit);
+  const wrap = (handler: (ws: import("ws").WebSocket) => void) =>
+    (ws: import("ws").WebSocket) => { attachHeartbeat(ws); handler(ws); };
+
+  if      (pathname === "/api/ws/exec")        wss.handleUpgrade(req, socket as import("stream").Duplex, head, wrap(handleStreamExec));
+  else if (pathname === "/api/ws/scan")        wss.handleUpgrade(req, socket as import("stream").Duplex, head, wrap(handleScanTarget));
+  else if (pathname === "/api/ws/chain")       wss.handleUpgrade(req, socket as import("stream").Duplex, head, wrap(handleExploitChain));
+  else if (pathname === "/api/ws/probe")       wss.handleUpgrade(req, socket as import("stream").Duplex, head, wrap(handleProbeTarget));
+  else if (pathname === "/api/ws/autoexploit") wss.handleUpgrade(req, socket as import("stream").Duplex, head, wrap(handleAutoExploit));
+  else if (pathname === "/api/ws/postexploit") wss.handleUpgrade(req, socket as import("stream").Duplex, head, wrap(handlePostExploit));
+  else if (pathname === "/api/ws/cve")         wss.handleUpgrade(req, socket as import("stream").Duplex, head, wrap(handleCveExploit));
   else {
     socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
     socket.destroy();

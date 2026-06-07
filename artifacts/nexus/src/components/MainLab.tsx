@@ -811,11 +811,10 @@ export default function MainLab() {
           banner:  msg.banner  ?? "",
         };
         // Open ports appear immediately at the top; closed accumulate below
-        setScanResults(prev =>
-          result.open
-            ? [result, ...prev.filter(r => !r.open), ...prev.filter(r => r.open === false && r.port !== result.port)]
-            : [...prev, result]
-        );
+        setScanResults(prev => {
+          const others = prev.filter(r => r.port !== result.port);
+          return result.open ? [result, ...others] : [...others, result];
+        });
         setScanScanned(msg.scanned ?? 0);
         setScanOpenCount(msg.openCount ?? 0);
 

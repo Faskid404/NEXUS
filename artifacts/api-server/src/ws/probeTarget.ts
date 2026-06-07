@@ -49,10 +49,14 @@ export function handleProbeTarget(ws: WebSocket): void {
 
     logger.info({ url, scanPorts }, "ws/probe start");
 
+    let aborted = false;
+    ws.on("close", () => { aborted = true; });
+
     send(ws, { type: "progress", message: `Probing HTTP environment: ${url}` });
 
     probeTargetEnvironment(url, 10000)
       .then(async (env) => {
+        if (aborted) return;
         if (!env.reachable) {
           send(ws, { type: "error", message: `Target unreachable: ${url}` });
           ws.close();
@@ -86,53 +90,63 @@ export function handleProbeTarget(ws: WebSocket): void {
           ].filter(Boolean).join("\n"),
         });
 
+        if (aborted) return;
         send(ws, { type: "progress", message: `Running web path discovery on ${url}` });
 
         try {
           const webDisc = await probeWebDiscovery(url, 8000);
-          send(ws, { type: "web_discovery", discovery: webDisc });
+          if (!aborted) {
+            send(ws, { type: "web_discovery", discovery: webDisc });
 
-          const discLines: string[] = ["── Web Discovery ──"];
-          if (webDisc.gitExposed)   discLines.push("  [!] /.git/HEAD exposed — full source code recoverable via git-dumper");
-          if (webDisc.phpinfo)      discLines.push("  [!] phpinfo() exposed — reveals config, paths, loaded modules");
-          if (webDisc.dirListing)   discLines.push("  [!] Directory listing enabled");
-          for (const p of webDisc.adminPanels) discLines.push(`  [+] Admin panel ${p.path} (HTTP ${p.status})`);
-          for (const f of webDisc.sensitiveFiles) discLines.push(`  [!] Sensitive file ${f.path} is public (HTTP ${f.status})`);
-          if (webDisc.robotsTxt) {
-            const disallowed = webDisc.robotsTxt.split("\n").filter(l => /^Disallow:/i.test(l)).slice(0, 8).map(l => l.trim());
-            if (disallowed.length) discLines.push("  Robots.txt disallowed paths:", ...disallowed.map(l => `    ${l}`));
-          }
-          if (discLines.length > 1) {
-            send(ws, { type: "progress", message: discLines.join("\n") });
+            const discLines: string[] = ["── Web Discovery ──"];
+            if (webDisc.gitExposed)   discLines.push("  [!] /.git/HEAD exposed — full source code recoverable via git-dumper");
+            if (webDisc.phpinfo)      discLines.push("  [!] phpinfo() exposed — reveals config, paths, loaded modules");
+            if (webDisc.dirListing)   discLines.push("  [!] Directory listing enabled");
+            for (const p of webDisc.adminPanels) discLines.push(`  [+] Admin panel ${p.path} (HTTP ${p.status})`);
+            for (const f of webDisc.sensitiveFiles) discLines.push(`  [!] Sensitive file ${f.path} is public (HTTP ${f.status})`);
+            if (webDisc.robotsTxt) {
+              const disallowed = webDisc.robotsTxt.split("\n").filter(l => /^Disallow:/i.test(l)).slice(0, 8).map(l => l.trim());
+              if (disallowed.length) discLines.push("  Robots.txt disallowed paths:", ...disallowed.map(l => `    ${l}`));
+            }
+            if (discLines.length > 1) {
+              send(ws, { type: "progress", message: discLines.join("\n") });
+            }
           }
         } catch {
           /* web discovery failure is non-fatal */
         }
 
+        if (aborted) return;
         if (scanPorts) {
           send(ws, { type: "progress", message: `Fingerprinting ${portList.length} TCP services on ${parsed.hostname}` });
           try {
             const services = await probeNetworkServices(parsed.hostname, portList, 2500);
-            send(ws, { type: "service_fingerprints", host: parsed.hostname, services });
+            if (!aborted) {
+              send(ws, { type: "service_fingerprints", host: parsed.hostname, services });
 
-            const svcLines = ["── Service Fingerprints ──"];
-            for (const s of services) {
-              const line = `  ${String(s.port).padEnd(6)} ${s.service.padEnd(16)} ${s.version || ""}`.trimEnd();
-              svcLines.push(line);
-              for (const h of s.vulnHints) svcLines.push(`           [!] ${h}`);
+              const svcLines = ["── Service Fingerprints ──"];
+              for (const s of services) {
+                const line = `  ${String(s.port).padEnd(6)} ${s.service.padEnd(16)} ${s.version || ""}`.trimEnd();
+                svcLines.push(line);
+                for (const h of s.vulnHints) svcLines.push(`           [!] ${h}`);
+              }
+              if (services.length) send(ws, { type: "progress", message: svcLines.join("\n") });
             }
-            if (services.length) send(ws, { type: "progress", message: svcLines.join("\n") });
           } catch {
             /* service scan failure is non-fatal */
           }
         }
 
-        send(ws, { type: "end" });
-        ws.close();
+        if (!aborted) {
+          send(ws, { type: "end" });
+          ws.close();
+        }
       })
       .catch((err: unknown) => {
-        send(ws, { type: "error", message: (err as Error).message ?? String(err) });
-        ws.close();
+        if (!aborted) {
+          send(ws, { type: "error", message: (err as Error).message ?? String(err) });
+          ws.close();
+        }
       });
   });
 }

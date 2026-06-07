@@ -20,14 +20,22 @@ const server = createServer(app);
 const wss    = new WebSocketServer({ noServer: true });
 
 server.on("upgrade", (req, socket, head) => {
-  if      (req.url === "/api/ws/exec")  wss.handleUpgrade(req, socket as import("stream").Duplex, head, handleStreamExec);
-  else if (req.url === "/api/ws/scan")  wss.handleUpgrade(req, socket as import("stream").Duplex, head, handleScanTarget);
-  else if (req.url === "/api/ws/chain") wss.handleUpgrade(req, socket as import("stream").Duplex, head, handleExploitChain);
-  else if (req.url === "/api/ws/probe")       wss.handleUpgrade(req, socket as import("stream").Duplex, head, handleProbeTarget);
-  else if (req.url === "/api/ws/autoexploit")  wss.handleUpgrade(req, socket as import("stream").Duplex, head, handleAutoExploit);
-  else if (req.url === "/api/ws/postexploit")  wss.handleUpgrade(req, socket as import("stream").Duplex, head, handlePostExploit);
-  else if (req.url === "/api/ws/cve")          wss.handleUpgrade(req, socket as import("stream").Duplex, head, handleCveExploit);
-  else socket.destroy();
+  const pathname = (() => {
+    try { return new URL(req.url ?? "/", "http://localhost").pathname; }
+    catch { return req.url?.split("?")[0] ?? "/"; }
+  })();
+
+  if      (pathname === "/api/ws/exec")        wss.handleUpgrade(req, socket as import("stream").Duplex, head, handleStreamExec);
+  else if (pathname === "/api/ws/scan")        wss.handleUpgrade(req, socket as import("stream").Duplex, head, handleScanTarget);
+  else if (pathname === "/api/ws/chain")       wss.handleUpgrade(req, socket as import("stream").Duplex, head, handleExploitChain);
+  else if (pathname === "/api/ws/probe")       wss.handleUpgrade(req, socket as import("stream").Duplex, head, handleProbeTarget);
+  else if (pathname === "/api/ws/autoexploit") wss.handleUpgrade(req, socket as import("stream").Duplex, head, handleAutoExploit);
+  else if (pathname === "/api/ws/postexploit") wss.handleUpgrade(req, socket as import("stream").Duplex, head, handlePostExploit);
+  else if (pathname === "/api/ws/cve")         wss.handleUpgrade(req, socket as import("stream").Duplex, head, handleCveExploit);
+  else {
+    socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+    socket.destroy();
+  }
 });
 
 server.listen(port, () => {

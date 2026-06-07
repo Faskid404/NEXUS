@@ -125,11 +125,17 @@ function parseHint(port: number, banner: string): string {
 
 export function handleScanTarget(ws: WebSocket): void {
   ws.once("message", (raw) => {
+    const send = (obj: unknown): void => {
+      if (ws.readyState === 1) {
+        try { ws.send(JSON.stringify(obj)); } catch { /* connection closed mid-send */ }
+      }
+    };
+
     let req: ScanRequest;
     try {
       req = JSON.parse(raw.toString()) as ScanRequest;
     } catch {
-      ws.send(JSON.stringify({ type: "error", message: "invalid JSON" }));
+      send({ type: "error", message: "invalid JSON" });
       ws.close();
       return;
     }
@@ -143,7 +149,7 @@ export function handleScanTarget(ws: WebSocket): void {
 
     const safeTarget = target.trim().replace(/[^a-zA-Z0-9.\-_:[\]]/g, "");
     if (!safeTarget) {
-      ws.send(JSON.stringify({ type: "error", message: "invalid or empty target" }));
+      send({ type: "error", message: "invalid or empty target" });
       ws.close();
       return;
     }
@@ -156,10 +162,6 @@ export function handleScanTarget(ws: WebSocket): void {
         : Array.from(SERVICE_MAP.keys());
 
     logger.info({ target: safeTarget, ports: portList.length, timeout: timeoutMs }, "ws/scan start");
-
-    const send = (obj: unknown): void => {
-      if (ws.readyState === 1) ws.send(JSON.stringify(obj));
-    };
 
     let aborted = false;
     ws.on("close", () => { aborted = true; });

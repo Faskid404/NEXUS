@@ -6,7 +6,9 @@ import { logger } from "../lib/logger.js";
 const DEFAULT_PROBE_PORTS = [21, 22, 25, 80, 443, 445, 1433, 2375, 3306, 3389, 5432, 5900, 5984, 5985, 6379, 8080, 8443, 9200, 11211, 27017];
 
 function send(ws: WebSocket, obj: unknown): void {
-  if (ws.readyState === 1) ws.send(JSON.stringify(obj));
+  if (ws.readyState === 1) {
+    try { ws.send(JSON.stringify(obj)); } catch { /* connection closed mid-send */ }
+  }
 }
 
 export function handleProbeTarget(ws: WebSocket): void {

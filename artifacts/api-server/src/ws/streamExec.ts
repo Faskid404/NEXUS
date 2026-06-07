@@ -42,7 +42,9 @@ interface ExecRequest {
 }
 
 function send(ws: WebSocket, obj: unknown): void {
-  if (ws.readyState === 1) ws.send(JSON.stringify(obj));
+  if (ws.readyState === 1) {
+    try { ws.send(JSON.stringify(obj)); } catch { /* connection closed mid-send */ }
+  }
 }
 
 const UA_POOL = [

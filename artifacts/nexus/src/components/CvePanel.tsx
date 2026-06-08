@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
+import { useReconnectingWs } from "../hooks/use-reconnecting-ws";
 
   /* ═══════════════════════════════════════════════════════════════
      NEXUSFORGE — CVE Exploitation Panel  (2025 / 2026)
@@ -49,14 +50,6 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
     if (cvss >= 7) return "text-orange-400";
     if (cvss >= 4) return "text-yellow-400";
     return "text-green-400";
-  }
-  function cvssBar(cvss: number): string {
-    const pct = Math.round((cvss / 10) * 100);
-    let bg = "bg-green-500";
-    if (cvss >= 9) bg = "bg-red-500";
-    else if (cvss >= 7) bg = "bg-orange-500";
-    else if (cvss >= 4) bg = "bg-yellow-500";
-    return `<div class="h-1 ${bg} rounded" style="width:${pct}%"></div>`;
   }
   function typeBadge(type: string): string {
     const map: Record<string,string> = {
@@ -123,13 +116,82 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
     const [sessionId, setSessionId]   = useState("");
     const [shellReady, setShellReady] = useState(false);
     const [shellCmd, setShellCmd]     = useState("");
-    const wsRef  = useRef<WebSocket | null>(null);
     const outRef = useRef<HTMLDivElement | null>(null);
 
     const append = useCallback((s: string) => {
       setOutput(p => (p + s).slice(-30_000));
       setTimeout(() => { outRef.current?.scrollTo({ top: 99999, behavior: "smooth" }); }, 30);
     }, []);
+
+    const handleCveMsg = useCallback((msg: unknown) => {
+      const m = msg as Record<string,unknown>;
+      switch (m["type"]) {
+        case "log":        append((m["message"] as string) + "\n"); break;
+        case "probeResult": setProbe(m as unknown as ProbeResult); append(
+          "\n[ PROBE RESULT ]\n" +
+          "Vulnerable: " + (m["vulnerable"] == null ? "UNKNOWN" : m["vulnerable"] ? "YES ⚠" : "NO ✓") + "\n" +
+          "Evidence:   " + String(m["evidence"]) + "\n" +
+          "Confidence: " + String(m["confidence"]) + "\n" +
+          "Banner:     " + String(m["banner"] || "(none)") + "\n" +
+          "Time:       " + String(m["responseTime"] ?? m["elapsed"] ?? 0) + "ms\n"
+        ); break;
+        case "exploitResult": append(
+          "\n[ EXPLOIT RESULT ]\n" +
+          "Success: " + String(m["success"]) + "\n" +
+          "Output:\n" + String(m["output"] ?? "") + "\n"
+        ); break;
+        case "stepResult": append(
+          "  HTTP " + String(m["status"]) + " · " + String(m["elapsed"]) + "ms" +
+          (m["output"] ? "\n" + String(m["output"]).slice(0,800) : "") + "\n"
+        ); break;
+        case "diffResult": {
+          const d = m as unknown as DiffResult;
+          setDiffs(p => [...p, d]);
+          append(
+            "  [" + d.method.toUpperCase() + "] " + (d.confirmed ? "CONFIRMED ✓" : "negative") +
+            " Δt=" + d.timingDelta + "ms ΔB=" + d.sizeDelta + "  " + d.payload + "\n"
+          );
+          break;
+        }
+        case "sessionId": setSessionId(m["sessionId"] as string); break;
+        case "done":
+          append("\n[ DONE ] confirmed=" + String(m["confirmed"]) + " (" + String(m["elapsed"]) + "ms)\n\n");
+          if (m["persistent"]) {
+            setShellReady(true);
+            setRunning(false);
+          }
+          break;
+        case "shellResult":
+          append("\n$ " + String(m["cmd"]) + "\n" + String(m["output"] ?? "") + "\n");
+          break;
+        case "error": append("\n[ ERROR ] " + String(m["message"]) + "\n"); break;
+      }
+    }, [append]);
+
+    const handleCveClose = useCallback((wasClean: boolean) => {
+      setRunning(false);
+      setShellReady(false);
+      if (!wasClean) append("[WS] connection lost\n");
+    }, [append]);
+
+    const wsHook = useReconnectingWs({
+      onMessage: handleCveMsg,
+      onClose:   handleCveClose,
+    });
+
+    useEffect(() => {
+      if (wsHook.status === "reconnecting" && wsHook.reconnectInfo) {
+        const { attempt, maxAttempts, delayMs } = wsHook.reconnectInfo;
+        append(
+          `[WS] link dropped — reconnecting (${attempt}/${maxAttempts}) in ${Math.ceil(delayMs / 1000)}s…\n`,
+        );
+      }
+      if (wsHook.status === "failed") {
+        append("[WS] reconnect failed — connection permanently lost\n");
+        setRunning(false);
+        setShellReady(false);
+      }
+    }, [wsHook.status, wsHook.reconnectInfo, append]);
 
     // Load CVE list
     useEffect(() => {
@@ -143,75 +205,24 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
     }, []);
 
     const stopWs = () => {
-      wsRef.current?.close();
-      wsRef.current = null;
+      wsHook.disconnect();
       setRunning(false);
       setShellReady(false);
     };
 
     const handleShellSend = () => {
-      if (!wsRef.current || wsRef.current.readyState !== 1 || !shellCmd.trim()) return;
-      wsRef.current.send(JSON.stringify({ mode: "shell", cmd: shellCmd.trim() }));
+      if (!shellCmd.trim()) return;
+      wsHook.send({ mode: "shell", cmd: shellCmd.trim() });
       setShellCmd("");
     };
 
-    function openWs(payload: object): WebSocket {
+    function openWs(payload: object): void {
       stopWs();
       setOutput("");
       setProbe(null);
       setDiffs([]);
       setRunning(true);
-      const ws = new WebSocket(wsBase() + "/cve");
-      wsRef.current = ws;
-
-      ws.onopen  = () => ws.send(JSON.stringify(payload));
-      ws.onclose = () => setRunning(false);
-      ws.onerror = () => { append("[WS ERROR]\n"); setRunning(false); };
-      ws.onmessage = (e) => {
-        const msg = JSON.parse(e.data) as Record<string,unknown>;
-        switch (msg["type"]) {
-          case "log":        append((msg["message"] as string) + "\n"); break;
-          case "probeResult": setProbe(msg as unknown as ProbeResult); append(
-            "\n[ PROBE RESULT ]\n" +
-            "Vulnerable: " + (msg["vulnerable"] == null ? "UNKNOWN" : msg["vulnerable"] ? "YES ⚠" : "NO ✓") + "\n" +
-            "Evidence:   " + String(msg["evidence"]) + "\n" +
-            "Confidence: " + String(msg["confidence"]) + "\n" +
-            "Banner:     " + String(msg["banner"] || "(none)") + "\n" +
-            "Time:       " + String(msg["responseTime"] ?? msg["elapsed"] ?? 0) + "ms\n"
-          ); break;
-          case "exploitResult": append(
-            "\n[ EXPLOIT RESULT ]\n" +
-            "Success: " + String(msg["success"]) + "\n" +
-            "Output:\n" + String(msg["output"] ?? "") + "\n"
-          ); break;
-          case "stepResult": append(
-            "  HTTP " + String(msg["status"]) + " · " + String(msg["elapsed"]) + "ms" +
-            (msg["output"] ? "\n" + String(msg["output"]).slice(0,800) : "") + "\n"
-          ); break;
-          case "diffResult": {
-            const d = msg as unknown as DiffResult;
-            setDiffs(p => [...p, d]);
-            append(
-              "  [" + d.method.toUpperCase() + "] " + (d.confirmed ? "CONFIRMED ✓" : "negative") +
-              " Δt=" + d.timingDelta + "ms ΔB=" + d.sizeDelta + "  " + d.payload + "\n"
-            );
-            break;
-          }
-          case "sessionId": setSessionId(msg["sessionId"] as string); break;
-          case "done":
-            append("\n[ DONE ] confirmed=" + String(msg["confirmed"]) + " (" + String(msg["elapsed"]) + "ms)\n\n");
-            if (msg["persistent"]) {
-              setShellReady(true);
-              setRunning(false); // exploit finished; shell input takes over
-            }
-            break;
-          case "shellResult":
-            append("\n$ " + String(msg["cmd"]) + "\n" + String(msg["output"] ?? "") + "\n");
-            break;
-          case "error":     append("\n[ ERROR ] " + String(msg["message"]) + "\n"); break;
-        }
-      };
-      return ws;
+      wsHook.connect(wsBase() + "/cve", payload);
     }
 
     // ── Action handlers ─────────────────────────────────────────────
@@ -459,15 +470,23 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
                     ? "text-lime-400"
                     : line.startsWith("  [TIMING") || line.startsWith("  [CONTENT")
                     ? "text-yellow-400"
+                    : line.startsWith("[WS]")
+                    ? "text-orange-400"
                     : "text-zinc-400";
-                  return <span key={i} className={col}>{line}\n</span>;
+                  return <span key={i} className={col}>{line}{"\n"}</span>;
                 })
               : <span className="text-zinc-700">Output will appear here. Select a CVE, configure a target, and run a probe or exploit.</span>
             }
-            {running && <span className="text-red-500 animate-pulse">█</span>}
+            {running && wsHook.status !== "reconnecting" && (
+              <span className="text-red-500 animate-pulse">█</span>
+            )}
+            {wsHook.status === "reconnecting" && wsHook.reconnectInfo && (
+              <span className="text-orange-400 text-[10px]">
+                ↻ reconnecting ({wsHook.reconnectInfo.attempt}/{wsHook.reconnectInfo.maxAttempts})…
+              </span>
+            )}
           </div>
         </div>
       </div>
     );
   }
-  

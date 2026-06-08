@@ -15,6 +15,7 @@ import OobPanel from "./OobPanel";
 import AutoExploitPanel from "./AutoExploitPanel";
 import ChainReplayPanel from "./ChainReplayPanel";
 import CvePanel from "./CvePanel";
+import { useReconnectingWs } from "../hooks/use-reconnecting-ws";
 
 // ─── ENGINES ──────────────────────────────────────────────
 const ENGINE_OPTIONS = [
@@ -603,10 +604,110 @@ export default function MainLab() {
   const [chainSteps,   setChainSteps]   = useState<Array<{step:number;service:string;port:number;action:string;result:string;status:"success"|"failed"|"skipped";elapsed:number}>>([]);
   const [chainDone,    setChainDone]    = useState(false);
 
-  const termRef    = useRef<HTMLDivElement>(null);
-  const wsRef      = useRef<WebSocket|null>(null);
-  const scanWsRef  = useRef<WebSocket|null>(null);
-  const chainWsRef = useRef<WebSocket|null>(null);
+  const termRef   = useRef<HTMLDivElement>(null);
+  const scanT0Ref = useRef<number>(0);
+
+  const handleExecMsg = useCallback((msg: unknown) => {
+    const m = msg as {type:string;chunk?:string;message?:string;code?:number;elapsed?:number};
+    if (m.type === "data" && m.chunk) setOutput(p => p + (m.chunk ?? ""));
+    else if (m.type === "end") {
+      const el = m.elapsed ?? 0;
+      setScore(p => p + 25 + (el > 3000 ? 55 : 0));
+      setStats(p => ({ ...p, total: p.total + 1, [mode]: ((p as Record<string,number>)[mode] ?? 0) + 1 }));
+      setOutput(p => p + `\n[exit:${m.code ?? -1} | ${el}ms]\n\n`);
+      setRunning(false);
+      qc.invalidateQueries({ queryKey: getGetLogsQueryKey() });
+    } else if (m.type === "error") {
+      setOutput(p => p + `[ERROR] ${m.message ?? "unknown"}\n\n`);
+      setRunning(false);
+    }
+  }, [qc, mode]);
+
+  const execWs = useReconnectingWs({
+    onMessage: handleExecMsg,
+    onClose:   (wasClean) => {
+      setRunning(false);
+      if (!wasClean) setOutput(p => p + "[WS] connection error\n\n");
+    },
+  });
+
+  const handleProbeMsg = useCallback((msg: unknown) => {
+    const m = msg as { type: string; summary?: string; message?: string };
+    if (m.type === "result" && m.summary) setProbeResult(m.summary);
+    else if (m.type === "error") setProbeResult(`[ERROR] ${m.message ?? "probe failed"}`);
+    else if (m.type === "end") setProbing(false);
+  }, []);
+
+  const probeWs = useReconnectingWs({
+    onMessage: handleProbeMsg,
+    onClose:   () => setProbing(false),
+  });
+
+  const handleScanMsg = useCallback((msg: unknown) => {
+    const m = msg as {
+      type: string;
+      port?: number; open?: boolean; service?: string; banner?: string;
+      scanned?: number; total?: number; openCount?: number;
+      elapsed?: number; message?: string;
+    };
+    if (m.type === "portResult") {
+      const result: ScanResult = {
+        port: m.port ?? 0, open: m.open ?? false,
+        service: m.service ?? "unknown", banner: m.banner ?? "",
+      };
+      setScanResults(prev => {
+        const others = prev.filter(r => r.port !== result.port);
+        return result.open ? [result, ...others] : [...others, result];
+      });
+      setScanScanned(m.scanned ?? 0);
+      setScanOpenCount(m.openCount ?? 0);
+    } else if (m.type === "end") {
+      setScanMs(m.elapsed ?? Date.now() - scanT0Ref.current);
+      setScanDone(true);
+      setScanning(false);
+    } else if (m.type === "error") {
+      setScanResults([{ port: 0, open: false, service: "error", banner: m.message ?? "scan error" }]);
+      setScanning(false);
+    }
+  }, []);
+
+  const scanWs = useReconnectingWs({
+    onMessage: handleScanMsg,
+    onClose:   () => setScanning(false),
+  });
+
+  type ChainStep = { step: number; service: string; port: number; action: string; result: string; status: "success"|"failed"|"skipped"; elapsed: number };
+
+  const handleChainMsg = useCallback((msg: unknown) => {
+    const m = msg as {
+      type: string;
+      step?: ChainStep;
+      port?: number; service?: string;
+      message?: string;
+    };
+    if (m.type === "portOpen") {
+      setChainSteps(prev => [...prev, {
+        step: prev.length + 1, service: m.service ?? "unknown", port: m.port ?? 0,
+        action: `Port ${m.port} open — exploiting...`, result: "●", status: "failed", elapsed: 0,
+      }]);
+    } else if (m.type === "step" && m.step) {
+      setChainSteps(prev => {
+        const idx = prev.findIndex(s => s.port === m.step!.port && s.result === "●");
+        if (idx >= 0) { const n = [...prev]; n[idx] = m.step!; return n; }
+        return [...prev, m.step!];
+      });
+    } else if (m.type === "end") {
+      setChainDone(true); setChainRunning(false);
+    } else if (m.type === "error") {
+      setChainSteps(prev => [...prev, { step: prev.length+1, service:"error", port:0, action:"Chain error", result: m.message ?? "unknown", status:"failed", elapsed:0 }]);
+      setChainDone(true); setChainRunning(false);
+    }
+  }, []);
+
+  const chainWs = useReconnectingWs({
+    onMessage: handleChainMsg,
+    onClose:   () => setChainRunning(false),
+  });
 
   const { data: hubStatus } = useGetHubStatus({ query:{refetchInterval:15000,queryKey:getGetHubStatusQueryKey()} });
   const { data: engines   } = useGetEngines(  { query:{refetchInterval:30000,queryKey:getGetEnginesQueryKey()} });
@@ -645,24 +746,14 @@ export default function MainLab() {
     setProbing(true);
     setProbeResult(null);
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${proto}//${window.location.host}/api/ws/probe`);
-    ws.onopen = () => ws.send(JSON.stringify({ url: injectionUrl.trim() }));
-    ws.onmessage = (ev) => {
-      try {
-        const msg = JSON.parse(ev.data as string) as { type: string; summary?: string; message?: string };
-        if (msg.type === "result" && msg.summary) setProbeResult(msg.summary);
-        else if (msg.type === "error")             setProbeResult(`[ERROR] ${msg.message ?? "probe failed"}`);
-        else if (msg.type === "end")               setProbing(false);
-      } catch { /* */ }
-    };
-    ws.onerror  = () => { setProbeResult("[ERROR] WebSocket error"); setProbing(false); };
-    ws.onclose  = () => setProbing(false);
-  }, [injectionUrl, probing]);
+    probeWs.connect(
+      `${proto}//${window.location.host}/api/ws/probe`,
+      { url: injectionUrl.trim() },
+    );
+  }, [injectionUrl, probing, probeWs]);
 
   const handleInject = useCallback(() => {
     if (!cmd.trim() || running) return;
-    wsRef.current?.close();
-    wsRef.current = null;
     if (cmd.trim()) {
       setHistory(h => [cmd, ...h.filter(x=>x!==cmd)].slice(0,100));
       setHistIdx(-1);
@@ -672,35 +763,16 @@ export default function MainLab() {
     setChain(cmd.split(/[;&|`$(){}]/).map(s=>s.trim()).filter(s=>s.length>1&&s.length<60));
 
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${proto}//${window.location.host}/api/ws/exec`);
-    wsRef.current = ws;
-    ws.onopen    = () => ws.send(JSON.stringify({
+    execWs.connect(`${proto}//${window.location.host}/api/ws/exec`, {
       cmd, engine, mode, target,
-      injectionUrl: injectionUrl.trim() || undefined,
-      injectParam:  injectParam.trim()  || undefined,
-      httpMethod:   httpMethod          || undefined,
+      injectionUrl:  injectionUrl.trim()  || undefined,
+      injectParam:   injectParam.trim()   || undefined,
+      httpMethod:    httpMethod           || undefined,
       customHeaders: customHeaders.trim() || undefined,
-      attackerIp:   attIp,
-      attackerPort: attPort,
-    }));
-    ws.onmessage = (ev) => {
-      const msg = JSON.parse(ev.data as string) as {type:string;chunk?:string;message?:string;code?:number;elapsed?:number};
-      if (msg.type==="data" && msg.chunk) setOutput(p=>p+msg.chunk);
-      else if (msg.type==="end") {
-        const el = msg.elapsed ?? 0;
-        setScore(p=>p+25+(el>3000?55:0));
-        setStats(p=>({...p, total:p.total+1, [mode]:((p as Record<string,number>)[mode]??0)+1}));
-        setOutput(p=>p+`\n[exit:${msg.code??-1} | ${el}ms]\n\n`);
-        setRunning(false);
-        qc.invalidateQueries({queryKey:getGetLogsQueryKey()});
-      } else if (msg.type==="error") {
-        setOutput(p=>p+`[ERROR] ${msg.message}\n\n`);
-        setRunning(false);
-      }
-    };
-    ws.onerror = () => { setOutput(p=>p+"[WS] connection error\n\n"); setRunning(false); };
-    ws.onclose = () => { setRunning(false); wsRef.current=null; };
-  }, [cmd,engine,mode,target,injectionUrl,injectParam,httpMethod,customHeaders,attIp,attPort,running,qc]);
+      attackerIp:    attIp,
+      attackerPort:  attPort,
+    });
+  }, [cmd,engine,mode,target,injectionUrl,injectParam,httpMethod,customHeaders,attIp,attPort,running,execWs]);
 
   const histNav = (dir: "up"|"down") => {
     if (!history.length) return;
@@ -778,130 +850,41 @@ export default function MainLab() {
       ports = SCAN_PRESETS[scanPreset] ?? SCAN_PRESETS["TOP 40"]!;
     }
 
-    // Close any existing scan WS
-    if (scanWsRef.current) { scanWsRef.current.close(); scanWsRef.current = null; }
-
     setScanResults([]); setScanDone(false);
     setScanScanned(0);  setScanTotal(ports.length);
     setScanOpenCount(0); setScanMs(0);
     setScanning(true);
+    scanT0Ref.current = Date.now();
 
-    const t0 = Date.now();
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${proto}//${window.location.host}/api/ws/scan`);
-    scanWsRef.current = ws;
-
-    ws.onopen = () => {
-      ws.send(JSON.stringify({ target: tgt, ports, timeout: scanTimeout, concurrency: 30 }));
-    };
-
-    ws.onmessage = (ev) => {
-      const msg = JSON.parse(ev.data as string) as {
-        type: string;
-        port?: number; open?: boolean; service?: string; banner?: string;
-        scanned?: number; total?: number; openCount?: number;
-        elapsed?: number; message?: string;
-      };
-
-      if (msg.type === "portResult") {
-        const result: ScanResult = {
-          port:    msg.port    ?? 0,
-          open:    msg.open    ?? false,
-          service: msg.service ?? "unknown",
-          banner:  msg.banner  ?? "",
-        };
-        // Open ports appear immediately at the top; closed accumulate below
-        setScanResults(prev => {
-          const others = prev.filter(r => r.port !== result.port);
-          return result.open ? [result, ...others] : [...others, result];
-        });
-        setScanScanned(msg.scanned ?? 0);
-        setScanOpenCount(msg.openCount ?? 0);
-
-      } else if (msg.type === "end") {
-        setScanMs(msg.elapsed ?? Date.now() - t0);
-        setScanDone(true);
-        setScanning(false);
-        scanWsRef.current = null;
-
-      } else if (msg.type === "error") {
-        setScanResults([{ port: 0, open: false, service: "error", banner: msg.message ?? "scan error" }]);
-        setScanning(false);
-        scanWsRef.current = null;
-      }
-    };
-
-    ws.onerror = () => {
-      setScanResults([{ port: 0, open: false, service: "error", banner: "WebSocket connection failed — check server" }]);
-      setScanning(false);
-      scanWsRef.current = null;
-    };
-
-    ws.onclose = () => {
-      setScanning(false);
-      scanWsRef.current = null;
-    };
+    scanWs.connect(
+      `${proto}//${window.location.host}/api/ws/scan`,
+      { target: tgt, ports, timeout: scanTimeout, concurrency: 30 },
+    );
   };
 
   const handleAbortScan = () => {
-    if (scanWsRef.current) { scanWsRef.current.close(); scanWsRef.current = null; }
+    scanWs.disconnect();
     setScanning(false);
     setScanDone(true);
   };
 
-  type ChainStep = { step: number; service: string; port: number; action: string; result: string; status: "success"|"failed"|"skipped"; elapsed: number };
-
   const handleExploitChain = () => {
     const tgt = (chainTarget || target).trim();
     if (!tgt || chainRunning) return;
-    if (chainWsRef.current) { chainWsRef.current.close(); chainWsRef.current = null; }
     setChainRunning(true);
     setChainDone(false);
     setChainSteps([]);
 
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${proto}//${window.location.host}/api/ws/chain`);
-    chainWsRef.current = ws;
-
-    ws.onopen = () => ws.send(JSON.stringify({ target: tgt }));
-
-    ws.onmessage = (ev) => {
-      const msg = JSON.parse(ev.data as string) as {
-        type: string;
-        step?: ChainStep;
-        port?: number; service?: string;
-        target?: string; total?: number;
-        message?: string;
-      };
-      if (msg.type === "portOpen") {
-        setChainSteps(prev => [...prev, {
-          step: prev.length + 1, service: msg.service ?? "unknown", port: msg.port ?? 0,
-          action: `Port ${msg.port} open — exploiting...`, result: "●", status: "failed", elapsed: 0,
-        }]);
-      } else if (msg.type === "step" && msg.step) {
-        setChainSteps(prev => {
-          const idx = prev.findIndex(s => s.port === msg.step!.port && s.result === "●");
-          if (idx >= 0) { const n = [...prev]; n[idx] = msg.step!; return n; }
-          return [...prev, msg.step!];
-        });
-      } else if (msg.type === "end") {
-        setChainDone(true); setChainRunning(false); chainWsRef.current = null;
-      } else if (msg.type === "error") {
-        setChainSteps(prev => [...prev, { step: prev.length+1, service:"error", port:0, action:"Chain error", result: msg.message ?? "unknown", status:"failed", elapsed:0 }]);
-        setChainDone(true); setChainRunning(false); chainWsRef.current = null;
-      }
-    };
-
-    ws.onerror = () => {
-      setChainSteps(prev => [...prev, { step: prev.length+1, service:"error", port:0, action:"WebSocket error", result:"Connection failed — check server", status:"failed", elapsed:0 }]);
-      setChainRunning(false); chainWsRef.current = null;
-    };
-
-    ws.onclose = () => { setChainRunning(false); if (chainWsRef.current === ws) chainWsRef.current = null; };
+    chainWs.connect(
+      `${proto}//${window.location.host}/api/ws/chain`,
+      { target: tgt },
+    );
   };
 
   const handleAbortChain = () => {
-    if (chainWsRef.current) { chainWsRef.current.close(); chainWsRef.current = null; }
+    chainWs.disconnect();
     setChainRunning(false); setChainDone(true);
   };
 
@@ -1527,7 +1510,7 @@ export default function MainLab() {
         </div>
         <div className="flex items-center gap-2 text-xs">
           {running&&(
-            <button onClick={()=>{wsRef.current?.close();setRunning(false);setOutput(p=>p+"[KILLED]\n\n");}}
+            <button onClick={()=>{execWs.disconnect();setRunning(false);setOutput(p=>p+"[KILLED]\n\n");}}
               className="px-3 py-1 border border-red-700 text-red-500 hover:bg-red-950/40 uppercase">KILL</button>
           )}
           <span className="border border-red-900 px-3 py-1 text-red-400 font-bold">{String(score).padStart(6,"0")}</span>

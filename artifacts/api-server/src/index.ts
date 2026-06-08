@@ -33,9 +33,11 @@ function attachHeartbeat(ws: import("ws").WebSocket): void {
     try { ws.ping(); } catch { /* ignore if already closing */ }
   }, PING_INTERVAL_MS);
 
-  ws.on("pong", () => { alive = true; });
+  ws.on("pong",  () => { alive = true; });
   ws.on("close", () => clearInterval(interval));
+  ws.on("error", (err) => { logger.warn({ err }, "ws client error"); });
 }
+
 
 server.on("upgrade", (req, socket, head) => {
   const pathname = (() => {
@@ -77,3 +79,4 @@ server.listen(port, () => {
   }
 });
 server.on("error", (err) => { logger.error({ err }, "Server error"); process.exit(1); });
+wss.on("error",    (err) => { logger.error({ err }, "WSS error"); });

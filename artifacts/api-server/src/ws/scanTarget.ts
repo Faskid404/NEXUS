@@ -213,11 +213,14 @@ export function handleScanTarget(ws: WebSocket): void {
             open: openCount,
             elapsed: Date.now() - startTime,
           });
+          ws.close();
         }
-        ws.close();
       })
-      .catch(() => {
-        ws.close();
+      .catch((err: unknown) => {
+        if (!aborted) {
+          send({ type: "error", message: (err as Error).message ?? String(err) });
+          ws.close();
+        }
       });
   });
 }

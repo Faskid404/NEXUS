@@ -24,9 +24,12 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
     return{text:raw,decoded:false};
   }
   const PAYLOAD_LABELS:Record<string,string>={
-    wget_pixel:"wget Pixel",analytics_beacon:"Analytics Beacon",python3_urllib:"Python3 urllib",
-    curl_font_fetch:"curl Font Fetch",curl_post_xhr:"curl POST XHR",bash_pipe_raw:"Bash Pipe",
-    curl_exfil:"Full Exfil",perl_http:"Perl HTTP",python3_socket:"Python3 Socket",
+    curl_exfil:"curl Full Exfil",bash_pipe_raw:"Bash Pipe Raw",
+    wget_pixel:"wget Pixel",analytics_beacon:"Analytics Beacon",
+    python3_urllib:"Python3 urllib",curl_font_fetch:"curl Font Fetch",
+    curl_post_xhr:"curl POST XHR",perl_http:"Perl HTTP",
+    python3_socket:"Python3 Socket",bash_devtcp:"Bash /dev/tcp",
+    java_url:"Java URL",powershell_iwr:"PowerShell IWR",
   };
 
   export default function OobPanel(){
@@ -36,7 +39,7 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
     const [expanded,setExpanded]=useState<string|null>(null);
     const [copied,setCopied]=useState<string|null>(null);
     const [filter,setFilter]=useState("");
-    const [selPayload,setSelPayload]=useState("wget_pixel");
+    const [selPayload,setSelPayload]=useState("curl_get");
     const [loading,setLoading]=useState(false);
     const esRef=useRef<EventSource|null>(null);
 

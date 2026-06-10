@@ -5,7 +5,7 @@ services:
     plan: free
     buildCommand: >-
       npm install -g pnpm &&
-      pnpm install --no-frozen-lockfile &&
+      pnpm install --frozen-lockfile &&
       pnpm run typecheck:libs &&
       BASE_PATH=/ pnpm --filter @workspace/nexus run build &&
       pnpm --filter @workspace/api-server run build
@@ -13,6 +13,8 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      - key: AUTH_PASS
+        sync: false
       - key: SESSION_SECRET
         sync: false
       - key: GROQ_API_KEY

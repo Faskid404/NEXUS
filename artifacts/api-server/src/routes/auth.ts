@@ -4,7 +4,17 @@ import { createHmac, timingSafeEqual, randomBytes } from "crypto";
 const router = Router();
 
 /* ── Authentication credential ──────────────────────────────────────────── */
-const AUTH_PASS = process.env["AUTH_PASS"] ?? "omowoli12345@*";
+const AUTH_PASS = (() => {
+  const fromEnv = process.env["AUTH_PASS"];
+  if (fromEnv) return fromEnv;
+  const generated = randomBytes(16).toString("hex");
+  process.stderr.write(
+    `[auth] WARNING: AUTH_PASS env var is not set.\n` +
+    `[auth] Using a randomly generated one-time password for this session: ${generated}\n` +
+    `[auth] Set AUTH_PASS in your environment to use a fixed password.\n`,
+  );
+  return generated;
+})();
 
 /* Session secret — random per process start; tokens invalidate on restart. */
 const SESSION_SECRET  = process.env["SESSION_SECRET"] ?? randomBytes(32).toString("hex");

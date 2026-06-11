@@ -611,6 +611,7 @@ export default function MainLab() {
 
   const termRef   = useRef<HTMLDivElement>(null);
   const scanT0Ref = useRef<number>(0);
+  const noTargetErrRef = useRef(false);
 
   const handleExecMsg = useCallback((msg: unknown) => {
     const m = msg as {type:string;chunk?:string;message?:string;code?:number;elapsed?:number};
@@ -649,6 +650,20 @@ export default function MainLab() {
       (m.message ?? "").split("\n").forEach(l => push("info", l));
     } else if (m.type === "result" && m.summary) {
       (m.summary).split("\n").forEach(l => push("result", l));
+      const envData = m.env as { injectHints?: string[]; language?: string } | undefined;
+      if (envData?.injectHints?.length) {
+        for (const hint of envData.injectHints) {
+          const pm1 = hint.match(/[?&]([a-zA-Z_][a-zA-Z0-9_]{0,30})=/);
+          const pm2 = hint.match(/param(?:eter)?[:\s]+([a-zA-Z_][a-zA-Z0-9_]{0,30})/i);
+          const pm3 = hint.match(/inject.*?[?&]([a-zA-Z_][a-zA-Z0-9_]{0,30})=/i);
+          const detected = pm1?.[1] ?? pm2?.[1] ?? pm3?.[1];
+          if (detected && detected.length > 0) {
+            setInjectParam(detected);
+            push("info", `[AUTO] Injection param auto-detected → ${detected}`);
+            break;
+          }
+        }
+      }
     } else if (m.type === "web_discovery" || m.type === "service_fingerprints") {
       /* structured data already rendered via progress lines — skip */
     } else if (m.type === "unreachable") {
@@ -778,6 +793,8 @@ export default function MainLab() {
     return () => window.removeEventListener("keydown", h);
   }, []);
 
+  useEffect(() => { noTargetErrRef.current = false; }, [injectionUrl]);
+
   const handleProbe = useCallback(() => {
     if (!injectionUrl.trim() || probing) return;
     setProbing(true);
@@ -801,14 +818,17 @@ export default function MainLab() {
     }
 
     if (!injectionUrl.trim()) {
-      setOutput(prev =>
-        prev +
-        `root@${target||"nexus"}:~# ${cmd}\n` +
-        "[ERROR] No execution target specified.\n\n" +
-        "NEXUSFORGE executes on remote targets only — it never runs commands on the server itself.\n\n" +
-        "• HTTP injection : set Target URL in the left panel\n" +
-        "• SSH execution  : use the FUZZER tab with SSH mode\n\n"
-      );
+      if (!noTargetErrRef.current) {
+        noTargetErrRef.current = true;
+        setOutput(prev =>
+          prev +
+          `root@${target||"nexus"}:~# ${cmd}\n` +
+          "[ERROR] No execution target specified.\n\n" +
+          "NEXUSFORGE executes on remote targets only — it never runs commands on the server itself.\n\n" +
+          "• HTTP injection : set Target URL in the left panel\n" +
+          "• SSH execution  : use the FUZZER tab with SSH mode\n\n"
+        );
+      }
       return;
     }
 

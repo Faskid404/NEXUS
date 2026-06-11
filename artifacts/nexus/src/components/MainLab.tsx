@@ -551,8 +551,8 @@ export default function MainLab() {
   const [injectParam,    setInjectParam]    = useState("cmd");
   const [httpMethod,     setHttpMethod]     = useState("GET");
   const [customHeaders,  setCustomHeaders]  = useState("");
-  const [probeResult,  setProbeResult]  = useState<string|null>(null);
-  const [probing,      setProbing]      = useState(false);
+  const [probeLines,    setProbeLines]    = useState<{kind:"info"|"result"|"warn"|"dead"; text:string}[]>([]);
+  const [probing,       setProbing]       = useState(false);
   const [running,  setRunning]  = useState(false);
   const [score,    setScore]    = useState(0);
   const [chain,    setChain]    = useState<string[]>([]);
@@ -633,10 +633,23 @@ export default function MainLab() {
   });
 
   const handleProbeMsg = useCallback((msg: unknown) => {
-    const m = msg as { type: string; summary?: string; message?: string };
-    if (m.type === "result" && m.summary) setProbeResult(m.summary);
-    else if (m.type === "error") setProbeResult(`[ERROR] ${m.message ?? "probe failed"}`);
-    else if (m.type === "end") setProbing(false);
+    const m = msg as { type: string; summary?: string; message?: string; env?: unknown; services?: unknown };
+    const push = (kind: "info"|"result"|"warn"|"dead", text: string) =>
+      setProbeLines(p => [...p, { kind, text }]);
+    if (m.type === "progress") {
+      (m.message ?? "").split("\n").forEach(l => push("info", l));
+    } else if (m.type === "result" && m.summary) {
+      (m.summary).split("\n").forEach(l => push("result", l));
+    } else if (m.type === "web_discovery" || m.type === "service_fingerprints") {
+      /* structured data already rendered via progress lines — skip */
+    } else if (m.type === "unreachable") {
+      push("dead", m.message ?? "Target unreachable");
+    } else if (m.type === "error") {
+      push("warn", `[ERROR] ${m.message ?? "probe failed"}`);
+      setProbing(false);
+    } else if (m.type === "end") {
+      setProbing(false);
+    }
   }, []);
 
   const probeWs = useReconnectingWs({
@@ -746,7 +759,7 @@ export default function MainLab() {
   const handleProbe = useCallback(() => {
     if (!injectionUrl.trim() || probing) return;
     setProbing(true);
-    setProbeResult(null);
+    setProbeLines([]);
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
     probeWs.connect(
       `${proto}//${window.location.host}/api/ws/probe`,
@@ -1637,15 +1650,44 @@ export default function MainLab() {
                   disabled={probing}
                   className="w-full py-1 text-[9px] uppercase border border-purple-800 text-purple-400 hover:bg-purple-950/30 disabled:opacity-40 transition-colors font-bold tracking-widest"
                 >
-                  {probing ? "PROBING..." : "PROBE ENVIRONMENT"}
+                  {probing
+                    ? <span className="flex items-center justify-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-ping inline-block"/>PROBING...</span>
+                    : "PROBE ENVIRONMENT"}
                 </button>
               )}
-              {probeResult && (
-                <div className="bg-zinc-950 border border-purple-900/40 p-1.5 mt-1">
-                  <div className="text-[9px] text-purple-500 uppercase mb-1">Probe Result</div>
-                  <pre className="text-[9px] text-purple-300 font-mono whitespace-pre-wrap break-all leading-relaxed max-h-48 overflow-y-auto">
-                    {probeResult}
-                  </pre>
+              {(probeLines.length > 0 || probing) && (
+                <div className="bg-black border border-purple-900/50 mt-1">
+                  <div className="flex items-center justify-between px-2 py-1 border-b border-purple-900/40">
+                    <span className="text-[9px] text-purple-500 uppercase tracking-wider">Probe Output</span>
+                    {!probing && <button onClick={()=>setProbeLines([])} className="text-[9px] text-zinc-700 hover:text-red-400 uppercase">CLR</button>}
+                  </div>
+                  <div className="max-h-64 overflow-y-auto p-1.5 space-y-px">
+                    {probing && probeLines.length === 0 && (
+                      <div className="text-[9px] text-purple-600 font-mono animate-pulse">Initializing probe...</div>
+                    )}
+                    {probeLines.map((line, i) => {
+                      const cls =
+                        line.kind === "dead"   ? "text-red-400 font-bold" :
+                        line.kind === "warn"   ? "text-orange-400" :
+                        line.kind === "result" ? "text-purple-300" :
+                        line.text.startsWith("  [CRITICAL]") ? "text-red-400 font-bold" :
+                        line.text.startsWith("  [HIGH]")     ? "text-orange-400" :
+                        line.text.startsWith("  [MEDIUM]")   ? "text-yellow-400" :
+                        line.text.startsWith("  [+]")        ? "text-green-400" :
+                        line.text.startsWith("  [!")         ? "text-orange-300" :
+                        line.text.startsWith("  [")          ? "text-cyan-400" :
+                        line.text.startsWith("──")           ? "text-purple-500" :
+                        line.text.startsWith("[DNS]")        ? "text-lime-400" :
+                        line.text.startsWith("[HTTP]")       ? "text-cyan-400" :
+                        line.text.startsWith("[TCP]")        ? "text-blue-400" :
+                        line.text.startsWith("[WEB]")        ? "text-teal-400" :
+                        line.text.startsWith("[1/") || line.text.startsWith("[2/") || line.text.startsWith("[3/") || line.text.startsWith("[4/") ? "text-purple-400 font-bold" :
+                        "text-zinc-400";
+                      return (
+                        <div key={i} className={`text-[9px] font-mono whitespace-pre-wrap break-all leading-relaxed ${cls}`}>{line.text || " "}</div>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
               {injectionUrl.trim() && (

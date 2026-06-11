@@ -2,13 +2,47 @@ import type { WebSocket } from "ws";
 import { probeTargetEnvironment, probeNetworkServices, probeWebDiscovery } from "../lib/targetProbe.js";
 import { isSelfTarget } from "../lib/bypassEngine.js";
 import { logger } from "../lib/logger.js";
+import * as dns from "dns";
+import * as net from "net";
 
-const DEFAULT_PROBE_PORTS = [21, 22, 25, 80, 443, 445, 1433, 2375, 3306, 3389, 5432, 5900, 5984, 5985, 6379, 8080, 8443, 9200, 11211, 27017];
+const DEFAULT_PROBE_PORTS = [
+  21, 22, 23, 25, 53, 80, 110, 135, 139, 143, 389, 443, 445,
+  465, 587, 636, 1433, 1521, 2049, 2375, 2376, 2379, 3306,
+  3389, 4444, 5432, 5900, 5984, 5985, 5986, 6379, 6443, 7474,
+  8080, 8443, 8888, 9200, 9300, 10250, 11211, 15672, 27017,
+];
 
 function send(ws: WebSocket, obj: unknown): void {
   if (ws.readyState === 1) {
     try { ws.send(JSON.stringify(obj)); } catch { /* connection closed mid-send */ }
   }
+}
+
+function dnsResolve(hostname: string): Promise<string[]> {
+  return new Promise((resolve) => {
+    dns.resolve(hostname, (err, addrs) => {
+      if (err || !addrs || addrs.length === 0) {
+        dns.resolve6(hostname, (err6, addrs6) => {
+          resolve(err6 ? [] : addrs6 ?? []);
+        });
+      } else {
+        resolve(addrs);
+      }
+    });
+  });
+}
+
+function tcpProbe(host: string, port: number, timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const sock = new net.Socket();
+    let done = false;
+    const finish = (v: boolean) => { if (!done) { done = true; try { sock.destroy(); } catch { /**/ } resolve(v); } };
+    sock.setTimeout(timeoutMs);
+    sock.on("connect", () => finish(true));
+    sock.on("error",   () => finish(false));
+    sock.on("timeout", () => finish(false));
+    sock.connect(port, host);
+  });
 }
 
 export function handleProbeTarget(ws: WebSocket): void {
@@ -22,9 +56,9 @@ export function handleProbeTarget(ws: WebSocket): void {
       return;
     }
 
-    const url        = (req.url ?? "").trim();
-    const scanPorts  = req.scanPorts !== false;
-    const portList   = Array.isArray(req.ports) && req.ports.length > 0
+    const url       = (req.url ?? "").trim();
+    const scanPorts = req.scanPorts !== false;
+    const portList  = Array.isArray(req.ports) && req.ports.length > 0
       ? req.ports.map(Number).filter((p) => p > 0 && p < 65536)
       : DEFAULT_PROBE_PORTS;
 
@@ -47,106 +81,134 @@ export function handleProbeTarget(ws: WebSocket): void {
       return;
     }
 
+    const hostname = parsed.hostname;
     logger.info({ url, scanPorts }, "ws/probe start");
 
     let aborted = false;
     ws.on("close", () => { aborted = true; });
 
-    send(ws, { type: "progress", message: `Probing HTTP environment: ${url}` });
+    void (async () => {
+      // ── Phase 1: DNS resolution ──────────────────────────────────────
+      send(ws, { type: "progress", message: `[1/4] Resolving hostname: ${hostname}` });
+      const addrs = await dnsResolve(hostname);
+      if (aborted) return;
 
-    probeTargetEnvironment(url, 10000)
-      .then(async (env) => {
+      if (addrs.length === 0) {
+        send(ws, { type: "progress", message: `[DNS] FAILED — hostname does not resolve: ${hostname}` });
+        send(ws, { type: "unreachable", message: `Target unreachable: ${hostname} — DNS resolution failed. Host does not exist or is not public.` });
+        send(ws, { type: "end" });
+        ws.close();
+        return;
+      }
+
+      send(ws, { type: "progress", message: `[DNS] Resolved to: ${addrs.slice(0, 4).join(", ")}` });
+
+      // ── Phase 2: Quick TCP connectivity check on port 80/443 ────────
+      send(ws, { type: "progress", message: `[2/4] Testing TCP connectivity on port 80 and 443...` });
+      const tcpPort    = parsed.port ? Number(parsed.port) : (parsed.protocol === "https:" ? 443 : 80);
+      const tcpAlive   = await tcpProbe(hostname, tcpPort, 4000);
+      if (aborted) return;
+
+      // ── Phase 3: HTTP fingerprinting ─────────────────────────────────
+      send(ws, { type: "progress", message: `[3/4] HTTP fingerprinting: ${url}` });
+
+      let httpReachable = false;
+      try {
+        const env = await probeTargetEnvironment(url, 10000);
         if (aborted) return;
-        if (!env.reachable) {
-          send(ws, { type: "error", message: `Target unreachable: ${url}` });
-          ws.close();
-          return;
-        }
 
-        send(ws, {
-          type:    "result",
-          env,
-          summary: [
+        if (env.reachable) {
+          httpReachable = true;
+          const summaryLines = [
             `Status    : HTTP ${env.statusCode}  (${env.responseTime}ms)`,
             `OS        : ${env.os.toUpperCase()} [${env.osConfidence} confidence]`,
             `Server    : ${env.server      || "unknown"}`,
             `Language  : ${env.language    || "unknown"}`,
             `Framework : ${env.framework   || "unknown"}`,
             `CMS       : ${env.cms         || "none detected"}`,
-            `WAF       : ${env.waf         ? `${env.waf} [${env.wafConfidence} confidence]` : "none detected"}`,
+            `WAF       : ${env.waf ? `${env.waf} [${env.wafConfidence} confidence]` : "none detected"}`,
             `Body      : ${env.bodyLength} bytes`,
             env.redirectUrl ? `Redirect  : ${env.redirectUrl}` : "",
             "",
-            "── Injection Hints ──",
-            ...env.injectHints.map(h => `  ${h}`),
-            "",
             "── Notable Headers ──",
             ...Object.entries(env.headers)
-              .filter(([k]) => ["server","x-powered-by","x-aspnet-version","x-runtime","via","x-frame-options","content-security-policy","strict-transport-security","x-generator"].includes(k))
+              .filter(([k]) => ["server","x-powered-by","x-aspnet-version","x-runtime","via",
+                "x-frame-options","content-security-policy","strict-transport-security","x-generator",
+                "x-powered-by","x-drupal-cache","x-nextjs-page","x-amzn-requestid","cf-ray"].includes(k))
               .map(([k, v]) => `  ${k}: ${v}`),
-            "",
-            "── Cookies ──",
+            env.cookies.length > 0 ? "" : null,
+            env.cookies.length > 0 ? "── Cookies ──" : null,
             ...env.cookies.slice(0, 6).map(c => `  ${c.split(";")[0]}`),
-          ].filter(Boolean).join("\n"),
-        });
+            "",
+            "── Injection Hints ──",
+            ...env.injectHints.map(h => `  ${h}`),
+          ].filter((l): l is string => l !== null && l !== undefined && (l !== "" || true)).join("\n");
 
-        if (aborted) return;
-        send(ws, { type: "progress", message: `Running web path discovery on ${url}` });
+          send(ws, { type: "result", env, summary: summaryLines });
 
-        try {
-          const webDisc = await probeWebDiscovery(url, 8000);
+          // Web discovery
           if (!aborted) {
-            send(ws, { type: "web_discovery", discovery: webDisc });
-
-            const discLines: string[] = ["── Web Discovery ──"];
-            if (webDisc.gitExposed)   discLines.push("  [!] /.git/HEAD exposed — full source code recoverable via git-dumper");
-            if (webDisc.phpinfo)      discLines.push("  [!] phpinfo() exposed — reveals config, paths, loaded modules");
-            if (webDisc.dirListing)   discLines.push("  [!] Directory listing enabled");
-            for (const p of webDisc.adminPanels) discLines.push(`  [+] Admin panel ${p.path} (HTTP ${p.status})`);
-            for (const f of webDisc.sensitiveFiles) discLines.push(`  [!] Sensitive file ${f.path} is public (HTTP ${f.status})`);
-            if (webDisc.robotsTxt) {
-              const disallowed = webDisc.robotsTxt.split("\n").filter(l => /^Disallow:/i.test(l)).slice(0, 8).map(l => l.trim());
-              if (disallowed.length) discLines.push("  Robots.txt disallowed paths:", ...disallowed.map(l => `    ${l}`));
-            }
-            if (discLines.length > 1) {
-              send(ws, { type: "progress", message: discLines.join("\n") });
-            }
+            send(ws, { type: "progress", message: `[WEB] Running path discovery on ${url}` });
+            try {
+              const webDisc = await probeWebDiscovery(url, 10000);
+              if (!aborted) {
+                send(ws, { type: "web_discovery", discovery: webDisc });
+                const discLines: string[] = ["── Web Discovery ──"];
+                if (webDisc.gitExposed)  discLines.push("  [CRITICAL] /.git/HEAD exposed — source code recoverable via git-dumper");
+                if (webDisc.phpinfo)     discLines.push("  [HIGH] phpinfo() page exposed — reveals server internals");
+                if (webDisc.dirListing)  discLines.push("  [MEDIUM] Directory listing enabled");
+                for (const p of webDisc.adminPanels)    discLines.push(`  [+] Admin panel: ${p.path} (HTTP ${p.status})`);
+                for (const f of webDisc.sensitiveFiles)  discLines.push(`  [!] Sensitive file accessible: ${f.path} (HTTP ${f.status})`);
+                if (webDisc.robotsTxt) {
+                  const disallowed = webDisc.robotsTxt.split("\n")
+                    .filter(l => /^Disallow:/i.test(l)).slice(0, 10).map(l => l.trim());
+                  if (disallowed.length) discLines.push("  robots.txt disallowed:", ...disallowed.map(l => `    ${l}`));
+                }
+                if (discLines.length > 1) send(ws, { type: "progress", message: discLines.join("\n") });
+              }
+            } catch { /* web discovery failure is non-fatal */ }
           }
-        } catch {
-          /* web discovery failure is non-fatal */
+        } else {
+          send(ws, { type: "progress", message: `[HTTP] No HTTP response from ${url} — continuing with TCP scan` });
         }
+      } catch (e) {
+        send(ws, { type: "progress", message: `[HTTP] Error: ${(e as Error).message} — continuing with TCP scan` });
+      }
 
-        if (aborted) return;
-        if (scanPorts) {
-          send(ws, { type: "progress", message: `Fingerprinting ${portList.length} TCP services on ${parsed.hostname}` });
-          try {
-            const services = await probeNetworkServices(parsed.hostname, portList, 2500);
-            if (!aborted) {
-              send(ws, { type: "service_fingerprints", host: parsed.hostname, services });
+      if (aborted) return;
 
+      // ── Phase 4: TCP port scan (always runs as long as DNS resolved) ─
+      if (scanPorts) {
+        send(ws, { type: "progress", message: `[4/4] TCP service scan on ${hostname} — ${portList.length} ports` });
+        try {
+          const services = await probeNetworkServices(hostname, portList, 3000);
+          if (!aborted) {
+            send(ws, { type: "service_fingerprints", host: hostname, services });
+            if (services.length === 0) {
+              send(ws, { type: "progress", message: `── Service Fingerprints ──\n  No open ports found in scanned list` });
+            } else {
               const svcLines = ["── Service Fingerprints ──"];
               for (const s of services) {
-                const line = `  ${String(s.port).padEnd(6)} ${s.service.padEnd(16)} ${s.version || ""}`.trimEnd();
-                svcLines.push(line);
-                for (const h of s.vulnHints) svcLines.push(`           [!] ${h}`);
+                svcLines.push(`  ${String(s.port).padEnd(6)} ${s.service.padEnd(16)} ${s.version || ""}`.trimEnd());
+                for (const h of s.vulnHints) svcLines.push(`         [!] ${h}`);
               }
-              if (services.length) send(ws, { type: "progress", message: svcLines.join("\n") });
+              send(ws, { type: "progress", message: svcLines.join("\n") });
             }
-          } catch {
-            /* service scan failure is non-fatal */
           }
+        } catch (e) {
+          send(ws, { type: "progress", message: `[TCP] Scan error: ${(e as Error).message}` });
         }
+      }
 
-        if (!aborted) {
-          send(ws, { type: "end" });
-          ws.close();
-        }
-      })
-      .catch((err: unknown) => {
-        if (!aborted) {
-          send(ws, { type: "error", message: (err as Error).message ?? String(err) });
-          ws.close();
-        }
-      });
+      if (aborted) return;
+
+      // ── Final reachability verdict ────────────────────────────────────
+      if (!httpReachable && !tcpAlive) {
+        send(ws, { type: "unreachable", message: `Host ${hostname} resolved via DNS (${addrs[0]}) but all tested ports are closed or filtered — target may be firewalled or offline.` });
+      }
+
+      send(ws, { type: "end" });
+      ws.close();
+    })();
   });
 }

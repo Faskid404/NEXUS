@@ -760,6 +760,19 @@ export default function MainLab() {
       setHistory(h => [cmd, ...h.filter(x=>x!==cmd)].slice(0,100));
       setHistIdx(-1);
     }
+
+    if (!injectionUrl.trim()) {
+      setOutput(prev =>
+        prev +
+        `root@${target||"nexus"}:~# ${cmd}\n` +
+        "[ERROR] No execution target specified.\n\n" +
+        "NEXUSFORGE executes on remote targets only — it never runs commands on the server itself.\n\n" +
+        "• HTTP injection : set Target URL in the left panel\n" +
+        "• SSH execution  : use the FUZZER tab with SSH mode\n\n"
+      );
+      return;
+    }
+
     setOutput(prev => prev + `root@${target||"nexus"}:~# ${cmd}\n`);
     setRunning(true);
     setChain(cmd.split(/[;&|`$(){}]/).map(s=>s.trim()).filter(s=>s.length>1&&s.length<60));

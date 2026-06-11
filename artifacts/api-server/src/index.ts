@@ -3,13 +3,14 @@ import { WebSocketServer } from "ws";
 import app from "./app.js";
 import { logger } from "./lib/logger.js";
 import { setTunnelUrl } from "./lib/tunnelUrl.js";
-import { handleStreamExec }   from "./ws/streamExec.js";
-import { handleScanTarget }   from "./ws/scanTarget.js";
-import { handleExploitChain } from "./ws/exploitChain.js";
-import { handleProbeTarget }  from "./ws/probeTarget.js";
-import { handleCveExploit } from "./ws/cveExploit.js";
-import { handleAutoExploit }  from "./ws/autoExploit.js";
-import { handlePostExploit }  from "./ws/postExploit.js";
+import { handleStreamExec }      from "./ws/streamExec.js";
+import { handleScanTarget }      from "./ws/scanTarget.js";
+import { handleExploitChain }    from "./ws/exploitChain.js";
+import { handleProbeTarget }     from "./ws/probeTarget.js";
+import { handleCveExploit }      from "./ws/cveExploit.js";
+import { handleAutoExploit }     from "./ws/autoExploit.js";
+import { handlePostExploit }     from "./ws/postExploit.js";
+import { handleMutationScanner } from "./ws/mutationScanner.js";
 
 const rawPort = process.env["PORT"];
 if (!rawPort) throw new Error("PORT environment variable is required but was not provided.");
@@ -38,7 +39,6 @@ function attachHeartbeat(ws: import("ws").WebSocket): void {
   ws.on("error", (err) => { logger.warn({ err }, "ws client error"); });
 }
 
-
 server.on("upgrade", (req, socket, head) => {
   const pathname = (() => {
     try { return new URL(req.url ?? "/", "http://localhost").pathname; }
@@ -55,6 +55,7 @@ server.on("upgrade", (req, socket, head) => {
   else if (pathname === "/api/ws/autoexploit") wss.handleUpgrade(req, socket as import("stream").Duplex, head, wrap(handleAutoExploit));
   else if (pathname === "/api/ws/postexploit") wss.handleUpgrade(req, socket as import("stream").Duplex, head, wrap(handlePostExploit));
   else if (pathname === "/api/ws/cve")         wss.handleUpgrade(req, socket as import("stream").Duplex, head, wrap(handleCveExploit));
+  else if (pathname === "/api/ws/mutation")    wss.handleUpgrade(req, socket as import("stream").Duplex, head, wrap(handleMutationScanner));
   else {
     socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
     socket.destroy();

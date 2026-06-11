@@ -553,6 +553,10 @@ export default function MainLab() {
   const [customHeaders,  setCustomHeaders]  = useState("");
   const [probeLines,    setProbeLines]    = useState<{kind:"info"|"result"|"warn"|"dead"; text:string}[]>([]);
   const [probing,       setProbing]       = useState(false);
+  const [bruteTotal,    setBruteTotal]    = useState(0);
+  const [bruteTried,    setBruteTried]    = useState(0);
+  const [bruteFound,    setBruteFound]    = useState<{user:string;password:string;banner:string}[]>([]);
+  const [bruteRunning,  setBruteRunning]  = useState(false);
   const [running,  setRunning]  = useState(false);
   const [score,    setScore]    = useState(0);
   const [chain,    setChain]    = useState<string[]>([]);
@@ -633,7 +637,12 @@ export default function MainLab() {
   });
 
   const handleProbeMsg = useCallback((msg: unknown) => {
-    const m = msg as { type: string; summary?: string; message?: string; env?: unknown; services?: unknown };
+    const m = msg as {
+      type: string; summary?: string; message?: string; env?: unknown; services?: unknown;
+      total?: number; tried?: number; pct?: number; found?: number;
+      user?: string; password?: string; banner?: string; host?: string; port?: number;
+      results?: Array<{user:string;password:string;banner:string}>;
+    };
     const push = (kind: "info"|"result"|"warn"|"dead", text: string) =>
       setProbeLines(p => [...p, { kind, text }]);
     if (m.type === "progress") {
@@ -647,7 +656,20 @@ export default function MainLab() {
     } else if (m.type === "error") {
       push("warn", `[ERROR] ${m.message ?? "probe failed"}`);
       setProbing(false);
+    } else if (m.type === "ssh_brute_start") {
+      setBruteTotal(m.total ?? 0);
+      setBruteTried(0);
+      setBruteFound([]);
+      setBruteRunning(true);
+    } else if (m.type === "ssh_brute_progress") {
+      setBruteTried(m.tried ?? 0);
+    } else if (m.type === "ssh_brute_found") {
+      setBruteFound(p => [...p, { user: m.user ?? "", password: m.password ?? "", banner: m.banner ?? "" }]);
+    } else if (m.type === "ssh_brute_end") {
+      setBruteRunning(false);
+      if (m.results) setBruteFound(m.results);
     } else if (m.type === "end") {
+      setBruteRunning(false);
       setProbing(false);
     }
   }, []);
@@ -760,10 +782,14 @@ export default function MainLab() {
     if (!injectionUrl.trim() || probing) return;
     setProbing(true);
     setProbeLines([]);
+    setBruteTotal(0);
+    setBruteTried(0);
+    setBruteFound([]);
+    setBruteRunning(false);
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
     probeWs.connect(
       `${proto}//${window.location.host}/api/ws/probe`,
-      { url: injectionUrl.trim() },
+      { url: injectionUrl.trim(), sshBrute: true },
     );
   }, [injectionUrl, probing, probeWs]);
 
@@ -1659,7 +1685,7 @@ export default function MainLab() {
                 <div className="bg-black border border-purple-900/50 mt-1">
                   <div className="flex items-center justify-between px-2 py-1 border-b border-purple-900/40">
                     <span className="text-[9px] text-purple-500 uppercase tracking-wider">Probe Output</span>
-                    {!probing && <button onClick={()=>setProbeLines([])} className="text-[9px] text-zinc-700 hover:text-red-400 uppercase">CLR</button>}
+                    {!probing && <button onClick={()=>{setProbeLines([]);setBruteTotal(0);setBruteTried(0);setBruteFound([]);setBruteRunning(false);}} className="text-[9px] text-zinc-700 hover:text-red-400 uppercase">CLR</button>}
                   </div>
                   <div className="max-h-64 overflow-y-auto p-1.5 space-y-px">
                     {probing && probeLines.length === 0 && (
@@ -1681,13 +1707,65 @@ export default function MainLab() {
                         line.text.startsWith("[HTTP]")       ? "text-cyan-400" :
                         line.text.startsWith("[TCP]")        ? "text-blue-400" :
                         line.text.startsWith("[WEB]")        ? "text-teal-400" :
-                        line.text.startsWith("[1/") || line.text.startsWith("[2/") || line.text.startsWith("[3/") || line.text.startsWith("[4/") ? "text-purple-400 font-bold" :
+                        line.text.startsWith("[SSH]")        ? "text-teal-300 font-bold" :
+                        /^\[\d\/5\]/.test(line.text)         ? "text-purple-400 font-bold" :
                         "text-zinc-400";
                       return (
                         <div key={i} className={`text-[9px] font-mono whitespace-pre-wrap break-all leading-relaxed ${cls}`}>{line.text || " "}</div>
                       );
                     })}
                   </div>
+                </div>
+              )}
+              {/* SSH brute-force live panel */}
+              {(bruteRunning || bruteTotal > 0) && (
+                <div className="bg-black border border-teal-900/60 mt-1">
+                  <div className="flex items-center justify-between px-2 py-1 border-b border-teal-900/40">
+                    <span className="text-[9px] text-teal-500 uppercase tracking-wider font-bold flex items-center gap-1">
+                      SSH Brute-Force
+                      {bruteRunning && <span className="w-1.5 h-1.5 rounded-full bg-teal-400 inline-block animate-ping"/>}
+                      {!bruteRunning && <span className="text-zinc-600 ml-1">— Done</span>}
+                    </span>
+                    <span className="text-[9px] text-zinc-600 font-mono">
+                      {bruteTried}/{bruteTotal} · {bruteFound.length} hit{bruteFound.length!==1?"s":""}
+                    </span>
+                  </div>
+                  {bruteTotal > 0 && (
+                    <div className="px-2 pt-1.5 pb-0.5">
+                      <div className="w-full h-1.5 bg-zinc-900 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full transition-all duration-200 rounded-full ${bruteFound.length > 0 ? "bg-teal-400" : "bg-teal-800"}`}
+                          style={{ width: `${Math.round((bruteTried / bruteTotal) * 100)}%` }}
+                        />
+                      </div>
+                      <div className="text-[8px] text-zinc-700 mt-0.5 text-right font-mono">
+                        {Math.round((bruteTried / bruteTotal) * 100)}%
+                      </div>
+                    </div>
+                  )}
+                  {bruteFound.length > 0 && (
+                    <div className="px-2 pb-2 pt-0.5 space-y-1">
+                      <div className="text-[9px] text-teal-400 font-bold uppercase">✓ Credentials Found</div>
+                      {bruteFound.map((hit, i) => (
+                        <div key={i} className="bg-teal-950/30 border border-teal-800/50 px-2 py-1 font-mono">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-[9px] text-teal-300 font-bold">{hit.user}:{hit.password}</span>
+                            <button
+                              onClick={()=>copy(`${hit.user}:${hit.password}`, `brute-${i}`)}
+                              className="text-[8px] text-zinc-600 hover:text-teal-400 uppercase border border-zinc-800 px-1 py-0.5">
+                              {copyId===`brute-${i}`?"COPIED":"COPY"}
+                            </button>
+                          </div>
+                          {hit.banner && <div className="text-[8px] text-zinc-500 mt-0.5 truncate">{hit.banner}</div>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {!bruteRunning && bruteFound.length === 0 && bruteTotal > 0 && (
+                    <div className="px-2 pb-2 pt-1">
+                      <div className="text-[9px] text-zinc-600 font-mono">No valid credentials from {bruteTotal} pairs</div>
+                    </div>
+                  )}
                 </div>
               )}
               {injectionUrl.trim() && (

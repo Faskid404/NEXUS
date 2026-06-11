@@ -15,6 +15,7 @@ import OobPanel from "./OobPanel";
 import AutoExploitPanel from "./AutoExploitPanel";
 import ChainReplayPanel from "./ChainReplayPanel";
 import CvePanel from "./CvePanel";
+import MutationScannerPanel from "./MutationScannerPanel";
 import { useReconnectingWs } from "../hooks/use-reconnecting-ws";
 
 // ─── ENGINES ──────────────────────────────────────────────
@@ -85,7 +86,7 @@ const MODE_DESC: Record<string, string> = {
 };
 
 // ─── TABS ─────────────────────────────────────────────────
-const TABS = ["AUTOCHAIN","TERMINAL","SCANNER","FUZZER","SHELLS","ENCODER","LIBRARY","OOB","REPLAYS","CVE"] as const;
+const TABS = ["AUTOCHAIN","TERMINAL","SCANNER","FUZZER","SHELLS","ENCODER","LIBRARY","OOB","REPLAYS","CVE","MUTATION"] as const;
 type Tab = typeof TABS[number];
 
 // ─── FUZZER ───────────────────────────────────────────────
@@ -733,6 +734,7 @@ export default function MainLab() {
       if (e.key === "F5") { e.preventDefault(); setTab("SHELLS"); }
       if (e.key === "F6") { e.preventDefault(); setTab("ENCODER"); }
       if (e.key === "F7") { e.preventDefault(); setTab("LIBRARY"); }
+      if (e.key === "F11") { e.preventDefault(); setTab("MUTATION"); }
       if (e.key === "F8") { e.preventDefault(); setTab("OOB"); }
       if (e.key === "F9") { e.preventDefault(); setTab("REPLAYS"); }
       if (e.key === "F10") { e.preventDefault(); setTab("CVE"); }
@@ -1707,6 +1709,7 @@ export default function MainLab() {
             {tab==="AUTOCHAIN"    &&<AutoExploitPanel />}
             {tab==="REPLAYS"      &&<ChainReplayPanel />}
         {tab==="CVE"           &&<CvePanel />}
+        {tab==="MUTATION"      &&<MutationScannerPanel />}
           </div>
 
           {/* Bottom panel */}

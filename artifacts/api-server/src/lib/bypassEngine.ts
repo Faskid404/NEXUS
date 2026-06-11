@@ -743,8 +743,7 @@ export function buildWafBypass(payload: string): string {
     `${payload}%00`,
     `${payload}%00;id`,
     /* ── line-continuation ── */
-    payload.replace(/ /g, "\\
-"),
+    payload.replace(/ /g, "\\\n"),
     /* ── CRLF injection in param ── */
     `${payload}%0d%0a`,
     `%0d%0a${payload}`,

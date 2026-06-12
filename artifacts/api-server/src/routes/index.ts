@@ -11,6 +11,7 @@ import chainLogRouter    from "./chainLog.js";
 import cveRouter         from "./cve.js";
 import aiRouter          from "./ai.js";
 import deliverRouter     from "./deliver.js";
+import exfilRouter       from "./exfil.js";
 
 const router: IRouter = Router();
 router.use(authRouter);
@@ -25,5 +26,6 @@ router.use(chainLogRouter);
 router.use(cveRouter);
 router.use(aiRouter);
 router.use(deliverRouter);
+router.use(exfilRouter);
 
 export default router;

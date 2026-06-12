@@ -116,3 +116,51 @@
     @apply font-mono antialiased bg-black text-white;
   }
 }
+
+/* ═══════════════════════════════════════════════════════
+   NEXUSFORGE UPGRADE — UI polish
+   ═══════════════════════════════════════════════════════ */
+
+/* Custom scrollbar */
+::-webkit-scrollbar        { width: 4px; height: 4px; }
+::-webkit-scrollbar-track  { background: #000; }
+::-webkit-scrollbar-thumb  { background: #27272a; border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: #dc2626; }
+* { scrollbar-width: thin; scrollbar-color: #27272a #000; }
+
+/* Glow utilities */
+.glow-red   { box-shadow: 0 0 8px rgba(220,38,38,0.45); }
+.glow-green { box-shadow: 0 0 8px rgba(74,222,128,0.45); }
+.glow-cyan  { box-shadow: 0 0 8px rgba(34,211,238,0.45); }
+.text-glow-red   { text-shadow: 0 0 8px rgba(220,38,38,0.55); }
+.text-glow-green { text-shadow: 0 0 8px rgba(74,222,128,0.55); }
+
+/* Terminal blinking cursor */
+@keyframes term-blink { 0%,49%{opacity:1} 50%,100%{opacity:0} }
+.term-cursor { display:inline-block; animation: term-blink 1s step-end infinite; }
+
+/* Scanline overlay utility */
+.scanlines::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg, transparent, transparent 2px,
+    rgba(0,0,0,0.055) 2px, rgba(0,0,0,0.055) 4px
+  );
+}
+
+/* Fade-in animation for panels */
+@keyframes nx-fade-in { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:translateY(0)} }
+.nx-fade-in { animation: nx-fade-in 0.22s ease forwards; }
+
+/* Pulse dot */
+@keyframes nx-pulse-dot { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(0.7)} }
+.nx-pulse-dot { animation: nx-pulse-dot 1.5s ease infinite; }
+
+/* Red hex grid background for hero areas */
+.nx-hex-bg {
+  background-image: radial-gradient(circle, rgba(220,38,38,0.06) 1px, transparent 1px);
+  background-size: 20px 20px;
+}

@@ -10,6 +10,7 @@ import oobRouter         from "./oob.js";
 import chainLogRouter    from "./chainLog.js";
 import cveRouter         from "./cve.js";
 import aiRouter          from "./ai.js";
+import deliverRouter     from "./deliver.js";
 
 const router: IRouter = Router();
 router.use(authRouter);
@@ -23,5 +24,6 @@ router.use(oobRouter);
 router.use(chainLogRouter);
 router.use(cveRouter);
 router.use(aiRouter);
+router.use(deliverRouter);
 
 export default router;

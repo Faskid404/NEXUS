@@ -1866,11 +1866,11 @@ export default function MainLab() {
             {tab==="AUTOCHAIN"    &&<AutoExploitPanel />}
             {tab==="REPLAYS"      &&<ChainReplayPanel />}
         {tab==="CVE"           &&<CvePanel />}
-        {tab==="MUTATION"      &&<MutationScannerPanel />
-              {activeTab === "DELIVER"  && <PayloadDeliveryPanel />}
-              {activeTab === "PERSIST"  && <PersistencePanel />}
-              {activeTab === "REPORT"   && <ReportPanel />}
-              {activeTab === "EXFIL"    && <ExfilPanel />}}
+        {tab==="MUTATION"      &&<MutationScannerPanel />}
+        {tab==="DELIVER"       && <PayloadDeliveryPanel />}
+        {tab==="PERSIST"       && <PersistencePanel />}
+        {tab==="REPORT"        && <ReportPanel />}
+        {tab==="EXFIL"         && <ExfilPanel />}
           </div>
 
           {/* Bottom panel */}

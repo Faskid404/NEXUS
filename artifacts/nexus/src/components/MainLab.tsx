@@ -16,6 +16,9 @@ import AutoExploitPanel from "./AutoExploitPanel";
 import ChainReplayPanel from "./ChainReplayPanel";
 import CvePanel from "./CvePanel";
 import MutationScannerPanel from "./MutationScannerPanel";
+import PayloadDeliveryPanel from "./PayloadDeliveryPanel";
+import PersistencePanel from "./PersistencePanel";
+import ReportPanel from "./ReportPanel";
 import { useReconnectingWs } from "../hooks/use-reconnecting-ws";
 
 // ─── ENGINES ──────────────────────────────────────────────
@@ -86,7 +89,7 @@ const MODE_DESC: Record<string, string> = {
 };
 
 // ─── TABS ─────────────────────────────────────────────────
-const TABS = ["AUTOCHAIN","TERMINAL","SCANNER","FUZZER","SHELLS","ENCODER","LIBRARY","OOB","REPLAYS","CVE","MUTATION"] as const;
+const TABS = ["AUTOCHAIN","TERMINAL","SCANNER","FUZZER","SHELLS","ENCODER","LIBRARY","OOB","REPLAYS","CVE","MUTATION","DELIVER","PERSIST","REPORT"] as const;
 type Tab = typeof TABS[number];
 
 // ─── FUZZER ───────────────────────────────────────────────
@@ -1862,7 +1865,10 @@ export default function MainLab() {
             {tab==="AUTOCHAIN"    &&<AutoExploitPanel />}
             {tab==="REPLAYS"      &&<ChainReplayPanel />}
         {tab==="CVE"           &&<CvePanel />}
-        {tab==="MUTATION"      &&<MutationScannerPanel />}
+        {tab==="MUTATION"      &&<MutationScannerPanel />
+              {activeTab === "DELIVER"  && <PayloadDeliveryPanel />}
+              {activeTab === "PERSIST"  && <PersistencePanel />}
+              {activeTab === "REPORT"   && <ReportPanel />}}
           </div>
 
           {/* Bottom panel */}

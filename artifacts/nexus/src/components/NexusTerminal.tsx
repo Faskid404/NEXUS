@@ -94,7 +94,6 @@ const NexusTerminal = forwardRef<NexusTerminalHandle, Props>(function NexusTermi
       allowProposedApi: true,
       convertEol:       true,
       disableStdin:     false,
-      windowsMode:      false,
     });
 
     const fit   = new FitAddon();

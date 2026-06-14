@@ -11,7 +11,9 @@ const execFileP = promisify(execFileCb);
 interface MutMsg { type: string; [k: string]: unknown; }
 
 function send(ws: WebSocket, msg: MutMsg): void {
-  if (ws.readyState === 1) ws.send(JSON.stringify(msg));
+  if (ws.readyState === 1) {
+    try { ws.send(JSON.stringify(msg)); } catch { /* connection closed mid-send */ }
+  }
 }
 
 async function curlGet(

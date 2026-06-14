@@ -35,10 +35,9 @@ export default function LockScreen({ onUnlock }: { onUnlock: (token: string) => 
       setShake(true);
       setValue("");
       setTimeout(() => { setShake(false); setError(false); }, 2200);
-    } finally {
-      setLoading(false);
-      setTimeout(() => inputRef.current?.focus(), 50);
-    }
+    } catch { /* network error — fall through */ }
+    setLoading(false);
+    setTimeout(() => inputRef.current?.focus(), 50);
   };
 
   return (

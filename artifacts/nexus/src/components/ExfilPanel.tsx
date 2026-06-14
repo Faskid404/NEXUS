@@ -82,7 +82,7 @@ export default function ExfilPanel() {
   /* Auto-generate when token ready */
   useEffect(() => {
     if (tokenInfo && !useManual) void generate();
-  }, [tokenInfo]); // eslint-disable-line
+  }, [tokenInfo, generate, useManual]);
 
   const copy = useCallback((text: string, id: string) => {
     navigator.clipboard.writeText(text).then(() => {

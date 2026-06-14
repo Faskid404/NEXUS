@@ -1,38 +1,38 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 
-  const API_URL = (import.meta.env as Record<string,string>)["VITE_API_URL"] ?? "";
+const API_URL = (import.meta.env as Record<string,string>)["VITE_API_URL"] ?? "";
 
-  interface OobHit {
+interface OobHit {
     id:string; ts:number; type:string; method:string; path:string; sourceIp:string;
     userAgent:string; headers:Record<string,string>; body:string;
     query:Record<string,string>; data:string; token:string; size:number;
-  }
-  interface TokenInfo { token:string; cbUrl:string; payloads:Record<string,string>; }
+}
+interface TokenInfo { token:string; cbUrl:string; payloads:Record<string,string>; }
 
-  function timeAgo(ts:number):string {
+function timeAgo(ts:number):string {
     const s=Math.floor((Date.now()-ts)/1000);
     if(s<2)return"just now"; if(s<60)return`${s}s ago`;
     if(s<3600)return`${Math.floor(s/60)}m ago`;
     return new Date(ts).toLocaleTimeString();
-  }
-  function tryDecode(raw:string):{text:string;decoded:boolean}{
+}
+function tryDecode(raw:string):{text:string;decoded:boolean}{
     if(!raw)return{text:"",decoded:false};
     try{
       const dec=atob(raw.replace(/[ ]/g,"+"));
       if(/^[\x09\x0a\x0d\x20-\x7e]+$/.test(dec)&&dec.length>2)return{text:dec,decoded:true};
     }catch{/**/}
     return{text:raw,decoded:false};
-  }
-  const PAYLOAD_LABELS:Record<string,string>={
+}
+const PAYLOAD_LABELS:Record<string,string>={
     curl_exfil:"curl Full Exfil",bash_pipe_raw:"Bash Pipe Raw",
     wget_pixel:"wget Pixel",analytics_beacon:"Analytics Beacon",
     python3_urllib:"Python3 urllib",curl_font_fetch:"curl Font Fetch",
     curl_post_xhr:"curl POST XHR",perl_http:"Perl HTTP",
     python3_socket:"Python3 Socket",bash_devtcp:"Bash /dev/tcp",
     java_url:"Java URL",powershell_iwr:"PowerShell IWR",
-  };
+};
 
-  export default function OobPanel(){
+export default function OobPanel(){
     const [hits,setHits]=useState<OobHit[]>([]);
     const [tokenInfo,setTokenInfo]=useState<TokenInfo|null>(null);
     const [connected,setConnected]=useState(false);
@@ -189,5 +189,4 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
         </div>
       </div>
     );
-  }
-  
+}

@@ -103,7 +103,8 @@ router.post("/hub/suggest", (req: Request, res: Response) => {
 router.post("/hub/shells", (req: Request, res: Response) => {
   const { attackerIp = "127.0.0.1", attackerPort = "4444" } =
     req.body as { attackerIp?: string; attackerPort?: string };
-  res.json({ shells: buildReverseShells(attackerIp, attackerPort), count: buildReverseShells(attackerIp, attackerPort).length });
+  const shells = buildReverseShells(attackerIp, attackerPort);
+  res.json({ shells, count: shells.length });
 });
 
 router.post("/hub/chunked", (req: Request, res: Response) => {

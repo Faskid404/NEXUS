@@ -13,6 +13,7 @@ import cveRouter            from "./cve.js";
 import aiRouter             from "./ai.js";
 import deliverRouter        from "./deliver.js";
 import exfilRouter          from "./exfil.js";
+import weaponsRouter        from "./weapons.js";
 
 const router: IRouter = Router();
 
@@ -33,5 +34,6 @@ router.use(cveRouter);
 router.use(aiRouter);
 router.use(deliverRouter);
 router.use(exfilRouter);
+router.use(weaponsRouter);
 
 export default router;

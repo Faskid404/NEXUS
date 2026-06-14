@@ -20,6 +20,7 @@ import PayloadDeliveryPanel from "./PayloadDeliveryPanel";
 import PersistencePanel from "./PersistencePanel";
 import ReportPanel from "./ReportPanel";
 import ExfilPanel from "./ExfilPanel";
+import WeaponsPanel from "./WeaponsPanel";
 import { useReconnectingWs } from "../hooks/use-reconnecting-ws";
 
 // ─── ENGINES ──────────────────────────────────────────────
@@ -90,7 +91,7 @@ const MODE_DESC: Record<string, string> = {
 };
 
 // ─── TABS ─────────────────────────────────────────────────
-const TABS = ["AUTOCHAIN","TERMINAL","SCANNER","FUZZER","SHELLS","ENCODER","LIBRARY","OOB","REPLAYS","CVE","MUTATION","DELIVER","PERSIST","REPORT","EXFIL"] as const;
+const TABS = ["AUTOCHAIN","TERMINAL","SCANNER","FUZZER","SHELLS","ENCODER","LIBRARY","OOB","REPLAYS","CVE","MUTATION","DELIVER","PERSIST","REPORT","EXFIL","WEAPONS"] as const;
 type Tab = typeof TABS[number];
 
 // ─── FUZZER ───────────────────────────────────────────────
@@ -1871,6 +1872,7 @@ export default function MainLab() {
         {tab==="PERSIST"       && <PersistencePanel />}
         {tab==="REPORT"        && <ReportPanel />}
         {tab==="EXFIL"         && <ExfilPanel />}
+        {tab==="WEAPONS"       && <WeaponsPanel />}
           </div>
 
           {/* Bottom panel */}

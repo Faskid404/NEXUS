@@ -29,6 +29,7 @@ function AppContent() {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((r) => {
+        if (!r.ok) sessionStorage.removeItem(AUTH_KEY);
         setUnlocked(r.ok);
         setChecking(false);
       })

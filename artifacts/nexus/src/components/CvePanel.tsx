@@ -1,12 +1,12 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import { useReconnectingWs } from "../hooks/use-reconnecting-ws";
 
-  /* ═══════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════
      NEXUSFORGE — CVE Exploitation Panel  (2025 / 2026)
      SSH · FTP · HTTP — Probe · Exploit · Differential Analysis
      ═══════════════════════════════════════════════════════════════ */
 
-  interface CveRecord {
+interface CveRecord {
     id:               string;
     title:            string;
     cvss:             number;
@@ -17,18 +17,18 @@ import { useReconnectingWs } from "../hooks/use-reconnecting-ws";
     patchedIn:        string;
     publishedDate:    string;
     references:       string[];
-  }
+}
 
-  interface ProbeResult {
+interface ProbeResult {
     vulnerable:   boolean | null;
     version:      string;
     banner:       string;
     evidence:     string;
     confidence:   string;
     responseTime: number;
-  }
+}
 
-  interface DiffResult {
+interface DiffResult {
     method:         string;
     confirmed:      boolean;
     confidence:     string;
@@ -36,22 +36,22 @@ import { useReconnectingWs } from "../hooks/use-reconnecting-ws";
     timingDelta:    number;
     sizeDelta:      number;
     evidence:       string;
-  }
+}
 
-  const API = "/api";
-  const wsBase = (): string => {
+const API = "/api";
+const wsBase = (): string => {
     const loc = window.location;
     const proto = loc.protocol === "https:" ? "wss:" : "ws:";
     return proto + "//" + loc.host + "/api/ws";
-  };
+};
 
-  function cvssColor(cvss: number): string {
+function cvssColor(cvss: number): string {
     if (cvss >= 9) return "text-red-400";
     if (cvss >= 7) return "text-orange-400";
     if (cvss >= 4) return "text-yellow-400";
     return "text-green-400";
-  }
-  function typeBadge(type: string): string {
+}
+function typeBadge(type: string): string {
     const map: Record<string,string> = {
       rce: "bg-red-900/60 text-red-300 border-red-700",
       auth_bypass: "bg-purple-900/60 text-purple-300 border-purple-700",
@@ -62,27 +62,27 @@ import { useReconnectingWs } from "../hooks/use-reconnecting-ws";
       dos: "bg-zinc-700/60 text-zinc-300 border-zinc-600",
     };
     return map[type] ?? "bg-zinc-800 text-zinc-400 border-zinc-600";
-  }
-  function protoIcon(proto: string): string {
+}
+function protoIcon(proto: string): string {
     if (proto === "ssh") return "🔐";
     if (proto === "ftp") return "📁";
     if (proto === "http" || proto === "https") return "🌐";
     return "⚡";
-  }
+}
 
-  // ── Shared small components ──────────────────────────────────────────
-  function Label({ children }: { children: React.ReactNode }) {
+// ── Shared small components ──────────────────────────────────────────
+function Label({ children }: { children: React.ReactNode }) {
     return <span className="text-[10px] text-zinc-500 uppercase tracking-widest">{children}</span>;
-  }
-  function Input({ className = "", ...props }: React.InputHTMLAttributes<HTMLInputElement>) {
+}
+function Input({ className = "", ...props }: React.InputHTMLAttributes<HTMLInputElement>) {
     return (
       <input
         className={"bg-black border border-zinc-800 text-zinc-200 text-xs px-2 py-1 font-mono focus:outline-none focus:border-red-700 " + className}
         {...props}
       />
     );
-  }
-  function Btn({ children, className = "", ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) {
+}
+function Btn({ children, className = "", ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) {
     return (
       <button
         className={"px-3 py-1 text-xs font-mono uppercase border transition-colors " + className}
@@ -91,10 +91,10 @@ import { useReconnectingWs } from "../hooks/use-reconnecting-ws";
         {children}
       </button>
     );
-  }
+}
 
-  // ── Main panel ───────────────────────────────────────────────────────
-  export default function CvePanel() {
+// ── Main panel ───────────────────────────────────────────────────────
+export default function CvePanel() {
     const [cves, setCves]           = useState<CveRecord[]>([]);
     const [selected, setSelected]   = useState<CveRecord | null>(null);
     const [loading, setCveLoading]  = useState(true);
@@ -489,4 +489,4 @@ import { useReconnectingWs } from "../hooks/use-reconnecting-ws";
         </div>
       </div>
     );
-  }
+}

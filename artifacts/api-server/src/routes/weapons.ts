@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Request, type Response } from "express";
 import { buildAllEchoPayloads }   from "../lib/echoVault.js";
 import { buildAllShadowPayloads } from "../lib/shadowForge.js";
 import { buildAllVeilPayloads }   from "../lib/veilRunner.js";
@@ -8,6 +8,7 @@ import type { C2PollerConfig }    from "../lib/c2Poller.js";
 
 const router = Router();
 
+/* ── GET /api/weapons/echoes ────────────────────────────────────────── */
 router.get("/api/weapons/echoes", (req, res) => {
   const cbUrl = String(req.query["cbUrl"]  ?? "http://oob.nexusforge.local");
   const token = String(req.query["token"]  ?? "NEXUSTOKEN");
@@ -21,6 +22,7 @@ router.get("/api/weapons/echoes", (req, res) => {
   res.json({ payloads, total: payloads.length });
 });
 
+/* ── GET /api/weapons/shadows ───────────────────────────────────────── */
 router.get("/api/weapons/shadows", (req, res) => {
   const lhost = String(req.query["lhost"] ?? "127.0.0.1");
   const lport = String(req.query["lport"] ?? "4444");
@@ -34,6 +36,7 @@ router.get("/api/weapons/shadows", (req, res) => {
   res.json({ payloads, total: payloads.length });
 });
 
+/* ── GET /api/weapons/veils ─────────────────────────────────────────── */
 router.get("/api/weapons/veils", (req, res) => {
   const lhost = String(req.query["lhost"] ?? "127.0.0.1");
   const lport = String(req.query["lport"] ?? "4444");
@@ -49,6 +52,7 @@ router.get("/api/weapons/veils", (req, res) => {
   res.json({ payloads, total: payloads.length });
 });
 
+/* ── GET /api/weapons/chains ────────────────────────────────────────── */
 router.get("/api/weapons/chains", (_req, res) => {
   res.json({
     chains: KILL_CHAINS.map(c => ({
@@ -63,12 +67,10 @@ router.get("/api/weapons/chains", (_req, res) => {
   });
 });
 
+/* ── POST /api/weapons/c2 ───────────────────────────────────────────── */
 router.post("/api/weapons/c2", (req, res) => {
   const b = req.body as Partial<C2PollerConfig>;
-  if (!b.pollUrl) {
-    res.status(400).json({ error: "pollUrl is required" });
-    return;
-  }
+  if (!b.pollUrl) { res.status(400).json({ error: "pollUrl is required" }); return; }
   const cfg: C2PollerConfig = {
     source:    (b.source as C2PollerConfig["source"]) ?? "url",
     pollUrl:   b.pollUrl,
@@ -86,15 +88,97 @@ router.post("/api/weapons/c2", (req, res) => {
   res.json({ payloads, total: payloads.length, config: cfg });
 });
 
+/* ── GET /api/weapons/c2/encode ─────────────────────────────────────── */
 router.get("/api/weapons/c2/encode", (req, res) => {
   const cmd    = String(req.query["cmd"]    ?? "id");
   const xorKey = Number(req.query["xorKey"] ?? 0x4e);
-  if (xorKey < 0 || xorKey > 255) {
-    res.status(400).json({ error: "xorKey must be 0-255" });
+  if (xorKey < 0 || xorKey > 255) { res.status(400).json({ error: "xorKey must be 0-255" }); return; }
+  res.json({ encoded: buildGistCommandEncoder(cmd, xorKey), cmd, xorKey });
+});
+
+/* ── GET /api/weapons/stats ─────────────────────────────────────────── */
+router.get("/api/weapons/stats", (req: Request, res: Response) => {
+  const lhost  = String(req.query["lhost"] ?? "127.0.0.1");
+  const lport  = String(req.query["lport"] ?? "4444");
+  const cbUrl  = String(req.query["cbUrl"] ?? "http://oob.nexusforge.local");
+  const token  = String(req.query["token"] ?? "NEXUSTOKEN");
+
+  const shadows  = buildAllShadowPayloads(lhost, lport);
+  const veils    = buildAllVeilPayloads(lhost, lport);
+  const echoes   = buildAllEchoPayloads(cbUrl, token);
+
+  // Count by category
+  const shadowCats:  Record<string, number> = {};
+  const veilCats:    Record<string, number> = {};
+  for (const p of shadows) { shadowCats[p.category]  = (shadowCats[p.category]  ?? 0) + 1; }
+  for (const p of veils)   { veilCats[p.category]    = (veilCats[p.category]    ?? 0) + 1; }
+
+  const echoProtos: Record<string, number> = {};
+  for (const p of echoes) { echoProtos[p.protocol] = (echoProtos[p.protocol] ?? 0) + 1; }
+
+  res.json({
+    totals: {
+      shadows:    shadows.length,
+      veils:      veils.length,
+      echoes:     echoes.length,
+      killChains: KILL_CHAINS.length,
+    },
+    shadowCategories: shadowCats,
+    veilCategories:   veilCats,
+    echoProtocols:    echoProtos,
+  });
+});
+
+/* ── GET /api/weapons/search ─────────────────────────────────────────── */
+router.get("/api/weapons/search", (req: Request, res: Response) => {
+  const q     = ((req.query["q"] as string | undefined) ?? "").toLowerCase();
+  const lhost = String(req.query["lhost"] ?? "127.0.0.1");
+  const lport = String(req.query["lport"] ?? "4444");
+  const cbUrl = String(req.query["cbUrl"] ?? "http://oob.nexusforge.local");
+  const token = String(req.query["token"] ?? "NEXUSTOKEN");
+
+  if (!q || q.length < 2) {
+    res.status(400).json({ error: "q (search query) must be at least 2 characters" });
     return;
   }
-  const encoded = buildGistCommandEncoder(cmd, xorKey);
-  res.json({ encoded, cmd, xorKey });
+
+  const shadows  = buildAllShadowPayloads(lhost, lport).filter(
+    p => p.name.toLowerCase().includes(q) || p.payload.toLowerCase().includes(q) || p.category.toLowerCase().includes(q),
+  );
+  const veils    = buildAllVeilPayloads(lhost, lport).filter(
+    p => p.name.toLowerCase().includes(q) || p.payload.toLowerCase().includes(q) || p.category.toLowerCase().includes(q),
+  );
+  const echoes   = buildAllEchoPayloads(cbUrl, token).filter(
+    p => p.name.toLowerCase().includes(q) || p.payload.toLowerCase().includes(q),
+  );
+
+  res.json({
+    query:   q,
+    results: {
+      shadows:  shadows.slice(0, 50),
+      veils:    veils.slice(0, 50),
+      echoes:   echoes.slice(0, 50),
+    },
+    totals: { shadows: shadows.length, veils: veils.length, echoes: echoes.length },
+  });
+});
+
+/* ── GET /api/weapons/categories ────────────────────────────────────── */
+router.get("/api/weapons/categories", (req: Request, res: Response) => {
+  const lhost = String(req.query["lhost"] ?? "127.0.0.1");
+  const lport = String(req.query["lport"] ?? "4444");
+
+  const shadows    = buildAllShadowPayloads(lhost, lport);
+  const veils      = buildAllVeilPayloads(lhost, lport);
+  const shadowCats = [...new Set(shadows.map(p => p.category))].sort();
+  const veilCats   = [...new Set(veils.map(p => p.category))].sort();
+  const veilPhases = [...new Set(veils.map(p => p.phase))].sort();
+
+  res.json({
+    shadow: { categories: shadowCats },
+    veil:   { categories: veilCats, phases: veilPhases },
+    chains: { categories: [...new Set(KILL_CHAINS.map(c => c.category))].sort() },
+  });
 });
 
 export default router;

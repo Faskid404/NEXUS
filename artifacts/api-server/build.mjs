@@ -102,6 +102,7 @@ async function buildAll() {
       "electron",
       "ws",
       "openai",
+      "@ngrok/ngrok",
     ],
     sourcemap: "linked",
     plugins: [

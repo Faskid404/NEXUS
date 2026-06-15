@@ -33,7 +33,11 @@ function AppContent() {
         setUnlocked(r.ok);
         setChecking(false);
       })
-      .catch(() => setChecking(false));
+      .catch(() => {
+        // Network error — clear potentially stale token and show lock screen
+        sessionStorage.removeItem(AUTH_KEY);
+        setChecking(false);
+      });
   }, []);
 
   const handleUnlock = (token: string) => {
@@ -41,7 +45,21 @@ function AppContent() {
     setUnlocked(true);
   };
 
-  if (checking) return null;
+  if (checking) {
+    return (
+      <div className="min-h-screen w-full bg-[#080808] flex items-center justify-center font-mono">
+        <div className="flex flex-col items-center gap-4">
+          <span
+            className="text-red-500 font-black text-2xl tracking-[.18em] uppercase"
+            style={{ textShadow: "0 0 32px rgba(220,38,38,.55)" }}
+          >
+            NEXUS
+          </span>
+          <div className="w-5 h-5 border-2 border-red-700 border-t-transparent rounded-full animate-spin" />
+        </div>
+      </div>
+    );
+  }
 
   return unlocked ? <MainLab /> : <LockScreen onUnlock={handleUnlock} />;
 }

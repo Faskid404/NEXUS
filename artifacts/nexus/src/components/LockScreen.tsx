@@ -5,6 +5,7 @@ const API_URL = (import.meta.env as Record<string, string>)["VITE_API_URL"] ?? "
 export default function LockScreen({ onUnlock }: { onUnlock: (token: string) => void }) {
   const [value,   setValue]   = useState("");
   const [error,   setError]   = useState(false);
+  const [errorMsg, setErrorMsg] = useState("Incorrect password");
   const [loading, setLoading] = useState(false);
   const [shake,   setShake]   = useState(false);
   const [ready,   setReady]   = useState(false);
@@ -14,6 +15,14 @@ export default function LockScreen({ onUnlock }: { onUnlock: (token: string) => 
     const t = setTimeout(() => { setReady(true); inputRef.current?.focus(); }, 200);
     return () => clearTimeout(t);
   }, []);
+
+  const triggerError = (msg: string, clearInput = true) => {
+    setError(true);
+    setErrorMsg(msg);
+    setShake(true);
+    if (clearInput) setValue("");
+    setTimeout(() => { setShake(false); setError(false); }, 2200);
+  };
 
   const attempt = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -31,11 +40,11 @@ export default function LockScreen({ onUnlock }: { onUnlock: (token: string) => 
         onUnlock(token);
         return;
       }
-      setError(true);
-      setShake(true);
-      setValue("");
-      setTimeout(() => { setShake(false); setError(false); }, 2200);
-    } catch { /* network error — fall through */ }
+      triggerError("Incorrect password", true);
+    } catch {
+      // Network / server unreachable — preserve the typed password so user can retry
+      triggerError("Connection error — server unreachable", false);
+    }
     setLoading(false);
     setTimeout(() => inputRef.current?.focus(), 50);
   };
@@ -110,7 +119,7 @@ export default function LockScreen({ onUnlock }: { onUnlock: (token: string) => 
                 className="text-[10px] text-red-500 tracking-[.15em] uppercase text-center"
                 style={{ animation: "nf-err 2.2s ease forwards" }}
               >
-                Incorrect password
+                {errorMsg}
               </p>
             )}
 

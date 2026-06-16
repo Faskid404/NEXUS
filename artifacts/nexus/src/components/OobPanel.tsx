@@ -39,7 +39,7 @@ export default function OobPanel(){
     const [expanded,setExpanded]=useState<string|null>(null);
     const [copied,setCopied]=useState<string|null>(null);
     const [filter,setFilter]=useState("");
-    const [selPayload,setSelPayload]=useState("curl_get");
+    const [selPayload,setSelPayload]=useState("curl_exfil");
     const [loading,setLoading]=useState(false);
     const esRef=useRef<EventSource|null>(null);
 

@@ -252,17 +252,6 @@ export function buildWindowsExfilPayloads(cbUrl: string, token: string): EchoPay
   ];
 }
 
-export function buildAllEchoPayloads(cbUrl: string, token: string): EchoPayload[] {
-  const host = oobHost(cbUrl);
-  return [
-    ...buildDoHTunnelPayloads(host, token),
-    ...buildHttpHeaderStegPayloads(cbUrl, token),
-    ...buildCloudStorageExfil(cbUrl, token),
-    ...buildIcmpTunnelPayloads(host, token),
-    ...buildWindowsExfilPayloads(cbUrl, token),
-  ];
-}
-
 export function buildWebSocketC2Payloads(cbUrl: string, token: string): EchoPayload[] {
   const h = oobHost(cbUrl);
   return [

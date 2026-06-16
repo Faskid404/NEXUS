@@ -772,3 +772,89 @@ export async function probeTargetEnvironment(
     injectHints,
   };
 }
+
+export async function probeGraphQLEndpoints(
+  base: string,
+  timeoutMs: number = 5000,
+): Promise<{ found: string[]; introspection: boolean; schema: string | null }> {
+  const commonPaths = ["/graphql","/api/graphql","/v1/graphql","/v2/graphql","/query","/api/query","/gql","/api/gql","/.well-known/graphql","/graphiql","/playground","/api","/graph","/data"];
+  const found: string[] = [];
+  let introspection = false;
+  let schema: string | null = null;
+  const introQuery = '{"query":"{__schema{queryType{name}types{name,kind}}}"}';
+  const simpleQuery = '{"query":"{__typename}"}';
+  for (const path of commonPaths) {
+    const url = `${base}${path}`;
+    const r = await rawRequest(url, "POST", {"Content-Type":"application/json","Accept":"application/json"}, simpleQuery, timeoutMs).catch(()=>null);
+    if (!r) continue;
+    const isGql = r.status === 200 && (r.body.includes("__typename") || r.body.includes("data") || r.body.includes("errors"));
+    if (isGql) {
+      found.push(url);
+      const r2 = await rawRequest(url, "POST", {"Content-Type":"application/json"}, introQuery, timeoutMs).catch(()=>null);
+      if (r2 && r2.status === 200 && r2.body.includes("__schema")) { introspection = true; schema = r2.body.slice(0,3000); }
+    }
+  }
+  return { found, introspection, schema };
+}
+
+export async function probeCloudImds(
+  timeoutMs: number = 4000,
+): Promise<{ provider: string | null; metadata: string | null; imdsVersion: string | null }> {
+  const awsToken = await rawRequest("http://169.254.169.254/latest/api/token", "PUT", {"X-aws-ec2-metadata-token-ttl-seconds":"21600"}, null, timeoutMs).catch(()=>null);
+  if (awsToken && awsToken.status === 200) {
+    const meta = await rawRequest("http://169.254.169.254/latest/meta-data/", "GET", {"X-aws-ec2-metadata-token":awsToken.body.trim()}, null, timeoutMs).catch(()=>null);
+    return { provider:"AWS", metadata:meta?.body.slice(0,500)??null, imdsVersion:"IMDSv2" };
+  }
+  const aws1 = await rawRequest("http://169.254.169.254/latest/meta-data/", "GET", {}, null, timeoutMs).catch(()=>null);
+  if (aws1 && aws1.status === 200) return { provider:"AWS", metadata:aws1.body.slice(0,500), imdsVersion:"IMDSv1 (VULNERABLE — upgrade to IMDSv2)" };
+  const gcp = await rawRequest("http://metadata.google.internal/computeMetadata/v1/", "GET", {"Metadata-Flavor":"Google"}, null, timeoutMs).catch(()=>null);
+  if (gcp && gcp.status === 200) return { provider:"GCP", metadata:gcp.body.slice(0,500), imdsVersion:"v1" };
+  const az = await rawRequest("http://169.254.169.254/metadata/instance?api-version=2021-02-01", "GET", {"Metadata":"true"}, null, timeoutMs).catch(()=>null);
+  if (az && az.status === 200) return { provider:"Azure", metadata:az.body.slice(0,500), imdsVersion:"IMDS" };
+  const oci = await rawRequest("http://169.254.169.254/opc/v1/instance/", "GET", {}, null, timeoutMs).catch(()=>null);
+  if (oci && oci.status === 200) return { provider:"Oracle Cloud", metadata:oci.body.slice(0,500), imdsVersion:"v1" };
+  return { provider:null, metadata:null, imdsVersion:null };
+}
+
+export async function probeDeepCms(
+  base: string,
+  timeoutMs: number = 5000,
+): Promise<{ cms: string; version: string; adminPath: string | null; exploitHints: string[] }> {
+  type DetectFn = (b: string, h: Record<string,string>) => { cms:string; version:string; admin:string|null; hints:string[] } | null;
+  const paths: Array<[string, DetectFn]> = [
+    ["/wp-json/wp/v2/", (b) => {
+      if (!b.includes("wp_") && !b.includes("WordPress")) return null;
+      const v = b.match(/"version":"([^"]+)"/)?.[1] ?? "";
+      return { cms:"WordPress", version:v, admin:"/wp-admin/", hints:["Brute /wp-login.php","Enumerate users via /?author=1","Test xmlrpc.php multicall","Run WPScan"] };
+    }],
+    ["/joomla.xml", (b) => {
+      if (!b.includes("Joomla")) return null;
+      const v = b.match(/<version>([^<]+)/)?.[1] ?? "";
+      return { cms:"Joomla", version:v, admin:"/administrator/", hints:["SQLi via search component","Brute /administrator/","Check com_fields CVE-2023-23752"] };
+    }],
+    ["/CHANGELOG.txt", (b) => {
+      if (!b.includes("Drupal")) return null;
+      const v = b.match(/Drupal (\d+\.\d+)/)?.[1] ?? "";
+      return { cms:"Drupal", version:v, admin:"/user/login", hints:["Drupalgeddon2 SA-CORE-2018-002","Check /node?_format=hal_json SSRF","REST API enumeration"] };
+    }],
+    ["/typo3/", (b,h) => {
+      if (!b.includes("TYPO3") && !h["x-powered-by"]?.includes("TYPO3")) return null;
+      return { cms:"TYPO3", version:"", admin:"/typo3/", hints:["Default creds admin:joh316","File upload via backend","RCE via TypoScript inject"] };
+    }],
+    ["/manager/html", (b) => {
+      if (!b.includes("Tomcat Manager") && !b.includes("Apache Tomcat")) return null;
+      return { cms:"Tomcat Manager", version:"", admin:"/manager/html", hints:["Default creds tomcat:s3cret","WAR upload → RCE","CVE-2025-24813"] };
+    }],
+    ["/api/index.php", (b) => {
+      if (!b.includes("Nextcloud") && !b.includes("ownCloud")) return null;
+      return { cms:b.includes("ownCloud")?"ownCloud":"Nextcloud", version:"", admin:"/login", hints:["SSRF via webhook","CVE-2023-49103 ownCloud info leak","File upload RCE"] };
+    }],
+  ];
+  for (const [path, detect] of paths) {
+    const r = await rawRequest(`${base}${path}`, "GET", {}, null, timeoutMs).catch(()=>null);
+    if (!r || r.status >= 500) continue;
+    const result = detect(r.body, r.headers as Record<string,string>);
+    if (result) return { cms:result.cms, version:result.version, adminPath:result.admin, exploitHints:result.hints };
+  }
+  return { cms:"", version:"", adminPath:null, exploitHints:[] };
+}

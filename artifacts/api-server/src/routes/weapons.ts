@@ -6,6 +6,8 @@ import { KILL_CHAINS }            from "../lib/chainReactor.js";
 import { buildC2PollerBundle, buildGistCommandEncoder } from "../lib/c2Poller.js";
 import type { C2PollerConfig }    from "../lib/c2Poller.js";
 
+import { ironWormScan } from "../lib/ironWorm.js";
+
 const router = Router();
 
 /* ── GET /api/weapons/echoes ────────────────────────────────────────── */
@@ -179,6 +181,25 @@ router.get("/api/weapons/categories", (req: Request, res: Response) => {
     veil:   { categories: veilCats, phases: veilPhases },
     chains: { categories: [...new Set(KILL_CHAINS.map(c => c.category))].sort() },
   });
+});
+
+/* ── POST /api/weapons/ironworm ─────────────────────────────────────── */
+router.post("/api/weapons/ironworm", async (req, res) => {
+  const { mode, packageName, githubOrg, githubRepo, depConfusionOrg, cbHost, cbPort } = req.body as Record<string,string|undefined>;
+  try {
+    const results = await ironWormScan({
+      packageName:     packageName?.trim()      || undefined,
+      githubOrg:       githubOrg?.trim()        || undefined,
+      githubRepo:      githubRepo?.trim()        || undefined,
+      depConfusionOrg: depConfusionOrg?.trim()  || undefined,
+      cbHost:          cbHost?.trim()            || "LHOST",
+      cbPort:          cbPort?.trim()            || "9999",
+    });
+    res.json({ ok:true, results });
+  } catch (err) {
+    req.log.error({ err }, "IronWorm scan failed");
+    res.status(500).json({ ok:false, error:String(err) });
+  }
 });
 
 export default router;

@@ -133,7 +133,29 @@ export async function sshBruteForce(opts: BruteOptions): Promise<BruteResult[]> 
 
   const creds  = CREDENTIAL_PAIRS;
   const total  = creds.length;
-  const found: BruteResult[] = [];
+  const found: BruteResult[] = [  ["ec2-user",""],["centos",""],["fedora",""],["bitnami",""],["ubuntu","ubuntu1"],["pi","1234"],
+  ["root","system"],["root","server"],["root","service"],["root","netopia"],["root","xc3511"],
+  ["root","phablet"],["root","hi3518"],["root","haier123"],["root","5up"],["root","1q2w3e"],
+  ["root","xmhdipc"],["root","vizxv"],["root","7ujMko0admin"],["root","GM8182"],["root","klv123"],
+  ["root","klv1234"],["root","fidel123"],["root","hunt5759"],["root","cat1029"],
+  ["cisco","cisco"],["cisco",""],["enable","enable"],["admin","Cisco123"],["admin","cisco"],
+  ["admin","huawei"],["admin","Admin@123"],["admin","Huawei@123"],["root","huigu309"],
+  ["admin","H3C"],["admin","h3cadmin"],["superuser","superuser"],["supervisor","supervisor"],
+  ["user","user1234"],["guest","12345"],["guest","admin"],
+  ["sa","sa"],["sa",""],["sa","password"],["mssql","mssql"],["mssql","password"],
+  ["mongodb","mongodb"],["redis","redis"],["redis",""],["elasticsearch","elasticsearch"],
+  ["elastic","elastic"],["elastic","changeme"],["kibana","kibana"],["logstash","logstash"],
+  ["cassandra","cassandra"],["neo4j","neo4j"],["neo4j","neo4j123"],["influxdb","influxdb"],
+  ["gitlab","gitlab"],["gitlab","password"],["drone","drone"],["harbor","Harbor12345"],
+  ["sonar","sonar"],["nexus","nexus123"],["rancher","rancher"],["portainer","portainer"],
+  ["ubuntu","changeit"],["debian","changeit"],["rocky","rocky"],["alma","almalinux"],
+  ["root","Summer2024!"],["admin","Summer2024!"],["root","Winter2024!"],["root","Welcome1!"],
+  ["admin","Welcome1!"],["admin","Admin@2024"],["root","Root@2024"],["admin","P@ssword123"],
+  ["root","Passw0rd!"],["root","Server@123"],["admin","Server@123"],["root","Linux@123"],
+  ["root","r00t"],["root","t00r"],["root","pass1234"],["root","1qaz2wsx"],["root","zxcvbnm"],
+  ["admin","Adm1n"],["admin","@dmin"],["admin","4dm1n"],["root","admin123456"],
+
+];
   let tried    = 0;
   let stopped  = false;
 

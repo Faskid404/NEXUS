@@ -297,7 +297,19 @@ function VeilRunnerTab() {
   );
 }
 
-interface StepLog { stepId:string; name:string; status:string; output:string; elapsed:number; }
+interface StepLog { stepId:string; name:string; status:string; output:string; elapsed:number; stepIndex:number; }
+
+const CHAIN_PHASES = [
+  { label: "Initial Access",    icon: "⚡", color: "text-red-400    border-red-900/50"    },
+  { label: "Priv Escalation",   icon: "⬆", color: "text-orange-400 border-orange-900/50" },
+  { label: "Persistence",       icon: "⚓", color: "text-yellow-400 border-yellow-900/50" },
+  { label: "Lateral Movement",  icon: "↔", color: "text-purple-400 border-purple-900/50" },
+] as const;
+
+function getPhase(stepIndex: number, totalSteps: number) {
+  const bucket = Math.floor(stepIndex / Math.max(1, totalSteps) * 4);
+  return CHAIN_PHASES[Math.min(3, bucket)]!;
+}
 
 function ChainReactorTab() {
   const [chains,    setChains]    = useState<ChainMeta[]>([]);
@@ -308,8 +320,9 @@ function ChainReactorTab() {
   const [running,   setRunning]   = useState(false);
   const [logs,      setLogs]      = useState<StepLog[]>([]);
   const [summary,   setSummary]   = useState<string>("");
-  const wsRef   = useRef<WebSocket|null>(null);
-  const logsRef = useRef<HTMLDivElement>(null);
+  const wsRef         = useRef<WebSocket|null>(null);
+  const logsRef       = useRef<HTMLDivElement>(null);
+  const stepCounterRef = useRef(0);
 
   useEffect(() => {
     fetch(API("/api/weapons/chains"))
@@ -332,6 +345,7 @@ function ChainReactorTab() {
     setRunning(true);
     setLogs([]);
     setSummary("");
+    stepCounterRef.current = 0;
     const ws = new WebSocket(`${wsBase()}/chainreactor`);
     wsRef.current = ws;
     ws.onopen = () => ws.send(JSON.stringify({ chainId: selectedId, target, lhost, lport }));
@@ -342,12 +356,13 @@ function ChainReactorTab() {
         if (type==="step_result") {
           setLogs(prev => {
             const idx = prev.findIndex(l=>l.stepId===msg["stepId"] && l.status==="pending");
-            const sl: StepLog = { stepId:String(msg["stepId"]??""), name:String(msg["name"]??""), status:String(msg["status"]??""), output:String(msg["output"]??""), elapsed:Number(msg["elapsed"]??0) };
+            const sl: StepLog = { stepId:String(msg["stepId"]??""), name:String(msg["name"]??""), status:String(msg["status"]??""), output:String(msg["output"]??""), elapsed:Number(msg["elapsed"]??0), stepIndex: idx >= 0 ? prev[idx]!.stepIndex : stepCounterRef.current };
             if (idx>=0) { const n=[...prev]; n[idx]=sl; return n; }
             return [...prev, sl];
           });
         } else if (type==="step_start") {
-          setLogs(prev => [...prev, { stepId:String(msg["stepId"]??""), name:String(msg["name"]??""), status:"pending", output:"", elapsed:0 }]);
+          const si = stepCounterRef.current++;
+          setLogs(prev => [...prev, { stepId:String(msg["stepId"]??""), name:String(msg["name"]??""), status:"pending", output:"", elapsed:0, stepIndex: si }]);
         } else if (type==="chain_end") {
           setSummary(`Chain complete — ${String(msg["succeeded"]??0)} succeeded, ${String(msg["failed"]??0)} failed${msg["aborted"]?" [ABORTED]":""}`);
           setRunning(false);
@@ -395,19 +410,38 @@ function ChainReactorTab() {
           <span className="text-zinc-500 ml-2">— {selectedChain.steps} steps</span>
         </div>
       )}
-      <div ref={logsRef} className="flex-1 overflow-y-auto space-y-0.5 min-h-0 border border-zinc-900 bg-black p-1">
+      <div ref={logsRef} className="flex-1 overflow-y-auto min-h-0 border border-zinc-900 bg-black p-1">
         {logs.length===0 && !running && (
           <div className="text-[11px] text-zinc-600 text-center pt-10">Select a kill chain and press FIRE to begin real-time execution</div>
         )}
-        {logs.map((l,i) => (
-          <div key={i} className="flex gap-2 items-start font-mono text-[10px]">
-            <span className={`w-14 shrink-0 uppercase ${STEP_STATUS_COLOR[l.status]??"text-zinc-400"}`}>{l.status}</span>
-            <span className="text-zinc-400 w-40 shrink-0 truncate" title={l.name}>{l.name}</span>
-            {l.elapsed>0 && <span className="text-zinc-700 w-12 shrink-0">{l.elapsed}ms</span>}
-            {l.output && <span className="text-zinc-500 flex-1 truncate" title={l.output}>{l.output}</span>}
-          </div>
-        ))}
-        {running && <div className="text-[10px] text-orange-400 animate-pulse mt-1">● EXECUTING CHAIN…</div>}
+        {(() => {
+          const totalSteps = (selectedChain?.steps ?? logs.length) || 1;
+          let lastPhaseLabel = "";
+          const rows: React.ReactNode[] = [];
+          for (let i = 0; i < logs.length; i++) {
+            const l = logs[i]!;
+            const phase = getPhase(l.stepIndex, totalSteps);
+            if (phase.label !== lastPhaseLabel) {
+              lastPhaseLabel = phase.label;
+              rows.push(
+                <div key={`ph-${i}`} className={`flex items-center gap-2 mt-1.5 mb-0.5 px-1 border-t ${phase.color} pt-1`}>
+                  <span className="text-[9px]">{phase.icon}</span>
+                  <span className={`text-[8px] uppercase tracking-widest font-bold ${phase.color.split(" ")[0]}`}>{phase.label}</span>
+                </div>
+              );
+            }
+            rows.push(
+              <div key={i} className="flex gap-2 items-start font-mono text-[10px] pl-1">
+                <span className={`w-14 shrink-0 uppercase ${STEP_STATUS_COLOR[l.status]??"text-zinc-400"}`}>{l.status}</span>
+                <span className="text-zinc-400 w-40 shrink-0 truncate" title={l.name}>{l.name}</span>
+                {l.elapsed>0 && <span className="text-zinc-700 w-12 shrink-0">{l.elapsed}ms</span>}
+                {l.output && <span className="text-zinc-500 flex-1 truncate" title={l.output}>{l.output}</span>}
+              </div>
+            );
+          }
+          return rows;
+        })()}
+        {running && <div className="text-[10px] text-orange-400 animate-pulse mt-1 pl-1">● EXECUTING CHAIN…</div>}
       </div>
       {summary && (
         <div className={`text-[11px] px-2 py-1 border shrink-0 ${summary.includes("ERROR")||summary.includes("Abort")?"border-orange-900 text-orange-400":"border-green-900 text-green-400"}`}>
@@ -496,6 +530,29 @@ function C2PollerTab() {
           <Input value={jitter} onChange={setJitter} w="w-24" type="number"/>
         </Field>
 
+        <div className="col-span-2">
+          {(() => {
+            const iv = Math.max(1, Number(interval) || 60);
+            const jt = Math.max(0, Math.min(Number(jitter) || 0, iv - 1));
+            const lo = iv - jt, hi = iv + jt;
+            const pct = jt / (iv + jt) * 100;
+            return (
+              <div className="bg-zinc-950 border border-zinc-800 px-3 py-2 space-y-1">
+                <div className="flex justify-between text-[9px] text-zinc-600">
+                  <span>Beacon window</span>
+                  <span className="text-zinc-400">{lo}s – {hi}s <span className="text-zinc-700">({(lo/60).toFixed(1)}m – {(hi/60).toFixed(1)}m)</span></span>
+                </div>
+                <div className="relative h-2 bg-zinc-900 rounded overflow-hidden">
+                  <div className="absolute inset-y-0 bg-emerald-900/60" style={{ left: `${100-pct}%`, right: 0 }} />
+                  <div className="absolute inset-y-0 bg-emerald-600/80" style={{ left: `${100-pct*0.5}%`, width: "2px" }} />
+                  <div className="absolute inset-y-0 bg-emerald-900/60" style={{ left: 0, right: `${100-pct}%` }} />
+                </div>
+                <div className="text-[8px] text-zinc-700">Looks like normal browsing traffic — standard network monitors cannot distinguish C2 from user web activity</div>
+              </div>
+            );
+          })()}
+        </div>
+
         <Field label="Max Executions">
           <Input value={maxRuns} onChange={setMaxRuns} w="w-24" type="number"/>
         </Field>
@@ -504,7 +561,15 @@ function C2PollerTab() {
         </Field>
 
         <Field label="Kill Date (YYYY-MM-DD)">
-          <Input value={killDate} onChange={setKillDate} w="w-36" placeholder="2026-12-31"/>
+          <div className="flex items-center gap-2">
+            <Input value={killDate} onChange={setKillDate} w="w-36" placeholder="2026-12-31"/>
+            {killDate && (() => {
+              const d = Math.ceil((new Date(killDate).getTime() - Date.now()) / 86400000);
+              return d > 0
+                ? <span className={`text-[9px] font-mono ${d < 7 ? "text-red-400 animate-pulse" : d < 30 ? "text-orange-400" : "text-zinc-500"}`}>{d}d left</span>
+                : <span className="text-[9px] font-mono text-red-600">EXPIRED</span>;
+            })()}
+          </div>
         </Field>
         <Field label="Exec Engine">
           <Sel value={engine} onChange={setEngine} opts={[{v:"bash"},{v:"sh"},{v:"python3"},{v:"powershell"}]}/>

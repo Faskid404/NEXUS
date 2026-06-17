@@ -1,6 +1,17 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 
-const API = (p: string) => p;
+const API_URL = (import.meta.env as Record<string, string>)["VITE_API_URL"] ?? "";
+const API = (p: string) => `${API_URL}${p}`;
+
+function wsBase(): string {
+  if (API_URL) {
+    const u = new URL(API_URL);
+    const proto = u.protocol === "https:" ? "wss:" : "ws:";
+    return `${proto}//${u.host}/api/ws`;
+  }
+  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${window.location.host}/api/ws`;
+}
 
 interface EchoPayload   { id:string; name:string; category:string; protocol:string; os:string; stealth:number; command:string; notes:string; }
 interface ShadowPayload { id:string; name:string; category:string; os:string; stealth:number; requires:string[]; command:string; notes:string; }
@@ -321,8 +332,7 @@ function ChainReactorTab() {
     setRunning(true);
     setLogs([]);
     setSummary("");
-    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${proto}//${window.location.host}/api/ws/chainreactor`);
+    const ws = new WebSocket(`${wsBase()}/chainreactor`);
     wsRef.current = ws;
     ws.onopen = () => ws.send(JSON.stringify({ chainId: selectedId, target, lhost, lport }));
     ws.onmessage = (ev) => {

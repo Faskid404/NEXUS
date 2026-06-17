@@ -24,6 +24,18 @@ import WeaponsPanel from "./WeaponsPanel";
 import IronWormPanel from "./IronWormPanel";
 import { useReconnectingWs } from "../hooks/use-reconnecting-ws";
 
+// ─── WS URL HELPER ────────────────────────────────────────
+const _API_URL = (import.meta.env as Record<string, string>)["VITE_API_URL"] ?? "";
+function wsBase(): string {
+  if (_API_URL) {
+    const u = new URL(_API_URL);
+    const proto = u.protocol === "https:" ? "wss:" : "ws:";
+    return `${proto}//${u.host}/api/ws`;
+  }
+  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${window.location.host}/api/ws`;
+}
+
 // ─── ENGINES ──────────────────────────────────────────────
 const ENGINE_OPTIONS = [
   { value: "bash/bash",             label: "Bash" },
@@ -809,9 +821,8 @@ export default function MainLab() {
     setBruteTried(0);
     setBruteFound([]);
     setBruteRunning(false);
-    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
     probeWs.connect(
-      `${proto}//${window.location.host}/api/ws/probe`,
+      `${wsBase()}/probe`,
       { url: injectionUrl.trim(), sshBrute: true },
     );
   }, [injectionUrl, probing, probeWs]);
@@ -842,8 +853,7 @@ export default function MainLab() {
     setRunning(true);
     setChain(cmd.split(/[;&|`$(){}]/).map(s=>s.trim()).filter(s=>s.length>1&&s.length<60));
 
-    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    execWs.connect(`${proto}//${window.location.host}/api/ws/exec`, {
+    execWs.connect(`${wsBase()}/exec`, {
       cmd, engine, mode, target,
       injectionUrl:  injectionUrl.trim()  || undefined,
       injectParam:   injectParam.trim()   || undefined,
@@ -936,9 +946,8 @@ export default function MainLab() {
     setScanning(true);
     scanT0Ref.current = Date.now();
 
-    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
     scanWs.connect(
-      `${proto}//${window.location.host}/api/ws/scan`,
+      `${wsBase()}/scan`,
       { target: tgt, ports, timeout: scanTimeout, concurrency: 30 },
     );
   };
@@ -956,9 +965,8 @@ export default function MainLab() {
     setChainDone(false);
     setChainSteps([]);
 
-    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
     chainWs.connect(
-      `${proto}//${window.location.host}/api/ws/chain`,
+      `${wsBase()}/chain`,
       { target: tgt },
     );
   };

@@ -38,11 +38,16 @@ interface DiffResult {
     evidence:       string;
 }
 
-const API = "/api";
+const API_URL = (import.meta.env as Record<string, string>)["VITE_API_URL"] ?? "";
+const API = API_URL ? `${API_URL}/api` : "/api";
 const wsBase = (): string => {
-    const loc = window.location;
-    const proto = loc.protocol === "https:" ? "wss:" : "ws:";
-    return proto + "//" + loc.host + "/api/ws";
+    if (API_URL) {
+        const u = new URL(API_URL);
+        const proto = u.protocol === "https:" ? "wss:" : "ws:";
+        return `${proto}//${u.host}/api/ws`;
+    }
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    return proto + "//" + window.location.host + "/api/ws";
 };
 
 function cvssColor(cvss: number): string {

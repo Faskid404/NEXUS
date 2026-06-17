@@ -657,7 +657,7 @@ export default function WeaponsPanel() {
           <button
             key={t}
             onClick={() => setSubTab(t)}
-            className={`px-3 py-1.5 text-[10px] uppercase font-mono border-b-2 transition-colors whitespace-nowrap ${subTab===t?`${SUB_COLOR[t]} bg-zinc-950 border-b`:"border-transparent text-zinc-600 hover:text-zinc-400"}`}
+            className={`px-3 py-1.5 text-[10px] uppercase font-mono border-b-2 transition-colors whitespace-nowrap ${subTab===t?`${SUB_COLOR[t]} bg-zinc-950`:"border-transparent text-zinc-600 hover:text-zinc-400"}`}
           >
             {t}
           </button>

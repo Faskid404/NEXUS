@@ -18,7 +18,7 @@ function timeAgo(ts:number):string {
 function tryDecode(raw:string):{text:string;decoded:boolean}{
     if(!raw)return{text:"",decoded:false};
     try{
-      const dec=atob(raw.replace(/[ ]/g,"+"));
+      const dec=atob(raw.replace(/[ ]/g,"+").replace(/-/g,"+").replace(/_/g,"/"));
       if(/^[\x09\x0a\x0d\x20-\x7e]+$/.test(dec)&&dec.length>2)return{text:dec,decoded:true};
     }catch{/**/}
     return{text:raw,decoded:false};

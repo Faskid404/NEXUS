@@ -781,7 +781,9 @@ export default function MainLab() {
   const { data: hubStatus } = useGetHubStatus({ query:{refetchInterval:15000,queryKey:getGetHubStatusQueryKey()} });
   const { data: engines   } = useGetEngines(  { query:{refetchInterval:30000,queryKey:getGetEnginesQueryKey()} });
   const { data: logs      } = useGetLogs(     undefined, { query:{refetchInterval:3000, queryKey:getGetLogsQueryKey()} });
-  const clearLogs             = useClearLogs();
+  const clearLogs             = useClearLogs({
+    mutation: { onSuccess: () => qc.invalidateQueries({ queryKey: getGetLogsQueryKey() }) },
+  });
   const suggestParams         = { mode, cmd };
   const { data: suggestions, refetch: fetchSuggestions } = useGetSuggestions(suggestParams, {
     query:{ enabled:false, queryKey:getGetSuggestionsQueryKey(suggestParams) },
@@ -791,10 +793,14 @@ export default function MainLab() {
     if (termRef.current) termRef.current.scrollTop = termRef.current.scrollHeight;
   }, [output]);
 
+  // Stable ref so the keyboard handler always calls the latest handleInject
+  // without needing to re-register the listener on every render.
+  const handleInjectRef = useRef<() => void>(() => {});
+
   // Keyboard shortcuts
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); handleInject(); }
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); handleInjectRef.current(); }
       if (e.key === "F1") { e.preventDefault(); setTab("AUTOCHAIN"); }
       if (e.key === "F2") { e.preventDefault(); setTab("TERMINAL"); }
       if (e.key === "F3") { e.preventDefault(); setTab("SCANNER"); }
@@ -802,10 +808,10 @@ export default function MainLab() {
       if (e.key === "F5") { e.preventDefault(); setTab("SHELLS"); }
       if (e.key === "F6") { e.preventDefault(); setTab("ENCODER"); }
       if (e.key === "F7") { e.preventDefault(); setTab("LIBRARY"); }
-      if (e.key === "F11") { e.preventDefault(); setTab("MUTATION"); }
       if (e.key === "F8") { e.preventDefault(); setTab("OOB"); }
       if (e.key === "F9") { e.preventDefault(); setTab("REPLAYS"); }
       if (e.key === "F10") { e.preventDefault(); setTab("CVE"); }
+      if (e.key === "F11") { e.preventDefault(); setTab("MUTATION"); }
     };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
@@ -863,6 +869,9 @@ export default function MainLab() {
       attackerPort:  attPort,
     });
   }, [cmd,engine,mode,target,injectionUrl,injectParam,httpMethod,customHeaders,attIp,attPort,running,execWs]);
+
+  // Keep the stable ref current so the keyboard shortcut always calls the latest version.
+  handleInjectRef.current = handleInject;
 
   const histNav = (dir: "up"|"down") => {
     if (!history.length) return;
@@ -1859,7 +1868,7 @@ export default function MainLab() {
                 className={`px-3 py-2 text-[10px] uppercase tracking-wider border-r border-zinc-900 whitespace-nowrap transition-colors flex items-center gap-1 ${tab===t?"bg-black text-red-400 border-b border-red-600":"text-zinc-600 hover:text-zinc-400 hover:bg-black/30"}`}>
                 {t}
                 {t==="SCANNER"&&scanDone&&openPorts.length>0&&<span className="text-[8px] text-green-400 font-bold">{openPorts.length}</span>}
-                <span className="text-[8px] text-zinc-700 ml-0.5">F{i+1}</span>
+                {i<11&&<span className="text-[8px] text-zinc-700 ml-0.5">F{i+1}</span>}
               </button>
             ))}
             <div className="ml-auto px-3 text-[9px] text-zinc-700 hidden md:block whitespace-nowrap">Ctrl+Enter inject</div>

@@ -1,10 +1,14 @@
 import React, { useState, useEffect } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { setAuthTokenGetter } from "@workspace/api-client-react";
 import LockScreen from "@/components/LockScreen";
 import MainLab from "@/components/MainLab";
+import { AUTH_KEY, getToken } from "@/lib/auth";
 
-const AUTH_KEY = "nxauth_v7";
 const API_URL = (import.meta.env as Record<string, string>)["VITE_API_URL"] ?? "";
+
+// Wire up the generated API hooks to always send the current session token
+setAuthTokenGetter(getToken);
 
 const queryClient = new QueryClient({
   defaultOptions: {

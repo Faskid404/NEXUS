@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import { useReconnectingWs } from "../hooks/use-reconnecting-ws";
+import { authHeaders, withAuthToken } from "../lib/auth";
 
 /* ═══════════════════════════════════════════════════════════════
      NEXUSFORGE — CVE Exploitation Panel  (2025 / 2026)
@@ -200,7 +201,7 @@ export default function CvePanel() {
 
     // Load CVE list
     useEffect(() => {
-      fetch(API + "/cve/list")
+      fetch(API + "/cve/list", { headers: authHeaders() })
         .then(r => r.json())
         .then((data: CveRecord[]) => {
           setCves(data.sort((a,b) => b.cvss - a.cvss));
@@ -227,7 +228,7 @@ export default function CvePanel() {
       setProbe(null);
       setDiffs([]);
       setRunning(true);
-      wsHook.connect(wsBase() + "/cve", payload);
+      wsHook.connect(withAuthToken(wsBase() + "/cve"), payload);
     }
 
     // ── Action handlers ─────────────────────────────────────────────

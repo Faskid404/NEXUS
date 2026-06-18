@@ -1,4 +1,5 @@
 import React, { useState, useCallback } from "react";
+import { authHeaders } from "../lib/auth";
 
 const API_URL = (import.meta.env as Record<string,string>)["VITE_API_URL"] ?? "";
 
@@ -26,7 +27,7 @@ export default function PayloadDeliveryPanel() {
   const generate = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await fetch(`${API_URL}/api/hub/deliver?lhost=${encodeURIComponent(lhost)}&lport=${encodeURIComponent(lport)}&path=${encodeURIComponent(urlPath)}&os=${os}`);
+      const r = await fetch(`${API_URL}/api/hub/deliver?lhost=${encodeURIComponent(lhost)}&lport=${encodeURIComponent(lport)}&path=${encodeURIComponent(urlPath)}&os=${os}`, { headers: authHeaders() });
       const d = await r.json() as DeliveryResponse;
       setPayloads(d.payloads ?? []);
     } catch { /**/ }

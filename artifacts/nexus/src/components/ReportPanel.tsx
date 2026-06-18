@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect } from "react";
+import { authHeaders } from "../lib/auth";
 
 const API_URL = (import.meta.env as Record<string,string>)["VITE_API_URL"] ?? "";
 
@@ -76,10 +77,11 @@ export default function ReportPanel() {
   const fetchAll = useCallback(async () => {
     setLoading(true);
     try {
+      const hdrs = { headers: authHeaders() };
       const [lr, cr, or_] = await Promise.all([
-        fetch(`${API_URL}/api/logs?limit=500`),
-        fetch(`${API_URL}/api/chainlog`),
-        fetch(`${API_URL}/api/oob/hits`),
+        fetch(`${API_URL}/api/logs?limit=500`, hdrs),
+        fetch(`${API_URL}/api/chainlog`, hdrs),
+        fetch(`${API_URL}/api/oob/hits`, hdrs),
       ]);
       setLogs(lr.ok    ? await lr.json()  as InjLog[]   : []);
       setChains(cr.ok  ? await cr.json()  as ChainRun[] : []);

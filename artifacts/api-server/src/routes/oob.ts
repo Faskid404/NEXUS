@@ -133,18 +133,23 @@ function receiveCallback(req: Request, res: Response): void {
       : "";
 
   const hit: OobHit = {
+    id:        randomBytes(8).toString("hex"),
+    ts:        Date.now(),
+    type:      "http",
     token,
     sourceIp,
     method:    req.method,
     path:      req.path,
     query,
     body:      bodyStr,
+    userAgent: (req.headers["user-agent"] as string) ?? "",
+    size:      bodyStr.length,
+    data:      rawData,
     headers:   Object.fromEntries(
       Object.entries(req.headers as Record<string, string | string[] | undefined>)
         .map(([k, v]) => [k, Array.isArray(v) ? v.join(", ") : (v ?? "")]),
     ),
     receivedAt: new Date().toISOString(),
-    // Attempt to auto-decode base64 data field
     decodedData: rawData ? tryDecodeB64(rawData) : undefined,
   };
 

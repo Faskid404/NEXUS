@@ -241,6 +241,30 @@ export async function runDifferentialAnalysis(cfg: DiffConfig): Promise<DiffResu
   return results;
 }
 
+export interface VulnSignature {
+  id:       string;
+  name:     string;
+  severity: "critical" | "high" | "medium" | "low";
+  category: string;
+  detect(base: string, alt: string): boolean;
+  payloads: string[];
+  notes:    string;
+}
+
+function diff(base: string, alt: string): { statusChanged: boolean; lengthDiff: number; newContent: string[]; errorRevealed: boolean } {
+  const baseLines = new Set(base.split("\n"));
+  const altLines  = alt.split("\n");
+  const newContent = altLines.filter(l => !baseLines.has(l) && l.trim().length > 0);
+  return {
+    statusChanged: false,
+    lengthDiff:    Math.abs(base.length - alt.length),
+    newContent,
+    errorRevealed: newContent.some(l => /error|exception|warning|fatal|sql|syntax|undefined|null/i.test(l)),
+  };
+}
+
+export const BASE_SIGNATURES: VulnSignature[] = [];
+
 export const EXTRA_SIGNATURES: VulnSignature[] = [
   { id:"nosql_boolean_blind", name:"NoSQL Boolean-Blind Injection", severity:"critical", category:"injection",
     detect(base: string, alt: string): boolean {

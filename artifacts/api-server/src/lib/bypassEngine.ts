@@ -3082,6 +3082,14 @@ export function buildScanningPayloads(attackerIp: string, attackerPort: string):
   ];
 }
 
+export interface BypassPayload {
+  technique: string;
+  category:  string;
+  os:        string;
+  command:   string;
+  notes:     string;
+}
+
 export function buildWebApplicationBypass(target: string): BypassPayload[] {
   return [
     { technique:"WAF bypass via HTTP/2 request smuggling", category:"waf", os:"any",
@@ -3143,13 +3151,6 @@ export function buildNetworkBypass(target: string): BypassPayload[] {
 
 export function buildAllBypassPayloads(target: string): BypassPayload[] {
   return [
-    ...buildSqlBypass(target),
-    ...buildCommandInjectionBypass(target),
-    ...buildXssWafBypass(target),
-    ...buildPathTraversalBypass(target),
-    ...buildAuthBypass(target),
-    ...buildSsrfBypass(target),
-    ...buildEncodingBypass(target),
     ...buildWebApplicationBypass(target),
     ...buildNetworkBypass(target),
   ];

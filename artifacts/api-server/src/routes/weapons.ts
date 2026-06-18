@@ -145,13 +145,13 @@ router.get("/api/weapons/search", (req: Request, res: Response) => {
   }
 
   const shadows  = buildAllShadowPayloads(lhost, lport).filter(
-    p => p.name.toLowerCase().includes(q) || p.payload.toLowerCase().includes(q) || p.category.toLowerCase().includes(q),
+    p => p.name.toLowerCase().includes(q) || p.command.toLowerCase().includes(q) || p.category.toLowerCase().includes(q),
   );
   const veils    = buildAllVeilPayloads(lhost, lport).filter(
-    p => p.name.toLowerCase().includes(q) || p.payload.toLowerCase().includes(q) || p.category.toLowerCase().includes(q),
+    p => p.name.toLowerCase().includes(q) || p.command.toLowerCase().includes(q) || p.category.toLowerCase().includes(q),
   );
   const echoes   = buildAllEchoPayloads(cbUrl, token).filter(
-    p => p.name.toLowerCase().includes(q) || p.payload.toLowerCase().includes(q),
+    p => p.name.toLowerCase().includes(q) || p.command.toLowerCase().includes(q),
   );
 
   res.json({

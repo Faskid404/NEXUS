@@ -1,4 +1,5 @@
 import React, { useState, useCallback } from "react";
+import { authHeaders } from "../lib/auth";
 
 const API_URL = (import.meta.env as Record<string,string>)["VITE_API_URL"] ?? "";
 
@@ -33,7 +34,7 @@ export default function PersistencePanel() {
     setLoading(true);
     try {
       const params = new URLSearchParams({ lhost, lport, cmd });
-      const r = await fetch(`${API_URL}/api/hub/persist/${os}?${params}`);
+      const r = await fetch(`${API_URL}/api/hub/persist/${os}?${params}`, { headers: authHeaders() });
       const d = await r.json() as { payloads: PersistPayload[] };
       setPayloads(d.payloads ?? []);
     } catch { /**/ }

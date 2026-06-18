@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import { authHeaders, withAuthToken } from "../lib/auth";
 
 const API_URL = (import.meta.env as Record<string,string>)["VITE_API_URL"] ?? "";
 
@@ -44,7 +45,7 @@ export default function OobPanel(){
     const esRef=useRef<EventSource|null>(null);
 
     useEffect(()=>{
-      const es=new EventSource(`${API_URL}/api/oob/stream`);
+      const es=new EventSource(withAuthToken(`${API_URL}/api/oob/stream`));
       esRef.current=es;
       es.onopen=()=>setConnected(true);
       es.onerror=()=>setConnected(false);
@@ -61,12 +62,12 @@ export default function OobPanel(){
 
     const genToken=useCallback(async()=>{
       setLoading(true);
-      try{const r=await fetch(`${API_URL}/api/oob/token`);setTokenInfo(await r.json());}catch{/**/}
+      try{const r=await fetch(`${API_URL}/api/oob/token`,{headers:authHeaders()});setTokenInfo(await r.json());}catch{/**/}
       setLoading(false);
     },[]);
 
     const doClear=useCallback(async()=>{
-      await fetch(`${API_URL}/api/oob/hits`,{method:"DELETE"}).catch(()=>{});setHits([]);
+      await fetch(`${API_URL}/api/oob/hits`,{method:"DELETE",headers:authHeaders()}).catch(()=>{});setHits([]);
     },[]);
 
     useEffect(()=>{genToken();},[genToken]);

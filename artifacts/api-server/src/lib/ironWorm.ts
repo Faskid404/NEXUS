@@ -208,7 +208,7 @@ async function checkDepConfusion(orgName: string, cbHost: string, cbPort: string
     target: orgName,
     category: "dep-confusion",
     status: free.length > 0 ? "success" : "info",
-    severity: free.length > 0 ? "critical" : "low",
+    severity: free.length > 0 ? "critical" : "info",
     detail: free.length > 0
       ? `${free.length} internal package names available on public npm — dep confusion attack viable: ${free.slice(0,4).join(", ")}`
       : `No exploitable dep confusion candidates for "${orgName}"`,

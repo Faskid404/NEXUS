@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect } from "react";
 import NexusTerminal, { type NexusTerminalHandle, ansiLine } from "./NexusTerminal";
 import { useReconnectingWs } from "../hooks/use-reconnecting-ws";
+import { withAuthToken } from "../lib/auth";
 
 const API_URL = (import.meta.env as Record<string, string>)["VITE_API_URL"] ?? "";
 
@@ -169,7 +170,7 @@ export default function MutationScannerPanel() {
       ? `${API_URL.replace(/^http/, "ws")}/api/ws/mutation`
       : `${proto}//${window.location.host}/api/ws/mutation`;
 
-    wsHook.connect(wsUrl, {
+    wsHook.connect(withAuthToken(wsUrl), {
       targetUrl:    targetUrl.trim(),
       injectParam:  injectParam.trim() || "cmd",
       httpMethod,

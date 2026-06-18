@@ -6,6 +6,8 @@ export interface OobHit {
   sourceIp: string; userAgent: string; headers: Record<string, string>;
   body: string; query: Record<string, string>; data: string;
   token: string; size: number;
+  receivedAt?: string;
+  decodedData?: string;
 }
 
 const MAX_HITS = 1000;

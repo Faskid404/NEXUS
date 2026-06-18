@@ -130,7 +130,7 @@ export function buildSshJumpChain(
       host: hop.host, port: hop.port, username: hop.user,
       password: hop.password, privateKey: hop.key,
       readyTimeout: 8000, keepaliveInterval: 5000,
-      sock: stream ?? undefined,
+      sock: (stream as import("stream").Readable | null) ?? undefined,
     };
     conn.on("ready", () => {
       if (idx < jumps.length - 1) {

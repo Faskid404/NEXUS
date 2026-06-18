@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
+import { authHeaders } from "../lib/auth";
 
 const API_URL = (import.meta.env as Record<string,string>)["VITE_API_URL"] ?? "";
 
@@ -53,7 +54,7 @@ export default function ExfilPanel() {
   const fetchToken = useCallback(async () => {
     setTokenLoad(true);
     try {
-      const r = await fetch(`${API_URL}/api/oob/token`);
+      const r = await fetch(`${API_URL}/api/oob/token`, { headers: authHeaders() });
       if (r.ok) setTokenInfo(await r.json() as TokenInfo);
     } catch { /* offline */ }
     finally { setTokenLoad(false); }
@@ -70,7 +71,7 @@ export default function ExfilPanel() {
     setPayloads([]);
     try {
       const params = new URLSearchParams({ cbUrl: cb, token: tok, technique: "all" });
-      const r = await fetch(`${API_URL}/api/hub/exfil?${params}`);
+      const r = await fetch(`${API_URL}/api/hub/exfil?${params}`, { headers: authHeaders() });
       if (r.ok) {
         const d = await r.json() as { payloads: ExfilPayload[] };
         setPayloads(d.payloads ?? []);

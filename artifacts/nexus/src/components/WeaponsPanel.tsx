@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
+import { authHeaders } from "../lib/auth";
 
 const API_URL = (import.meta.env as Record<string, string>)["VITE_API_URL"] ?? "";
 const API = (p: string) => `${API_URL}${p}`;
@@ -130,7 +131,7 @@ function EchoVaultTab() {
     setLoading(true);
     try {
       const q = new URLSearchParams({cbUrl, token, ...(proto!=="all"?{protocol:proto}:{}), ...(os!=="all"?{os}:{})});
-      const r = await fetch(API(`/api/weapons/echoes?${q}`));
+      const r = await fetch(API(`/api/weapons/echoes?${q}`), { headers: authHeaders() });
       const j = await r.json() as { payloads: EchoPayload[] };
       setData(j.payloads ?? []);
     } catch { setData([]); } finally { setLoading(false); }
@@ -188,7 +189,7 @@ function ShadowForgeTab() {
     setLoading(true);
     try {
       const q = new URLSearchParams({lhost, lport, ...(os!=="all"?{os}:{}), ...(cat?{cat}:{})});
-      const r = await fetch(API(`/api/weapons/shadows?${q}`));
+      const r = await fetch(API(`/api/weapons/shadows?${q}`), { headers: authHeaders() });
       const j = await r.json() as { payloads: ShadowPayload[] };
       setData(j.payloads ?? []);
     } catch { setData([]); } finally { setLoading(false); }
@@ -252,7 +253,7 @@ function VeilRunnerTab() {
         ...(cat!=="All"?{cat}:{}),
         ...(phase!=="all"?{phase}:{}),
       });
-      const r = await fetch(API(`/api/weapons/veils?${q}`));
+      const r = await fetch(API(`/api/weapons/veils?${q}`), { headers: authHeaders() });
       const j = await r.json() as { payloads: VeilPayload[] };
       setData(j.payloads ?? []);
     } catch { setData([]); } finally { setLoading(false); }
@@ -325,7 +326,7 @@ function ChainReactorTab() {
   const stepCounterRef = useRef(0);
 
   useEffect(() => {
-    fetch(API("/api/weapons/chains"))
+    fetch(API("/api/weapons/chains"), { headers: authHeaders() })
       .then(r => r.json())
       .then((j: { chains: ChainMeta[] }) => {
         setChains(j.chains ?? []);
@@ -476,7 +477,7 @@ function C2PollerTab() {
     try {
       const r = await fetch(API("/api/weapons/c2"), {
         method:"POST",
-        headers:{"Content-Type":"application/json"},
+        headers:{"Content-Type":"application/json",...authHeaders()},
         body: JSON.stringify({
           source, pollUrl, reportUrl: reportUrl||undefined,
           interval:Number(interval), jitter:Number(jitter),
@@ -494,7 +495,7 @@ function C2PollerTab() {
     setEncLoading(true);
     try {
       const q = new URLSearchParams({ cmd:encCmd, xorKey });
-      const r = await fetch(API(`/api/weapons/c2/encode?${q}`));
+      const r = await fetch(API(`/api/weapons/c2/encode?${q}`), { headers: authHeaders() });
       const j = await r.json() as { encoded: string };
       setEncoded(j.encoded ?? "");
     } catch { setEncoded("error"); } finally { setEncLoading(false); }

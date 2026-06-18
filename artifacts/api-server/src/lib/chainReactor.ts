@@ -17,7 +17,7 @@ export interface KillChain {
   id:          string;
   name:        string;
   description: string;
-  category:    "infrastructure" | "cloud" | "container" | "supply-chain" | "ci-cd" | "lateral" | "c2";
+  category:    "infrastructure" | "cloud" | "container" | "supply-chain" | "ci-cd" | "lateral" | "c2" | "network" | "web";
   severity:    "critical" | "high" | "medium";
   steps:       ChainStep[];
 }

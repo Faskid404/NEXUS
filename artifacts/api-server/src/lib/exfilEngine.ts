@@ -8,10 +8,11 @@ export interface ExfilPayload {
   id:        string;
   name:      string;
   category:  string;
-  technique: "dns" | "http" | "https" | "icmp" | "smb";
+  technique: "dns" | "http" | "https" | "icmp" | "smb" | "smtp";
   os:        "linux" | "windows" | "any";
   command:   string;
   notes:     string;
+  stealth?:  number;
 }
 
 /* ── helpers ───────────────────────────────────────────────────────────── */

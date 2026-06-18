@@ -23,6 +23,7 @@ import ExfilPanel from "./ExfilPanel";
 import WeaponsPanel from "./WeaponsPanel";
 import IronWormPanel from "./IronWormPanel";
 import { useReconnectingWs } from "../hooks/use-reconnecting-ws";
+import { authHeaders, withAuthToken } from "../lib/auth";
 
 // ─── WS URL HELPER ────────────────────────────────────────
 const _API_URL = (import.meta.env as Record<string, string>)["VITE_API_URL"] ?? "";
@@ -828,7 +829,7 @@ export default function MainLab() {
     setBruteFound([]);
     setBruteRunning(false);
     probeWs.connect(
-      `${wsBase()}/probe`,
+      withAuthToken(`${wsBase()}/probe`),
       { url: injectionUrl.trim(), sshBrute: true },
     );
   }, [injectionUrl, probing, probeWs]);
@@ -859,7 +860,7 @@ export default function MainLab() {
     setRunning(true);
     setChain(cmd.split(/[;&|`$(){}]/).map(s=>s.trim()).filter(s=>s.length>1&&s.length<60));
 
-    execWs.connect(`${wsBase()}/exec`, {
+    execWs.connect(withAuthToken(`${wsBase()}/exec`), {
       cmd, engine, mode, target,
       injectionUrl:  injectionUrl.trim()  || undefined,
       injectParam:   injectParam.trim()   || undefined,
@@ -926,7 +927,7 @@ export default function MainLab() {
               attackerIp:    attIp  || "127.0.0.1",
               attackerPort:  attPort || "4444",
             });
-        const r = await fetch("/api/hub/exec",{method:"POST",headers:{"Content-Type":"application/json"},body});
+        const r = await fetch("/api/hub/exec",{method:"POST",headers:{"Content-Type":"application/json",...authHeaders()},body});
         const d = await r.json() as {output?:string;elapsed?:number;error?:string};
         setFuzzRes(prev=>[...prev,{payload,output:(d.output??d.error??"").slice(0,120),elapsed:d.elapsed??Date.now()-t0,ok:r.ok}]);
       } catch {
@@ -956,7 +957,7 @@ export default function MainLab() {
     scanT0Ref.current = Date.now();
 
     scanWs.connect(
-      `${wsBase()}/scan`,
+      withAuthToken(`${wsBase()}/scan`),
       { target: tgt, ports, timeout: scanTimeout, concurrency: 30 },
     );
   };
@@ -975,7 +976,7 @@ export default function MainLab() {
     setChainSteps([]);
 
     chainWs.connect(
-      `${wsBase()}/chain`,
+      withAuthToken(`${wsBase()}/chain`),
       { target: tgt },
     );
   };

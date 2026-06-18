@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
+import { authHeaders } from "../lib/auth";
 
 interface ChainRun {
   id:             number;
@@ -20,16 +21,17 @@ interface ChainRun {
 const API = import.meta.env.VITE_API_URL ?? "";
 
 export default function ChainReplayPanel() {
-  const [runs,    setRuns]    = useState<ChainRun[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [selected, setSelected] = useState<ChainRun | null>(null);
-  const [filter, setFilter]   = useState<"all" | "confirmed" | "failed">("all");
-  const [search,  setSearch]  = useState("");
+  const [runs,         setRuns]         = useState<ChainRun[]>([]);
+  const [loading,      setLoading]      = useState(false);
+  const [selected,     setSelected]     = useState<ChainRun | null>(null);
+  const [filter,       setFilter]       = useState<"all" | "confirmed" | "failed">("all");
+  const [search,       setSearch]       = useState("");
+  const [confirmClear, setConfirmClear] = useState(false);
 
   const fetchRuns = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await fetch(`${API}/api/chainlog`);
+      const r = await fetch(`${API}/api/chainlog`, { headers: authHeaders() });
       if (r.ok) setRuns(await r.json() as ChainRun[]);
     } catch { /* network error */ }
     finally { setLoading(false); }
@@ -38,8 +40,9 @@ export default function ChainReplayPanel() {
   useEffect(() => { void fetchRuns(); }, [fetchRuns]);
 
   const handleClear = async () => {
-    if (!confirm("Delete all session replay records?")) return;
-    await fetch(`${API}/api/chainlog`, { method: "DELETE" });
+    if (!confirmClear) { setConfirmClear(true); return; }
+    setConfirmClear(false);
+    await fetch(`${API}/api/chainlog`, { method: "DELETE", headers: authHeaders() });
     setRuns([]);
     setSelected(null);
   };
@@ -94,8 +97,12 @@ export default function ChainReplayPanel() {
             JSON
           </button>
           <button onClick={()=>void handleClear()}
-            className="px-2 py-0.5 text-[10px] bg-zinc-900 text-zinc-400 hover:text-red-400 uppercase border border-zinc-800 hover:border-red-900 transition-colors">
-            CLR
+            className={`px-2 py-0.5 text-[10px] bg-zinc-900 uppercase border transition-colors ${
+              confirmClear
+                ? "text-red-400 border-red-700 hover:bg-red-950/30"
+                : "text-zinc-400 hover:text-red-400 border-zinc-800 hover:border-red-900"
+            }`}>
+            {confirmClear ? "SURE?" : "CLR"}
           </button>
         </div>
 

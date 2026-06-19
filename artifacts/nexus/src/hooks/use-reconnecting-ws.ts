@@ -1,7 +1,12 @@
 import { useRef, useCallback, useState, useEffect } from "react";
 
-const BACKOFF_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000] as const;
-const MAX_RETRIES = 5;
+const BASE_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000] as const;
+const MAX_RETRIES    = 6;
+const JITTER_FACTOR  = 0.35; // ±35% random spread
+
+function withJitter(base: number): number {
+  return Math.round(base * (1 - JITTER_FACTOR / 2 + Math.random() * JITTER_FACTOR));
+}
 
 export type WsStatus =
   | "idle"
@@ -37,6 +42,8 @@ export function useReconnectingWs(options: {
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stoppedRef    = useRef(true);
   const attemptRef    = useRef(0);
+  const urlRef        = useRef<string>("");
+  const payloadRef    = useRef<unknown>(null);
 
   const cbRef = useRef(options);
   cbRef.current = options;
@@ -52,12 +59,26 @@ export function useReconnectingWs(options: {
 
   const openSocket = useCallback(
     (url: string, payload: unknown) => {
+      urlRef.current     = url;
+      payloadRef.current = payload;
+
       const old = wsRef.current;
       wsRef.current = null;
-      if (old && old.readyState < WebSocket.CLOSING) old.close(1000, "reconnect");
+      if (old && old.readyState < WebSocket.CLOSING) {
+        try { old.close(1000, "reconnect"); } catch { /* ignore */ }
+      }
 
       setStatus("connecting");
-      const ws = new WebSocket(url);
+      let ws: WebSocket;
+      try {
+        ws = new WebSocket(url);
+      } catch {
+        // Malformed URL — treat as fatal
+        setStatus("failed");
+        setReconnectInfo(null);
+        cbRef.current.onClose?.(false);
+        return;
+      }
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -69,12 +90,15 @@ export function useReconnectingWs(options: {
         cbRef.current.onOpen?.();
       };
 
-      ws.onmessage = (ev: MessageEvent<string>) => {
+      ws.onmessage = (ev: MessageEvent) => {
         if (ws !== wsRef.current) return;
-        try { cbRef.current.onMessage(JSON.parse(ev.data)); } catch { /* ignore */ }
+        try {
+          const data = typeof ev.data === "string" ? JSON.parse(ev.data) : ev.data;
+          cbRef.current.onMessage(data);
+        } catch { /* non-JSON frames silently ignored */ }
       };
 
-      ws.onerror = () => { /* handled in onclose */ };
+      ws.onerror = () => { /* all detail arrives in onclose */ };
 
       ws.onclose = (ev: CloseEvent) => {
         if (ws !== wsRef.current) return;
@@ -98,13 +122,13 @@ export function useReconnectingWs(options: {
           return;
         }
 
-        const delayMs =
-          BACKOFF_MS[Math.min(attempt - 1, BACKOFF_MS.length - 1)] ?? 30_000;
+        const base    = BASE_DELAYS_MS[Math.min(attempt - 1, BASE_DELAYS_MS.length - 1)] ?? 30_000;
+        const delayMs = withJitter(base);
         setStatus("reconnecting");
         setReconnectInfo({ attempt, maxAttempts: MAX_RETRIES, delayMs });
 
         retryTimerRef.current = setTimeout(() => {
-          if (!stoppedRef.current) openSocketRef.current(url, payload);
+          if (!stoppedRef.current) openSocketRef.current(urlRef.current, payloadRef.current);
         }, delayMs);
       };
     },
@@ -128,16 +152,18 @@ export function useReconnectingWs(options: {
     stoppedRef.current = true;
     const ws = wsRef.current;
     wsRef.current = null;
-    if (ws && ws.readyState < WebSocket.CLOSING) ws.close(1000, "user disconnect");
+    if (ws && ws.readyState < WebSocket.CLOSING) {
+      try { ws.close(1000, "user disconnect"); } catch { /* ignore */ }
+    }
     setStatus("closed");
     setReconnectInfo(null);
     cbRef.current.onClose?.(true);
   }, [cancelRetry]);
 
   const send = useCallback((msg: unknown) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify(msg));
-    }
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    try { ws.send(JSON.stringify(msg)); } catch { /* ignore send failures */ }
   }, []);
 
   useEffect(
@@ -146,7 +172,9 @@ export function useReconnectingWs(options: {
       stoppedRef.current = true;
       const ws = wsRef.current;
       wsRef.current = null;
-      if (ws && ws.readyState < WebSocket.CLOSING) ws.close(1000, "unmount");
+      if (ws && ws.readyState < WebSocket.CLOSING) {
+        try { ws.close(1000, "unmount"); } catch { /* ignore */ }
+      }
     },
     [cancelRetry],
   );

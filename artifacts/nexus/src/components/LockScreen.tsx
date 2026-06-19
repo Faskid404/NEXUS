@@ -28,7 +28,7 @@ export default function LockScreen({ onUnlock }: { onUnlock: (token: string) => 
 
   const attempt = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!value.trim()) return;
+    if (!value.trim() || loading) return;
     if (!value.startsWith(REQUIRED_PREFIX)) {
       triggerError("Invalid format — check password", true);
       setHint(true);
@@ -45,6 +45,9 @@ export default function LockScreen({ onUnlock }: { onUnlock: (token: string) => 
       });
       if (res.ok) {
         const { token } = await res.json() as { token: string };
+        // setLoading(false) not needed — onUnlock transitions away from this component,
+        // but we call it defensively so if the parent keeps us mounted we are not stuck.
+        setLoading(false);
         onUnlock(token);
         return;
       }

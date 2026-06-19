@@ -167,7 +167,7 @@ const FUZZ_SETS: Record<string, string[]> = {
     '{"query":"{ __schema { types { name } } }"}',
     '{"query":"{ __type(name:\\"User\\") { fields { name } } }"}',
     '{"query":"{ users { id email password } }"}',
-    '{"query":"mutation{login(user:\\"admin\\"password:\\"\\' OR \'1\'=\'1\\"){token}}"}',
+    `{"query":"mutation{login(user:\\"admin\\"password:\\"' OR '1'='1\\"){token}}"}`,
     '{"query":"{ user(id:\\"1 OR 1=1\\") { secret } }"}',
     '{"query":"query{__typename @skip(if:false)}"}',
     'query={user(id:"\\x27 OR \\x271\\x27=\\x271"){ email }}',

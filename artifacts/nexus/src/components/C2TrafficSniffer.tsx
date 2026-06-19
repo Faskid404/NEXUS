@@ -11,16 +11,6 @@ function wsBase() {
   return `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}`;
 }
 
-// ─── Frame field byte-range coloring ────────────────────────────────────────
-const FIELD_RANGES = [
-  { start: 0,           end: 4,            label: "MAGIC",   cls: "text-violet-400" },
-  { start: 4,           end: 5,            label: "VER",     cls: "text-blue-400"   },
-  { start: 5,           end: 6,            label: "TYPE",    cls: "text-emerald-400"},
-  { start: 6,           end: 10,           label: "SEQ",     cls: "text-green-400"  },
-  { start: 10,          end: 14,           label: "LEN",     cls: "text-yellow-400" },
-  // Payload and HMAC are dynamic — handled by getByteColor
-];
-
 const TYPE_COLOR: Record<number, string> = {
   [FrameType.HEARTBEAT]: "text-zinc-500",
   [FrameType.CMD]:       "text-cyan-400",
@@ -148,7 +138,6 @@ function HexDump({ frame }: { frame: CapturedFrame }) {
 }
 
 function JsonPane({ parsed }: { parsed: unknown }) {
-  const [collapsed, setCollapsed] = useState(new Set<string>());
   const text = JSON.stringify(parsed, null, 2);
   return (
     <pre className="text-[10px] text-green-400 font-mono whitespace-pre-wrap break-all leading-relaxed select-text">

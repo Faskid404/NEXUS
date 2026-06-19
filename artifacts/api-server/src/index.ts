@@ -13,6 +13,7 @@ import { handleAutoExploit }     from "./ws/autoExploit.js";
 import { handlePostExploit }     from "./ws/postExploit.js";
 import { handleMutationScanner } from "./ws/mutationScanner.js";
 import { handleChainReactor }    from "./ws/chainReactor.js";
+import { handleC2Operator, handleC2Implant, handleC2Sniffer } from "./ws/c2Relay.js";
 
 const rawPort = process.env["PORT"];
 if (!rawPort) throw new Error("PORT environment variable is required but was not provided.");
@@ -93,6 +94,9 @@ server.on("upgrade", (req, socket, head) => {
     "/api/ws/cve":         wrap(handleCveExploit),
     "/api/ws/mutation":    wrap(handleMutationScanner),
     "/api/ws/chainreactor":wrap(handleChainReactor),
+    "/api/ws/c2":          wrap(handleC2Operator),
+    "/api/ws/c2-implant":  wrap(handleC2Implant),
+    "/api/ws/c2-sniffer":  wrap(handleC2Sniffer),
   };
 
   const handler = routes[pathname];

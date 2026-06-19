@@ -6,11 +6,30 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from './bypassInput';
+export * from './bypassResult';
+export * from './chainRun';
+export * from './chainStep';
 export * from './clearResult';
 export * from './engineMap';
 export * from './execInput';
 export * from './execResult';
+export * from './getLogsParams';
 export * from './getSuggestionsParams';
 export * from './healthStatus';
 export * from './hubStatus';
 export * from './injectionLog';
+export * from './loginInput';
+export * from './loginResult';
+export * from './oobHit';
+export * from './oobTokenResult';
+export * from './oobTokenResultPayloads';
+export * from './portResult';
+export * from './scanInput';
+export * from './scanResult';
+export * from './shellEntry';
+export * from './shellsInput';
+export * from './shellsResult';
+export * from './suggestInput';
+export * from './suggestResult';
+export * from './verifyResult';

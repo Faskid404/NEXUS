@@ -14,4 +14,6 @@ export interface EngineMap {
   cpp: boolean;
   powershell: boolean;
   bash: boolean;
+  ruby: boolean;
+  perl: boolean;
 }

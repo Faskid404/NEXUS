@@ -81,7 +81,12 @@ const NexusTerminal = forwardRef<NexusTerminalHandle, Props>(function NexusTermi
   const fitRef       = useRef<FitAddon | null>(null);
 
   useEffect(() => {
-    if (!containerRef.current) return;
+    const container = containerRef.current;
+    if (!container) return;
+
+    // Guard against React StrictMode double-invocation: if a terminal is already
+    // attached (cleanup hasn't run yet or ran and set termRef to null), bail out.
+    if (termRef.current) return;
 
     const term = new Terminal({
       theme:            THEME,
@@ -100,16 +105,16 @@ const NexusTerminal = forwardRef<NexusTerminalHandle, Props>(function NexusTermi
     const links = new WebLinksAddon();
     term.loadAddon(fit);
     term.loadAddon(links);
-    term.open(containerRef.current);
+    term.open(container);
+
+    termRef.current = term;
+    fitRef.current  = fit;
 
     requestAnimationFrame(() => {
       try { fit.fit(); } catch { /**/ }
     });
 
     if (onData) term.onData(onData);
-
-    termRef.current = term;
-    fitRef.current  = fit;
 
     term.writeln("\x1b[1;31m ███╗   ██╗███████╗██╗  ██╗██╗   ██╗███████╗\x1b[0m");
     term.writeln("\x1b[1;31m ████╗  ██║██╔════╝╚██╗██╔╝██║   ██║██╔════╝\x1b[0m");
@@ -123,13 +128,17 @@ const NexusTerminal = forwardRef<NexusTerminalHandle, Props>(function NexusTermi
 
     const ro = new ResizeObserver(() => {
       requestAnimationFrame(() => {
-        try { fit.fit(); } catch { /**/ }
+        try { fitRef.current?.fit(); } catch { /**/ }
       });
     });
-    ro.observe(containerRef.current);
+    ro.observe(container);
 
     return () => {
       ro.disconnect();
+      // Null the refs BEFORE dispose so any in-flight callbacks that check
+      // termRef.current see null and bail out gracefully.
+      termRef.current = null;
+      fitRef.current  = null;
       term.dispose();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps

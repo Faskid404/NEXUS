@@ -15,6 +15,7 @@
 
 import type { WebSocket } from "ws";
 import { createHmac } from "crypto";
+import { C2OperatorCommandSchema } from "../lib/schemas.js";
 
 // ─── Protocol constants ────────────────────────────────────────────────────
 const MAGIC        = Buffer.from([0x49, 0x52, 0x4e, 0x57]); // IRNW
@@ -204,10 +205,11 @@ export function handleC2Operator(ws: WebSocket): void {
   }));
 
   ws.on("message", (data) => {
-    // Operator sends JSON commands: { session_id, cmd, args }
-    let msg: { session_id?: string; cmd?: string; args?: unknown; type?: string } | null = null;
-    try { msg = JSON.parse(data.toString()); } catch { return; }
-    if (!msg) return;
+    let _parsed: unknown;
+    try { _parsed = JSON.parse(data.toString()); } catch { return; }
+    const _r = C2OperatorCommandSchema.safeParse(_parsed);
+    if (!_r.success) return;
+    const msg = _r.data;
 
     const target = msg.session_id ? sessions.get(msg.session_id) : null;
 

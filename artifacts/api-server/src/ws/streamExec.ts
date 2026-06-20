@@ -25,6 +25,7 @@ import {
 import { probeTargetEnvironment } from "../lib/targetProbe.js";
 import { logInjection }  from "../lib/injectionLogger.js";
 import { logger }        from "../lib/logger.js";
+import { StreamExecRequestSchema } from "../lib/schemas.js";
 
 interface ExecRequest {
   cmd:            string;
@@ -499,14 +500,19 @@ async function handleRemoteInject(
 
 export function handleStreamExec(ws: WebSocket): void {
   ws.once("message", (raw) => {
-    let req: ExecRequest;
-    try {
-      req = JSON.parse(raw.toString()) as ExecRequest;
-    } catch {
+    let _parsed: unknown;
+    try { _parsed = JSON.parse(raw.toString()); } catch {
       send(ws, { type: "error", message: "invalid JSON" });
       ws.close();
       return;
     }
+    const _r = StreamExecRequestSchema.safeParse(_parsed);
+    if (!_r.success) {
+      send(ws, { type: "error", message: _r.error.issues.map(i => i.message).join("; ") });
+      ws.close();
+      return;
+    }
+    const req = _r.data;
 
     const {
       cmd            = "",

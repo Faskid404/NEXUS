@@ -3,6 +3,7 @@ import { probeTargetEnvironment, probeNetworkServices, probeWebDiscovery } from 
 import { isSelfTarget } from "../lib/bypassEngine.js";
 import { sshBruteForce, SSH_CRED_TOTAL } from "../lib/sshBrute.js";
 import { logger } from "../lib/logger.js";
+import { ProbeTargetRequestSchema } from "../lib/schemas.js";
 import * as dns from "dns";
 import * as net from "net";
 
@@ -48,14 +49,19 @@ function tcpProbe(host: string, port: number, timeoutMs: number): Promise<boolea
 
 export function handleProbeTarget(ws: WebSocket): void {
   ws.once("message", (raw) => {
-    let req: { url?: string; scanPorts?: boolean; ports?: number[]; sshBrute?: boolean };
-    try {
-      req = JSON.parse(raw.toString()) as { url?: string; scanPorts?: boolean; ports?: number[]; sshBrute?: boolean };
-    } catch {
+    let _parsed: unknown;
+    try { _parsed = JSON.parse(raw.toString()); } catch {
       send(ws, { type: "error", message: "invalid JSON" });
       ws.close();
       return;
     }
+    const _r = ProbeTargetRequestSchema.safeParse(_parsed);
+    if (!_r.success) {
+      send(ws, { type: "error", message: _r.error.issues.map(i => i.message).join("; ") });
+      ws.close();
+      return;
+    }
+    const req = _r.data;
 
     const url        = (req.url ?? "").trim();
     const scanPorts  = req.scanPorts !== false;

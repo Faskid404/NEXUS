@@ -74,6 +74,13 @@ export const C2RelayRequestSchema = z.object({
   proxy:      z.string().optional(),
 });
 
+export const C2OperatorCommandSchema = z.object({
+  session_id: z.string().max(128).optional(),
+  cmd:        z.string().max(4096).optional(),
+  args:       z.unknown().optional(),
+  type:       z.string().max(64).optional(),
+});
+
 export const IronWormScanRequestSchema = z.object({
   packageName:    z.string().min(1).max(256).optional(),
   githubOrg:      z.string().min(1).max(128).optional(),
@@ -88,25 +95,56 @@ export const IronWormScanRequestSchema = z.object({
 });
 
 export const ProbeTargetRequestSchema = z.object({
-  url:     z.string().url(),
-  timeout: z.number().int().min(500).max(30_000).optional(),
-  depth:   z.number().int().min(1).max(5).optional(),
+  url:       z.string().url(),
+  scanPorts: z.boolean().optional(),
+  ports:     z.array(z.number().int().min(1).max(65535)).optional(),
+  sshBrute:  z.boolean().optional(),
+});
+
+export const PostExploitRequestSchema = z.object({
+  sshHost:     z.string().min(1).max(512),
+  sshPort:     z.number().int().min(1).max(65535).optional(),
+  sshUser:     z.string().max(128).optional(),
+  sshPassword: z.string().max(512).optional(),
+  sshKey:      z.string().optional(),
+  actions:     z.array(z.string().min(1).max(64)).min(1),
+  timeoutMs:   z.number().int().min(1000).max(120_000).optional(),
+});
+
+export const StreamExecRequestSchema = z.object({
+  cmd:           z.string().min(1).max(4096),
+  engine:        z.string().optional(),
+  mode:          z.string().optional(),
+  injectionUrl:  z.string().optional(),
+  injectParam:   z.string().optional(),
+  httpMethod:    z.enum(["GET","POST","PUT","PATCH","DELETE","OPTIONS","HEAD"]).optional(),
+  customHeaders: z.string().max(2048).optional(),
+  attackerIp:    z.string().max(128).optional(),
+  attackerPort:  z.string().max(10).optional(),
+  sshHost:       z.string().max(512).optional(),
+  sshPort:       z.number().int().min(1).max(65535).optional(),
+  sshUser:       z.string().max(128).optional(),
+  sshPassword:   z.string().max(512).optional(),
+  sshKey:        z.string().optional(),
 });
 
 export const CveExploitRequestSchema = z.object({
-  cveId:   z.string().regex(/^CVE-\d{4}-\d+$/i),
-  target:  z.string().min(1).max(512),
-  lhost:   z.string().optional(),
-  lport:   z.union([z.string(), z.number()]).optional(),
-  options: z.record(z.unknown()).optional(),
-});
+  cveId:      z.string().min(1).max(64),
+  mode:       z.enum(["probe","exploit","differential","ssh_probe","ftp_probe","erlang_ssh","shell"]),
+  targetUrl:  z.string().optional(),
+  targetHost: z.string().max(512).optional(),
+  targetPort: z.number().int().min(1).max(65535).optional(),
+}).passthrough();
 
-export type ScanRequest          = z.infer<typeof ScanRequestSchema>;
-export type ExploitChainRequest  = z.infer<typeof ExploitChainRequestSchema>;
-export type AutoExploitRequest   = z.infer<typeof AutoExploitRequestSchema>;
-export type MutationScanRequest  = z.infer<typeof MutationScannerRequestSchema>;
-export type ChainReactorRequest  = z.infer<typeof ChainReactorRequestSchema>;
-export type C2RelayRequest       = z.infer<typeof C2RelayRequestSchema>;
-export type IronWormScanRequest  = z.infer<typeof IronWormScanRequestSchema>;
-export type ProbeTargetRequest   = z.infer<typeof ProbeTargetRequestSchema>;
-export type CveExploitRequest    = z.infer<typeof CveExploitRequestSchema>;
+export type ScanRequest            = z.infer<typeof ScanRequestSchema>;
+export type ExploitChainRequest    = z.infer<typeof ExploitChainRequestSchema>;
+export type AutoExploitRequest     = z.infer<typeof AutoExploitRequestSchema>;
+export type MutationScanRequest    = z.infer<typeof MutationScannerRequestSchema>;
+export type ChainReactorRequest    = z.infer<typeof ChainReactorRequestSchema>;
+export type C2RelayRequest         = z.infer<typeof C2RelayRequestSchema>;
+export type C2OperatorCommand      = z.infer<typeof C2OperatorCommandSchema>;
+export type IronWormScanRequest    = z.infer<typeof IronWormScanRequestSchema>;
+export type ProbeTargetRequest     = z.infer<typeof ProbeTargetRequestSchema>;
+export type PostExploitRequest     = z.infer<typeof PostExploitRequestSchema>;
+export type StreamExecRequest      = z.infer<typeof StreamExecRequestSchema>;
+export type CveExploitRequest      = z.infer<typeof CveExploitRequestSchema>;

@@ -18,11 +18,9 @@ router.get("/logs", async (req: Request, res: Response) => {
   if (engine) logs = logs.filter(l => l.engine?.toLowerCase() === engine);
   if (since)  logs = logs.filter(l => new Date(l.timestamp).getTime() >= since);
   if (until)  logs = logs.filter(l => new Date(l.timestamp).getTime() <= until);
-
-  const total  = logs.length;
   const paged  = logs.slice(offset, offset + limit);
 
-  res.json({ total, offset, limit, logs: paged });
+  res.json(paged);
 });
 
 /* ── DELETE /logs — clear all logs ─────────────────────────────────── */

@@ -2149,7 +2149,7 @@ export default function MainLab() {
                     </tr>
                   </thead>
                   <tbody>
-                    {logs?.map((l)=>(
+                    {Array.isArray(logs) && logs.map((l)=>(
                       <tr key={l.id} className="border-t border-zinc-900 hover:bg-zinc-900/30">
                         <td className="px-2 py-0.5 text-zinc-600">{new Date(l.timestamp).toLocaleTimeString()}</td>
                         <td className="px-2 py-0.5"><span className={`uppercase ${MODE_COLOR[l.mode]??"text-zinc-400"}`}>{l.mode}</span></td>

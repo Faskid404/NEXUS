@@ -12,9 +12,10 @@ export const WS_CHANNEL_META: ReadonlyArray<{ path: string; label: string; group
   { path: "/api/ws/cve",          label: "CVE Exploit",      group: "AUTO" },
   { path: "/api/ws/mutation",     label: "Mutation Scanner", group: "SCAN" },
   { path: "/api/ws/chainreactor", label: "Chain Reactor",    group: "SCAN" },
-  { path: "/api/ws/c2",           label: "C2 Operator",      group: "C2"   },
-  { path: "/api/ws/c2-implant",   label: "C2 Implant",       group: "C2"   },
-  { path: "/api/ws/c2-sniffer",   label: "C2 Sniffer",       group: "C2"   },
+  { path: "/api/ws/c2",           label: "C2 Operator",      group: "C2"       },
+  { path: "/api/ws/c2-implant",   label: "C2 Implant",       group: "C2"       },
+  { path: "/api/ws/c2-sniffer",   label: "C2 Sniffer",       group: "C2"       },
+  { path: "/api/ws/ironworm",     label: "IronWorm Scanner", group: "IRONWORM" },
 ];
 
 export function incChannel(path: string): void {

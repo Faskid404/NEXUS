@@ -53,18 +53,24 @@ function xorCipher(data: Uint8Array, key: Uint8Array): Uint8Array {
   return out;
 }
 
+// TypeScript 5.9+ requires a concrete ArrayBuffer (not ArrayBufferLike) for
+// Web Crypto API calls. This helper ensures we always pass a fresh ArrayBuffer.
+function toArrayBuffer(u: Uint8Array): ArrayBuffer {
+  return u.buffer.slice(u.byteOffset, u.byteOffset + u.byteLength) as ArrayBuffer;
+}
+
 async function importHmacKey(keyBytes: Uint8Array): Promise<CryptoKey> {
-  return crypto.subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
+  return crypto.subtle.importKey("raw", toArrayBuffer(keyBytes), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
 }
 
 async function hmacSign(keyBytes: Uint8Array, data: Uint8Array): Promise<Uint8Array> {
   const k = await importHmacKey(keyBytes);
-  return new Uint8Array(await crypto.subtle.sign("HMAC", k, data));
+  return new Uint8Array(await crypto.subtle.sign("HMAC", k, toArrayBuffer(data)));
 }
 
 async function hmacVerify(keyBytes: Uint8Array, data: Uint8Array, sig: Uint8Array): Promise<boolean> {
   const k = await importHmacKey(keyBytes);
-  return crypto.subtle.verify("HMAC", k, sig, data);
+  return crypto.subtle.verify("HMAC", k, toArrayBuffer(sig), toArrayBuffer(data));
 }
 
 function toHexDump(bytes: Uint8Array): string {

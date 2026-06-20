@@ -5,6 +5,7 @@ import { randomBytes } from "crypto";
 import { tmpdir } from "os";
 import { join } from "path";
 import { readFile, unlink } from "fs/promises";
+import { MutationScannerRequestSchema } from "../lib/schemas.js";
 
 const execFileP = promisify(execFileCb);
 
@@ -198,17 +199,24 @@ function detectOutput(body: string): string | null {
 
 export function handleMutationScanner(ws: WebSocket): void {
   ws.once("message", raw => {
-    let params: Record<string, unknown>;
-    try { params = JSON.parse(raw.toString()); }
-    catch { ws.close(); return; }
+    let parsed: unknown;
+    try { parsed = JSON.parse(raw.toString()); }
+    catch { send(ws, { type: "error", message: "invalid JSON" }); ws.close(); return; }
 
-    const targetUrl    = (params["targetUrl"]    as string ?? "").trim();
-    const injectParam  = (params["injectParam"]  as string ?? "cmd").trim();
-    const httpMethod   = ((params["httpMethod"]  as string ?? "GET")).toUpperCase();
-    const generations  = Math.min(Math.max(parseInt(params["generations"] as string ?? "6", 10), 2), 12);
-    const popSize      = Math.min(Math.max(parseInt(params["popSize"]     as string ?? "20", 10), 8), 40);
-    const extraParams  = ((params["extraParams"] as string ?? "")).split(",").map(s => s.trim()).filter(Boolean);
-    const customHdrs   = params["customHeaders"] as string ?? "";
+    const validation = MutationScannerRequestSchema.safeParse(parsed);
+    if (!validation.success) {
+      send(ws, { type: "error", message: "validation failed", issues: validation.error.issues });
+      ws.close(); return;
+    }
+
+    const params = validation.data;
+    const targetUrl    = (params.targetUrl ?? "").trim();
+    const injectParam  = (params.injectParam ?? "cmd").trim();
+    const httpMethod   = (params.httpMethod ?? "GET").toUpperCase();
+    const generations  = Math.min(Math.max(params.generations ?? 6, 2), 12);
+    const popSize      = Math.min(Math.max(params.popSize ?? 20, 8), 40);
+    const extraParams  = (params.extraParams ?? "").split(",").map((s: string) => s.trim()).filter(Boolean);
+    const customHdrs   = params.customHeaders ?? "";
 
     if (!targetUrl) { ws.close(); return; }
 

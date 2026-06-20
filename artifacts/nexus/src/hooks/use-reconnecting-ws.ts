@@ -1,8 +1,7 @@
 import { useRef, useCallback, useState, useEffect } from "react";
 
 const BASE_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000] as const;
-const MAX_RETRIES    = 6;
-const JITTER_FACTOR  = 0.35; // ±35% random spread
+const JITTER_FACTOR  = 0.35;
 
 function withJitter(base: number): number {
   return Math.round(base * (1 - JITTER_FACTOR / 2 + Math.random() * JITTER_FACTOR));
@@ -18,8 +17,16 @@ export type WsStatus =
 
 export interface ReconnectInfo {
   attempt:     number;
-  maxAttempts: number;
+  maxAttempts: number | "infinite";
   delayMs:     number;
+}
+
+export interface UseReconnectingWsOptions {
+  onMessage:    (msg: unknown) => void;
+  onOpen?:      () => void;
+  onClose?:     (wasClean: boolean) => void;
+  onReconnect?: (info: ReconnectInfo) => void;
+  maxRetries?:  number | "infinite";
 }
 
 export interface UseReconnectingWsReturn {
@@ -30,11 +37,7 @@ export interface UseReconnectingWsReturn {
   send:          (msg: unknown) => void;
 }
 
-export function useReconnectingWs(options: {
-  onMessage: (msg: unknown) => void;
-  onOpen?:   () => void;
-  onClose?:  (wasClean: boolean) => void;
-}): UseReconnectingWsReturn {
+export function useReconnectingWs(options: UseReconnectingWsOptions): UseReconnectingWsReturn {
   const [status,        setStatus]        = useState<WsStatus>("idle");
   const [reconnectInfo, setReconnectInfo] = useState<ReconnectInfo | null>(null);
 
@@ -65,7 +68,7 @@ export function useReconnectingWs(options: {
       const old = wsRef.current;
       wsRef.current = null;
       if (old && old.readyState < WebSocket.CLOSING) {
-        try { old.close(1000, "reconnect"); } catch { /* ignore */ }
+        try { old.close(1000, "reconnect"); } catch { }
       }
 
       setStatus("connecting");
@@ -73,7 +76,6 @@ export function useReconnectingWs(options: {
       try {
         ws = new WebSocket(url);
       } catch {
-        // Malformed URL — treat as fatal
         setStatus("failed");
         setReconnectInfo(null);
         cbRef.current.onClose?.(false);
@@ -86,7 +88,7 @@ export function useReconnectingWs(options: {
         attemptRef.current = 0;
         setStatus("open");
         setReconnectInfo(null);
-        try { ws.send(JSON.stringify(payload)); } catch { /* ignore */ }
+        try { ws.send(JSON.stringify(payload)); } catch { }
         cbRef.current.onOpen?.();
       };
 
@@ -95,10 +97,10 @@ export function useReconnectingWs(options: {
         try {
           const data = typeof ev.data === "string" ? JSON.parse(ev.data) : ev.data;
           cbRef.current.onMessage(data);
-        } catch { /* non-JSON frames silently ignored */ }
+        } catch { }
       };
 
-      ws.onerror = () => { /* all detail arrives in onclose */ };
+      ws.onerror = () => { };
 
       ws.onclose = (ev: CloseEvent) => {
         if (ws !== wsRef.current) return;
@@ -112,20 +114,25 @@ export function useReconnectingWs(options: {
           return;
         }
 
-        const attempt = attemptRef.current + 1;
+        const attempt    = attemptRef.current + 1;
+        const maxRetries = cbRef.current.maxRetries ?? 8;
         attemptRef.current = attempt;
 
-        if (attempt > MAX_RETRIES) {
+        if (maxRetries !== "infinite" && attempt > maxRetries) {
           setStatus("failed");
           setReconnectInfo(null);
           cbRef.current.onClose?.(false);
           return;
         }
 
-        const base    = BASE_DELAYS_MS[Math.min(attempt - 1, BASE_DELAYS_MS.length - 1)] ?? 30_000;
+        const baseIdx = Math.min(attempt - 1, BASE_DELAYS_MS.length - 1);
+        const base    = BASE_DELAYS_MS[baseIdx] ?? 30_000;
         const delayMs = withJitter(base);
+        const info: ReconnectInfo = { attempt, maxAttempts: maxRetries, delayMs };
+
         setStatus("reconnecting");
-        setReconnectInfo({ attempt, maxAttempts: MAX_RETRIES, delayMs });
+        setReconnectInfo(info);
+        cbRef.current.onReconnect?.(info);
 
         retryTimerRef.current = setTimeout(() => {
           if (!stoppedRef.current) openSocketRef.current(urlRef.current, payloadRef.current);
@@ -153,7 +160,7 @@ export function useReconnectingWs(options: {
     const ws = wsRef.current;
     wsRef.current = null;
     if (ws && ws.readyState < WebSocket.CLOSING) {
-      try { ws.close(1000, "user disconnect"); } catch { /* ignore */ }
+      try { ws.close(1000, "user disconnect"); } catch { }
     }
     setStatus("closed");
     setReconnectInfo(null);
@@ -163,7 +170,7 @@ export function useReconnectingWs(options: {
   const send = useCallback((msg: unknown) => {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    try { ws.send(JSON.stringify(msg)); } catch { /* ignore send failures */ }
+    try { ws.send(JSON.stringify(msg)); } catch { }
   }, []);
 
   useEffect(
@@ -173,7 +180,7 @@ export function useReconnectingWs(options: {
       const ws = wsRef.current;
       wsRef.current = null;
       if (ws && ws.readyState < WebSocket.CLOSING) {
-        try { ws.close(1000, "unmount"); } catch { /* ignore */ }
+        try { ws.close(1000, "unmount"); } catch { }
       }
     },
     [cancelRetry],

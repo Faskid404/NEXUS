@@ -2,15 +2,8 @@ import type { WebSocket } from "ws";
 import { KILL_CHAINS, getKillChain, type ChainStep, type KillChain } from "../lib/chainReactor.js";
 import { tcpProbe, dispatchPort } from "../lib/exploitEngine.js";
 import { logger } from "../lib/logger.js";
-
-interface ReactorRequest {
-  chainId?:   string;
-  custom?:    KillChain;
-  target?:    string;
-  lhost?:     string;
-  lport?:     string | number;
-  extraVars?: Record<string, string>;
-}
+import { ChainReactorRequestSchema, ChainReactorAbortSchema } from "../lib/schemas.js";
+import { withRetry } from "../lib/retry.js";
 
 interface StepResult {
   stepId:  string;
@@ -20,9 +13,9 @@ interface StepResult {
   elapsed: number;
 }
 
-function send(ws: WebSocket, obj: unknown): void {
+function wsend(ws: WebSocket, obj: unknown): void {
   if (ws.readyState === 1) {
-    try { ws.send(JSON.stringify(obj)); } catch { /* closed mid-send */ }
+    try { ws.send(JSON.stringify(obj)); } catch { }
   }
 }
 
@@ -35,7 +28,7 @@ async function execStep(
   vars: Record<string, string>,
   abortRef: { aborted: boolean },
 ): Promise<StepResult> {
-  const t0 = Date.now();
+  const t0   = Date.now();
   const name = interpolate(step.name, vars);
 
   if (abortRef.aborted) {
@@ -49,13 +42,19 @@ async function execStep(
     }
 
     if (step.type === "port_exploit") {
-      const target  = interpolate(step.target ?? "TARGET", vars);
-      const port    = step.port ?? 80;
-      const isOpen  = await tcpProbe(target, port, step.timeout ?? 4000);
+      const target = interpolate(step.target ?? "TARGET", vars);
+      const port   = step.port ?? 80;
+
+      const isOpen = await withRetry(() => tcpProbe(target, port, step.timeout ?? 4000), {
+        attempts: 2,
+        baseMs:   500,
+      });
+
       if (!isOpen) {
         return { stepId: step.id, name, status: "failed", output: `${target}:${port} — closed/filtered`, elapsed: Date.now() - t0 };
       }
-      const res = await dispatchPort(target, port);
+
+      const res = await withRetry(() => dispatchPort(target, port), { attempts: 2, baseMs: 1000 });
       return {
         stepId: step.id, name,
         status: res.status === "success" ? "success" : "failed",
@@ -68,24 +67,29 @@ async function execStep(
       const rawUrl = interpolate(step.url ?? "http://127.0.0.1/", vars);
       const method = (step.method ?? "GET").toUpperCase();
       const payload = step.payload ? interpolate(step.payload, vars) : undefined;
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), step.timeout ?? 8000);
+
       let status = 0;
       let body   = "";
-      try {
-        const headers: Record<string, string> = { "User-Agent": "Mozilla/5.0" };
-        if (payload) headers["Content-Type"] = "application/json";
-        const resp = await fetch(rawUrl, {
-          method,
-          headers,
-          body:   payload,
-          signal: controller.signal,
-        });
-        status = resp.status;
-        body   = (await resp.text()).slice(0, 2000);
-      } finally {
-        clearTimeout(timer);
-      }
+
+      await withRetry(async () => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), step.timeout ?? 8000);
+        try {
+          const reqHeaders: Record<string, string> = { "User-Agent": "Mozilla/5.0" };
+          if (payload) reqHeaders["Content-Type"] = "application/json";
+          const resp = await fetch(rawUrl, {
+            method,
+            headers: reqHeaders,
+            body:    payload,
+            signal:  controller.signal,
+          });
+          status = resp.status;
+          body   = (await resp.text()).slice(0, 2000);
+        } finally {
+          clearTimeout(timer);
+        }
+      }, { attempts: 2, baseMs: 800 });
+
       const wantCode = step.successIf ? parseInt(step.successIf, 10) : 200;
       const ok = status === wantCode || (step.successIf === "200" && status >= 200 && status < 300);
       return {
@@ -98,11 +102,7 @@ async function execStep(
 
     if (step.type === "custom") {
       const cmd = step.cmd ? interpolate(step.cmd, vars) : "(no command)";
-      return {
-        stepId: step.id, name, status: "info",
-        output: `RUN:\n${cmd}`,
-        elapsed: Date.now() - t0,
-      };
+      return { stepId: step.id, name, status: "info", output: `RUN:\n${cmd}`, elapsed: Date.now() - t0 };
     }
 
     return { stepId: step.id, name, status: "info", output: "Unknown step type", elapsed: Date.now() - t0 };
@@ -117,38 +117,48 @@ async function execStep(
 
 export function handleChainReactor(ws: WebSocket): void {
   ws.once("message", (raw) => {
-    let req: ReactorRequest;
+    let parsed: unknown;
     try {
-      req = JSON.parse(raw.toString()) as ReactorRequest;
+      parsed = JSON.parse(raw.toString());
     } catch {
-      send(ws, { type: "error", message: "invalid JSON" });
+      wsend(ws, { type: "error", message: "invalid JSON" });
       ws.close();
       return;
     }
 
+    const result = ChainReactorRequestSchema.safeParse(parsed);
+    if (!result.success) {
+      wsend(ws, { type: "error", message: "validation failed", issues: result.error.issues });
+      ws.close();
+      return;
+    }
+
+    const req      = result.data;
     const abortRef = { aborted: false };
-    ws.on("close",   () => { abortRef.aborted = true; });
+
+    ws.on("close", () => { abortRef.aborted = true; });
     ws.on("message", (m) => {
       try {
-        const msg = JSON.parse(m.toString()) as { type?: string };
-        if (msg.type === "abort") abortRef.aborted = true;
-      } catch { /* ignore */ }
+        const ctrl = JSON.parse(m.toString());
+        const abort = ChainReactorAbortSchema.safeParse(ctrl);
+        if (abort.success) abortRef.aborted = true;
+      } catch { }
     });
 
     let chain: KillChain | undefined;
     if (req.chainId) {
       chain = getKillChain(req.chainId);
     } else if (req.custom) {
-      chain = req.custom;
+      chain = req.custom as KillChain;
     }
 
     if (!chain) {
-      send(ws, { type: "error", message: `Kill chain '${req.chainId ?? "custom"}' not found` });
+      wsend(ws, { type: "error", message: `Kill chain '${req.chainId ?? "custom"}' not found` });
       ws.close();
       return;
     }
 
-    const target = (req.target ?? "127.0.0.1").trim().replace(/[^a-zA-Z0-9.\-_:\[\]]/g, "");
+    const target = (req.target ?? "127.0.0.1").trim().replace(/[^a-zA-Z0-9.\-_:[\]]/g, "");
     const lhost  = (req.lhost  ?? "127.0.0.1").trim();
     const lport  = String(req.lport ?? "4444").trim();
 
@@ -162,11 +172,11 @@ export function handleChainReactor(ws: WebSocket): void {
     logger.info({ chain: chain.id, target, steps: chain.steps.length }, "ws/chainreactor start");
 
     const run = async (): Promise<void> => {
-      send(ws, {
-        type:     "chain_start",
-        chainId:  chain!.id,
-        name:     chain!.name,
-        total:    chain!.steps.length,
+      wsend(ws, {
+        type:    "chain_start",
+        chainId: chain!.id,
+        name:    chain!.name,
+        total:   chain!.steps.length,
         target,
         lhost,
         lport,
@@ -177,35 +187,37 @@ export function handleChainReactor(ws: WebSocket): void {
 
       for (const step of chain!.steps) {
         if (abortRef.aborted) {
-          send(ws, { type: "step_skip", stepId: step.id, name: step.name, reason: "aborted" });
+          wsend(ws, { type: "step_skip", stepId: step.id, name: step.name, reason: "aborted" });
           continue;
         }
 
-        send(ws, { type: "step_start", stepId: step.id, name: step.name, stepType: step.type });
+        wsend(ws, { type: "step_start", stepId: step.id, name: step.name, stepType: step.type });
 
-        const result = await execStep(step, vars, abortRef);
+        const res = await execStep(step, vars, abortRef);
+        wsend(ws, { type: "step_result", ...res });
 
-        send(ws, { type: "step_result", ...result });
+        if (res.status === "success") succeeded++;
+        if (res.status === "failed")  failed++;
 
-        if (result.status === "success") succeeded++;
-        if (result.status === "failed")  failed++;
-
-        if (result.status === "failed" && step.failAction === "abort") {
+        if (res.status === "failed" && step.failAction === "abort") {
           abortRef.aborted = true;
-          send(ws, { type: "step_abort", stepId: step.id, reason: "failAction=abort" });
+          wsend(ws, { type: "step_abort", stepId: step.id, reason: "failAction=abort" });
           break;
         }
 
-        if (!abortRef.aborted) await new Promise(r => setTimeout(r, 150));
+        if (!abortRef.aborted) {
+          const delay = 150 + Math.random() * 100;
+          await new Promise(r => setTimeout(r, delay));
+        }
       }
 
-      send(ws, {
-        type:      "chain_end",
-        chainId:   chain!.id,
+      wsend(ws, {
+        type:     "chain_end",
+        chainId:  chain!.id,
         succeeded,
         failed,
-        aborted:   abortRef.aborted,
-        total:     chain!.steps.length,
+        aborted:  abortRef.aborted,
+        total:    chain!.steps.length,
       });
       ws.close();
     };
@@ -213,5 +225,8 @@ export function handleChainReactor(ws: WebSocket): void {
     void run();
   });
 
-  send(ws, { type: "ready", chains: KILL_CHAINS.map(c => ({ id: c.id, name: c.name, category: c.category, steps: c.steps.length })) });
+  wsend(ws, {
+    type:   "ready",
+    chains: KILL_CHAINS.map(c => ({ id: c.id, name: c.name, category: c.category, steps: c.steps.length })),
+  });
 }

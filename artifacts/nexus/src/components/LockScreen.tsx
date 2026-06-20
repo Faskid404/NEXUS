@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 
 const API_URL = (import.meta.env as Record<string, string>)["VITE_API_URL"] ?? "";
-const REQUIRED_PREFIX = "omowoli12345@";
 
 export default function LockScreen({ onUnlock }: { onUnlock: (token: string) => void }) {
   const [value,    setValue]    = useState("");
@@ -10,7 +9,6 @@ export default function LockScreen({ onUnlock }: { onUnlock: (token: string) => 
   const [loading,  setLoading]  = useState(false);
   const [shake,    setShake]    = useState(false);
   const [ready,    setReady]    = useState(false);
-  const [hint,     setHint]     = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -29,12 +27,6 @@ export default function LockScreen({ onUnlock }: { onUnlock: (token: string) => 
   const attempt = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!value.trim() || loading) return;
-    if (!value.startsWith(REQUIRED_PREFIX)) {
-      triggerError("Invalid format — check password", true);
-      setHint(true);
-      setTimeout(() => setHint(false), 4000);
-      return;
-    }
     setLoading(true);
     setError(false);
     try {
@@ -45,8 +37,6 @@ export default function LockScreen({ onUnlock }: { onUnlock: (token: string) => 
       });
       if (res.ok) {
         const { token } = await res.json() as { token: string };
-        // setLoading(false) not needed — onUnlock transitions away from this component,
-        // but we call it defensively so if the parent keeps us mounted we are not stuck.
         setLoading(false);
         onUnlock(token);
         return;
@@ -72,7 +62,6 @@ export default function LockScreen({ onUnlock }: { onUnlock: (token: string) => 
         @keyframes nf-glow  { 0%,100%{text-shadow:0 0 32px rgba(220,38,38,.45)} 50%{text-shadow:0 0 64px rgba(220,38,38,.75),0 0 120px rgba(220,38,38,.2)} }
         @keyframes nf-err   { 0%,100%{opacity:0;transform:translateY(-4px)} 15%,85%{opacity:1;transform:translateY(0)} }
         @keyframes nf-spin  { to { transform: rotate(360deg) } }
-        @keyframes nf-hint  { 0%,100%{opacity:0} 15%,85%{opacity:1} }
         @keyframes nf-scan  { 0%{transform:translateY(-100%)} 100%{transform:translateY(100vh)} }
       `}</style>
 
@@ -111,20 +100,10 @@ export default function LockScreen({ onUnlock }: { onUnlock: (token: string) => 
                 spellCheck={false}
                 className="w-full bg-black/60 border text-white text-sm px-4 py-3 placeholder-zinc-700 focus:outline-none transition-colors tracking-widest"
                 style={{
-                  borderColor: error ? "rgba(220,38,38,.7)" :
-                    value.length > 0 && !value.startsWith(REQUIRED_PREFIX) ? "rgba(234,88,12,.5)" :
-                    "rgba(255,255,255,.08)",
-                  boxShadow: error ? "0 0 0 1px rgba(220,38,38,.3), inset 0 0 24px rgba(220,38,38,.04)" :
-                    value.length > 0 && !value.startsWith(REQUIRED_PREFIX) ? "0 0 0 1px rgba(234,88,12,.2)" : "none",
+                  borderColor: error ? "rgba(220,38,38,.7)" : "rgba(255,255,255,.08)",
+                  boxShadow:   error ? "0 0 0 1px rgba(220,38,38,.3), inset 0 0 24px rgba(220,38,38,.04)" : "none",
                 }}
               />
-              {value.length > 0 && (
-                <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                  {value.startsWith(REQUIRED_PREFIX)
-                    ? <div className="w-1.5 h-1.5 rounded-full bg-green-500" />
-                    : <div className="w-1.5 h-1.5 rounded-full bg-orange-600" />}
-                </div>
-              )}
             </div>
 
             {error && (
@@ -133,19 +112,13 @@ export default function LockScreen({ onUnlock }: { onUnlock: (token: string) => 
                 {errorMsg}
               </p>
             )}
-            {hint && !error && (
-              <p className="text-[9px] text-orange-700 tracking-[.1em] uppercase text-center"
-                style={{ animation:"nf-hint 4s ease forwards" }}>
-                Credential format mismatch
-              </p>
-            )}
 
             <button type="submit" disabled={loading || !value.trim()}
               className="w-full py-3 text-[11px] font-bold uppercase tracking-[.3em] transition-all border disabled:opacity-30"
               style={{
-                background: loading||!value.trim() ? "transparent" : "rgba(220,38,38,.12)",
+                background:  loading||!value.trim() ? "transparent" : "rgba(220,38,38,.12)",
                 borderColor: loading||!value.trim() ? "rgba(255,255,255,.07)" : "rgba(220,38,38,.5)",
-                color: loading||!value.trim() ? "#52525b" : "#f87171",
+                color:       loading||!value.trim() ? "#52525b" : "#f87171",
               }}>
               {loading
                 ? <span className="inline-block w-3 h-3 border border-red-500 border-t-transparent rounded-full" style={{ animation:"nf-spin .7s linear infinite" }} />

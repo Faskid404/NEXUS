@@ -4,6 +4,7 @@ import app from "./app.js";
 import { logger } from "./lib/logger.js";
 import { setTunnelUrl, initTunnelUrl } from "./lib/tunnelUrl.js";
 import { verifyWsToken } from "./middlewares/requireAuth.js";
+import { incChannel, decChannel } from "./lib/wsStats.js";
 import { handleStreamExec }      from "./ws/streamExec.js";
 import { handleScanTarget }      from "./ws/scanTarget.js";
 import { handleExploitChain }    from "./ws/exploitChain.js";
@@ -77,26 +78,28 @@ server.on("upgrade", (req, socket, head) => {
   }
 
   /* — Route to the appropriate handler ———————————————————— */
-  const wrap = (handler: (ws: import("ws").WebSocket) => void) =>
+  const wrap = (handler: (ws: import("ws").WebSocket) => void, path: string) =>
     (ws: import("ws").WebSocket) => {
       activeWsConns++;
+      incChannel(path);
       attachHeartbeat(ws);
+      ws.on("close", () => decChannel(path));
       handler(ws);
     };
 
   const routes: Record<string, (ws: import("ws").WebSocket) => void> = {
-    "/api/ws/exec":        wrap(handleStreamExec),
-    "/api/ws/scan":        wrap(handleScanTarget),
-    "/api/ws/chain":       wrap(handleExploitChain),
-    "/api/ws/probe":       wrap(handleProbeTarget),
-    "/api/ws/autoexploit": wrap(handleAutoExploit),
-    "/api/ws/postexploit": wrap(handlePostExploit),
-    "/api/ws/cve":         wrap(handleCveExploit),
-    "/api/ws/mutation":    wrap(handleMutationScanner),
-    "/api/ws/chainreactor":wrap(handleChainReactor),
-    "/api/ws/c2":          wrap(handleC2Operator),
-    "/api/ws/c2-implant":  wrap(handleC2Implant),
-    "/api/ws/c2-sniffer":  wrap(handleC2Sniffer),
+    "/api/ws/exec":         wrap(handleStreamExec,       "/api/ws/exec"),
+    "/api/ws/scan":         wrap(handleScanTarget,        "/api/ws/scan"),
+    "/api/ws/chain":        wrap(handleExploitChain,      "/api/ws/chain"),
+    "/api/ws/probe":        wrap(handleProbeTarget,       "/api/ws/probe"),
+    "/api/ws/autoexploit":  wrap(handleAutoExploit,       "/api/ws/autoexploit"),
+    "/api/ws/postexploit":  wrap(handlePostExploit,       "/api/ws/postexploit"),
+    "/api/ws/cve":          wrap(handleCveExploit,        "/api/ws/cve"),
+    "/api/ws/mutation":     wrap(handleMutationScanner,   "/api/ws/mutation"),
+    "/api/ws/chainreactor": wrap(handleChainReactor,      "/api/ws/chainreactor"),
+    "/api/ws/c2":           wrap(handleC2Operator,        "/api/ws/c2"),
+    "/api/ws/c2-implant":   wrap(handleC2Implant,         "/api/ws/c2-implant"),
+    "/api/ws/c2-sniffer":   wrap(handleC2Sniffer,         "/api/ws/c2-sniffer"),
   };
 
   const handler = routes[pathname];

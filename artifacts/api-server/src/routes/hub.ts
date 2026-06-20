@@ -1,4 +1,5 @@
 import { Router, type IRouter, type Request, type Response } from "express";
+import { getWsStats, WS_CHANNEL_META } from "../lib/wsStats.js";
 import {
   applyQuantumBypass,
   buildPayloadVariants,
@@ -488,6 +489,11 @@ router.post("/hub/exec", async (req: Request, res: Response) => {
     const msg = (e as Error).message ?? String(e);
     res.status(500).json({ error: msg });
   }
+});
+
+router.get("/hub/ws-stats", (_req: Request, res: Response) => {
+  const stats = getWsStats();
+  res.json({ ...stats, channels_meta: WS_CHANNEL_META });
 });
 
 export default router;

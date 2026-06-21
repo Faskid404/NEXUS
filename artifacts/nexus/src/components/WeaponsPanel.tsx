@@ -20,10 +20,10 @@ interface VeilPayload   { id:string; name:string; category:string; os:string; ph
 interface ChainMeta     { id:string; name:string; description:string; category:string; severity:string; steps:number; }
 interface C2Payload     { id:string; name:string; description:string; os:string; engine:string; command:string; }
 
-type SubTab = "ECHOVAULT" | "SHADOWFORGE" | "VEILRUNNER" | "CHAINREACTOR" | "C2POLLER";
-const SUB_TABS: SubTab[] = ["ECHOVAULT","SHADOWFORGE","VEILRUNNER","CHAINREACTOR","C2POLLER"];
+type SubTab = "ECHOVAULT" | "SHADOWFORGE" | "VEILRUNNER" | "CHAINREACTOR" | "C2POLLER" | "PROBETARGET";
+const SUB_TABS: SubTab[] = ["ECHOVAULT","SHADOWFORGE","VEILRUNNER","CHAINREACTOR","C2POLLER","PROBETARGET"];
 
-const VEIL_CATS = ["All","Anti-Forensics","EDR-Evasion","LOTL-Linux","Supply-Chain","CI-CD","Container-Escape","K8s-Abuse","Cloud-Pivot","AppArmor-Bypass","Syscall-Bypass"];
+const VEIL_CATS = ["All","Anti-Forensics","EDR-Evasion","LOTL-Linux","Supply-Chain","CI-CD","Container-Escape","K8s-Abuse","Cloud-Pivot","AppArmor-Bypass","Syscall-Bypass","Credential-Dump","Persistence"];
 
 const SEVERITY_COLOR: Record<string, string> = {
   critical: "text-red-500 border-red-900 bg-red-950/20",
@@ -633,6 +633,162 @@ function C2PollerTab() {
   );
 }
 
+interface ProbeEnv { server:string; language:string; framework:string; cms:string; waf:string|null; wafConfidence:string; cdn?:string; ip?:string; }
+interface ProbeSvc { port:number; service:string; banner:string; version?:string; cveHints:string[]; }
+interface ProbeDisc { paths:string[]; techs:string[]; }
+
+function ProbeTargetTab() {
+  const [url,       setUrl]       = useState("https://");
+  const [scanPorts, setScanPorts] = useState(false);
+  const [sshBrute,  setSshBrute]  = useState(false);
+  const [running,   setRunning]   = useState(false);
+  const [log,       setLog]       = useState<string[]>([]);
+  const [env,       setEnv]       = useState<ProbeEnv|null>(null);
+  const [svcs,      setSvcs]      = useState<ProbeSvc[]>([]);
+  const [disc,      setDisc]      = useState<ProbeDisc|null>(null);
+  const wsRef = useRef<WebSocket|null>(null);
+  const logRef = useRef<HTMLDivElement|null>(null);
+
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [log]);
+
+  const stop = useCallback(() => {
+    wsRef.current?.close();
+    wsRef.current = null;
+    setRunning(false);
+  }, []);
+
+  const probe = useCallback(() => {
+    if (!url || running) return;
+    setLog([]); setEnv(null); setSvcs([]); setDisc(null); setRunning(true);
+    const ws = new WebSocket(`${wsBase()}/probeTarget`);
+    wsRef.current = ws;
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ url, scanPorts, sshBrute, ...authHeaders() }));
+    };
+    ws.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data as string) as Record<string,unknown>;
+        if (msg.type === "progress") {
+          setLog(l => [...l, String(msg.message ?? "")]);
+        } else if (msg.type === "result") {
+          const r = msg.env as ProbeEnv;
+          setEnv(r);
+          setLog(l => [...l, `✓ Server: ${r.server||"?"} | Lang: ${r.language||"?"} | Framework: ${r.framework||"?"} | WAF: ${r.waf||"none"}`]);
+        } else if (msg.type === "service_fingerprints") {
+          const list = (msg.services as ProbeSvc[]) ?? [];
+          setSvcs(list);
+          setLog(l => [...l, `✓ ${list.length} service(s) fingerprinted`]);
+        } else if (msg.type === "web_discovery") {
+          const d = msg.discovery as ProbeDisc;
+          setDisc(d);
+          setLog(l => [...l, `✓ ${d.paths?.length??0} paths discovered`]);
+        } else if (msg.type === "error") {
+          setLog(l => [...l, `✗ ${String(msg.message)}`]);
+        } else if (msg.type === "unreachable") {
+          setLog(l => [...l, `✗ UNREACHABLE: ${String(msg.message)}`]);
+        } else if (msg.type === "end") {
+          setRunning(false);
+        }
+      } catch { }
+    };
+    ws.onerror = () => { setLog(l => [...l, "✗ WebSocket error"]); setRunning(false); };
+    ws.onclose = () => setRunning(false);
+  }, [url, scanPorts, sshBrute, running]);
+
+  const WAF_COLOR: Record<string,string> = {
+    high:"text-red-400", medium:"text-orange-400", low:"text-yellow-400",
+  };
+
+  return (
+    <div className="flex flex-col gap-2 h-full">
+      <div className="flex flex-wrap gap-2 items-end shrink-0">
+        <Field label="Target URL">
+          <input value={url} onChange={e=>setUrl(e.target.value)}
+            placeholder="https://target.example.com"
+            className="bg-zinc-950 border border-zinc-800 text-[11px] text-zinc-200 px-2 py-1 font-mono w-72"/>
+        </Field>
+        <label className="flex items-center gap-1.5 text-[10px] text-zinc-400 cursor-pointer self-end pb-1">
+          <input type="checkbox" checked={scanPorts} onChange={e=>setScanPorts(e.target.checked)} className="accent-red-500"/>
+          TCP scan
+        </label>
+        <label className="flex items-center gap-1.5 text-[10px] text-zinc-400 cursor-pointer self-end pb-1">
+          <input type="checkbox" checked={sshBrute} onChange={e=>setSshBrute(e.target.checked)} className="accent-red-500"/>
+          SSH brute
+        </label>
+        <button onClick={()=> running ? stop() : void probe()}
+          className={`border text-[10px] uppercase px-3 py-1 self-end transition-colors ${running?"border-red-900 text-red-500 hover:bg-red-950/30":"border-cyan-900 text-cyan-500 hover:bg-cyan-950/30"}`}>
+          {running ? "■ STOP" : "▶ PROBE"}
+        </button>
+      </div>
+
+      {env && (
+        <div className="grid grid-cols-2 gap-1 shrink-0 border border-zinc-800 bg-zinc-950 p-2">
+          {[
+            ["Server",    env.server    || "—"],
+            ["Language",  env.language  || "—"],
+            ["Framework", env.framework || "—"],
+            ["CMS",       (env as Record<string,string>)["cms"] || "—"],
+            ["CDN",       env.cdn        || "—"],
+            ["IP",        env.ip         || "—"],
+          ].map(([k,v]) => (
+            <div key={k} className="flex gap-1 items-baseline">
+              <span className="text-[9px] text-zinc-600 uppercase w-16 shrink-0">{k}</span>
+              <span className="text-[10px] text-cyan-300 font-mono truncate">{v}</span>
+            </div>
+          ))}
+          {env.waf !== null && (
+            <div className="col-span-2 flex gap-1 items-baseline">
+              <span className="text-[9px] text-zinc-600 uppercase w-16 shrink-0">WAF</span>
+              <span className={`text-[10px] font-mono ${WAF_COLOR[env.wafConfidence]??"text-zinc-400"}`}>
+                {env.waf ?? "none"} <span className="text-zinc-600">({env.wafConfidence})</span>
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {svcs.length > 0 && (
+        <div className="shrink-0 border border-zinc-800 bg-zinc-950 px-2 py-1">
+          <div className="text-[9px] text-zinc-600 uppercase mb-1">Open Services</div>
+          <div className="space-y-0.5 max-h-24 overflow-y-auto">
+            {svcs.map((s,i) => (
+              <div key={i} className="flex gap-2 items-baseline text-[10px] font-mono">
+                <span className="text-yellow-400 w-10 shrink-0">{s.port}</span>
+                <span className="text-zinc-300 w-20 shrink-0">{s.service}</span>
+                {s.version && <span className="text-zinc-500">{s.version}</span>}
+                {s.cveHints.length > 0 && <span className="text-red-400 text-[9px]">{s.cveHints.slice(0,2).join(" ")}</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {disc && disc.paths.length > 0 && (
+        <div className="shrink-0 border border-zinc-800 bg-zinc-950 px-2 py-1">
+          <div className="text-[9px] text-zinc-600 uppercase mb-1">Discovered Paths ({disc.paths.length})</div>
+          <div className="flex flex-wrap gap-1 max-h-16 overflow-y-auto">
+            {disc.paths.slice(0,30).map((p,i) => (
+              <span key={i} className="text-[9px] font-mono text-green-400 bg-zinc-900 px-1">{p}</span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div ref={logRef} className="flex-1 overflow-y-auto bg-zinc-950 border border-zinc-900 p-2 font-mono min-h-0">
+        {log.length === 0 && !running && (
+          <span className="text-[10px] text-zinc-700">Enter a target URL and press PROBE to fingerprint the stack.</span>
+        )}
+        {log.map((l,i) => (
+          <div key={i} className={`text-[10px] leading-5 whitespace-pre-wrap ${l.startsWith("✓")?"text-green-400":l.startsWith("✗")?"text-red-400":"text-zinc-400"}`}>{l}</div>
+        ))}
+        {running && <div className="text-[10px] text-cyan-500 animate-pulse">● scanning…</div>}
+      </div>
+    </div>
+  );
+}
+
 export default function WeaponsPanel() {
   const [subTab, setSubTab] = useState<SubTab>("ECHOVAULT");
 
@@ -642,6 +798,7 @@ export default function WeaponsPanel() {
     VEILRUNNER:  "text-red-400    border-red-900",
     CHAINREACTOR:"text-orange-400 border-orange-900",
     C2POLLER:    "text-emerald-400 border-emerald-900",
+    PROBETARGET: "text-yellow-400  border-yellow-900",
   };
   const SUB_DESC: Record<SubTab,string> = {
     ECHOVAULT:   "Domain-Fronting · DoH · SNI · HTTP Steganography · Cloud Dead-Drop",
@@ -649,6 +806,7 @@ export default function WeaponsPanel() {
     VEILRUNNER:  "eBPF Evasion · Falco Bypass · seccomp/AppArmor Bypass · LOTL · Container Escape · K8s/Cloud",
     CHAINREACTOR:"Real-Time Kill Chain Orchestrator — Log4Shell · Spring4Shell · MongoDB · YARN · C2 Deploy",
     C2POLLER:    "GitHub Gist / Pastebin Dead-Drop Poller — XOR Encrypted · Jitter · Persistent · Self-Destruct",
+    PROBETARGET: "Live Target Fingerprint — Server · Language · Framework · WAF · CDN · TCP Services · Path Discovery",
   };
 
   return (
@@ -673,6 +831,7 @@ export default function WeaponsPanel() {
         {subTab === "VEILRUNNER"   && <VeilRunnerTab />}
         {subTab === "CHAINREACTOR" && <ChainReactorTab />}
         {subTab === "C2POLLER"     && <C2PollerTab />}
+        {subTab === "PROBETARGET"  && <ProbeTargetTab />}
       </div>
     </div>
   );

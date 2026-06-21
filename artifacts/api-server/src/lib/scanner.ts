@@ -306,3 +306,105 @@ export async function fullScan(
     elapsed:    Date.now() - t0,
   };
 }
+
+export interface StealthScanOpts {
+  ports?:         number[];
+  timeoutMs?:     number;
+  jitterMinMs?:   number;
+  jitterMaxMs?:   number;
+  concurrency?:   number;
+  decoyRatio?: number;
+}
+
+export interface PrioritizedHost {
+  host:     string;
+  priority: number;
+  source:   "known_hosts" | "arp" | "proc_net" | "cidr";
+}
+
+export function buildPrioritizedHostList(cidrHosts: string[]): PrioritizedHost[] {
+  const result = new Map<string, PrioritizedHost>();
+
+  const addHost = (host: string, source: PrioritizedHost["source"], priority: number) => {
+    const existing = result.get(host);
+    if (!existing || priority > existing.priority) {
+      result.set(host, { host, priority, source });
+    }
+  };
+
+  for (const h of parseKnownHosts()) addHost(h, "known_hosts", 3);
+
+  try {
+    const arpOut = execSync("arp -n 2>/dev/null || ip neigh 2>/dev/null", { timeout: 3000 }).toString();
+    for (const m of arpOut.matchAll(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/g)) {
+      if (m[1] && !m[1].startsWith("127.")) addHost(m[1], "arp", 2);
+    }
+  } catch { }
+
+  for (const h of parseProcNetTcp()) addHost(h, "proc_net", 2);
+
+  for (const h of cidrHosts) {
+    if (!result.has(h)) addHost(h, "cidr", 1);
+  }
+
+  return [...result.values()].sort((a, b) => b.priority - a.priority);
+}
+
+export async function scanStealthy(
+  hosts: string[],
+  opts: StealthScanOpts = {},
+): Promise<Map<string, PortResult[]>> {
+  const {
+    ports       = TOP_PORTS,
+    timeoutMs   = 4000,
+    jitterMinMs = 30_000,
+    jitterMaxMs = 300_000,
+    concurrency = 2,
+    decoyRatio  = 0.12,
+  } = opts;
+
+  const results = new Map<string, PortResult[]>();
+  const allHosts = [...hosts];
+
+  const injectDecoys = (list: string[]): string[] => {
+    if (decoyRatio <= 0) return list;
+    const decoyCount = Math.ceil(list.length * decoyRatio);
+    const decoys = Array.from({ length: decoyCount }, () => {
+      const n = Math.floor(Math.random() * 0xffffff);
+      return `10.${(n >> 16) & 0xff}.${(n >> 8) & 0xff}.${n & 0xff}`;
+    });
+    const out = [...list];
+    for (const d of decoys) {
+      const pos = Math.floor(Math.random() * (out.length + 1));
+      out.splice(pos, 0, d);
+    }
+    return out;
+  };
+
+  const shuffledWithDecoys = injectDecoys(allHosts);
+  let i = 0;
+
+  while (i < shuffledWithDecoys.length) {
+    const batch = shuffledWithDecoys.slice(i, i + concurrency);
+    i += concurrency;
+
+    await Promise.all(batch.map(async (host) => {
+      const jitter = jitterMinMs + Math.random() * (jitterMaxMs - jitterMinMs);
+      await new Promise<void>(r => setTimeout(r, jitter));
+
+      try {
+        const portResults = await adaptiveScan(host, ports, {
+          timeoutMs,
+          concurrency: 4,
+          jitterMs:    2000 + Math.random() * 4000,
+          retries:     0,
+          adaptiveDelay: true,
+        });
+        const open = portResults.filter(p => p.open);
+        if (open.length > 0) results.set(host, open);
+      } catch { }
+    }));
+  }
+
+  return results;
+}

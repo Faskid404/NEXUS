@@ -729,7 +729,7 @@ function ProbeTargetTab() {
             ["Server",    env.server    || "—"],
             ["Language",  env.language  || "—"],
             ["Framework", env.framework || "—"],
-            ["CMS",       (env as Record<string,string>)["cms"] || "—"],
+            ["CMS",       (env as unknown as Record<string,string>)["cms"] || "—"],
             ["CDN",       env.cdn        || "—"],
             ["IP",        env.ip         || "—"],
           ].map(([k,v]) => (

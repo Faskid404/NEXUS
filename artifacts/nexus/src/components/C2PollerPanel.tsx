@@ -207,6 +207,11 @@ export default function C2PollerPanel() {
     setConnected(false);
   }, []);
 
+  // Close WebSocket on unmount to avoid connection leaks
+  useEffect(() => {
+    return () => { wsRef.current?.close(1000, "unmount"); wsRef.current = null; };
+  }, []);
+
   const sendCmd = useCallback(async (payload: unknown, sid?: string) => {
     await sendFrame(FrameType.CMD, payload, sid ?? selected ?? undefined);
   }, [sendFrame, selected]);

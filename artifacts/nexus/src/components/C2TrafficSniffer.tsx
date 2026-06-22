@@ -200,6 +200,7 @@ export default function C2TrafficSniffer() {
 
   const wsRef      = useRef<WebSocket | null>(null);
   const keyRef     = useRef<Uint8Array>(deriveKey("ironworm-c2-key"));
+  const pausedRef  = useRef(false);
   const frameCount = useRef(0);
   const capStart   = useRef<number>(0);
   const listRef    = useRef<HTMLDivElement>(null);
@@ -209,6 +210,9 @@ export default function C2TrafficSniffer() {
       ? hexToKey(customKey)
       : deriveKey(passphrase);
   }, [passphrase, customKey, useCustom]);
+
+  // Keep pausedRef in sync so ws.onmessage always sees the latest value
+  useEffect(() => { pausedRef.current = paused; }, [paused]);
 
   useEffect(() => {
     if (autoScroll && listRef.current && !paused) {
@@ -244,7 +248,7 @@ export default function C2TrafficSniffer() {
     ws.onopen = () => { setConnected(true); };
 
     ws.onmessage = async (ev: MessageEvent) => {
-      if (paused) return;
+      if (pausedRef.current) return;
 
       let raw: Uint8Array;
       let dir: "rx" | "tx" = "rx";
@@ -288,12 +292,17 @@ export default function C2TrafficSniffer() {
 
     ws.onerror = () => {};
     ws.onclose = () => { setConnected(false); wsRef.current = null; };
-  }, [wsUrl, paused, addFrame]);
+  }, [wsUrl, addFrame]);
 
   const disconnect = useCallback(() => {
     wsRef.current?.close(1000);
     wsRef.current = null;
     setConnected(false);
+  }, []);
+
+  // Close WebSocket on unmount to avoid connection leaks
+  useEffect(() => {
+    return () => { wsRef.current?.close(1000); wsRef.current = null; };
   }, []);
 
   const clearCapture = useCallback(() => {

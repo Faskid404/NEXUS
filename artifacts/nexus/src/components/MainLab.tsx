@@ -783,7 +783,7 @@ const SCAN_PRESETS: Record<string, number[]> = {
 
 interface ScanResult { port: number; open: boolean; service: string; banner: string }
 
-interface FuzzResult { payload: string; output: string; elapsed: number; ok: boolean }
+interface FuzzResult { payload: string; output: string; elapsed: number; ok: boolean; commandOutput?: string; outputMethod?: string; outputConf?: number }
 
 // ─── COMPONENT ────────────────────────────────────────────
 export default function MainLab() {
@@ -1167,8 +1167,16 @@ export default function MainLab() {
               attackerPort:  attPort || "4444",
             });
         const r = await fetch("/api/hub/exec",{method:"POST",headers:{"Content-Type":"application/json",...authHeaders()},body});
-        const d = await r.json() as {output?:string;elapsed?:number;error?:string};
-        setFuzzRes(prev=>[...prev,{payload,output:(d.output??d.error??"").slice(0,120),elapsed:d.elapsed??Date.now()-t0,ok:r.ok}]);
+        const d = await r.json() as {output?:string;elapsed?:number;error?:string;commandOutput?:string;outputMethod?:string;outputConf?:number};
+        setFuzzRes(prev=>[...prev,{
+          payload,
+          output: (d.output??d.error??"").slice(0,140),
+          elapsed: d.elapsed??Date.now()-t0,
+          ok: r.ok,
+          commandOutput: d.commandOutput,
+          outputMethod:  d.outputMethod,
+          outputConf:    d.outputConf,
+        }]);
       } catch {
         setFuzzRes(prev=>[...prev,{payload,output:"[network error]",elapsed:Date.now()-t0,ok:false}]);
       }
@@ -1421,18 +1429,51 @@ export default function MainLab() {
       {fuzzRes.length>0&&(
         <div className="border border-zinc-900 bg-black overflow-auto flex-1 min-h-0">
           <table className="w-full text-[10px]">
-            <thead className="bg-zinc-900 text-zinc-600 sticky top-0">
-              <tr><th className="px-2 py-1 text-left font-normal">PAYLOAD</th><th className="px-2 py-1 text-left font-normal">OUTPUT</th><th className="px-2 py-1 text-left font-normal">MS</th><th className="px-2 py-1 font-normal">USE</th></tr>
+            <thead className="bg-zinc-900 text-zinc-600 sticky top-0 z-10">
+              <tr>
+                <th className="px-2 py-1 text-left font-normal">PAYLOAD</th>
+                <th className="px-2 py-1 text-left font-normal">OUTPUT / EXTRACTED</th>
+                <th className="px-2 py-1 text-left font-normal">MS</th>
+                <th className="px-2 py-1 font-normal">USE</th>
+              </tr>
             </thead>
             <tbody>
-              {fuzzRes.map((r,i)=>(
-                <tr key={i} className={`border-t border-zinc-900 ${r.ok?"hover:bg-zinc-900/30":"opacity-50"}`}>
-                  <td className="px-2 py-0.5 text-cyan-400 font-mono max-w-[140px] truncate" title={r.payload}>{r.payload}</td>
-                  <td className="px-2 py-0.5 text-zinc-300 max-w-[200px] truncate" title={r.output}>{r.output||<span className="text-zinc-700">empty</span>}</td>
-                  <td className="px-2 py-0.5 text-zinc-600">{r.elapsed}</td>
-                  <td className="px-2 py-0.5 text-center"><button onClick={()=>setCmd(fuzzTpl.replace(/FUZZ/g,r.payload))} className="text-zinc-600 hover:text-lime-400 uppercase">USE</button></td>
-                </tr>
-              ))}
+              {fuzzRes.map((r,i)=>{
+                const hasExtracted = Boolean(r.commandOutput);
+                const confColor = !r.outputConf ? "text-zinc-500"
+                  : r.outputConf>=0.8 ? "text-green-400"
+                  : r.outputConf>=0.5 ? "text-yellow-400"
+                  : "text-zinc-500";
+                return(
+                  <tr key={i} className={`border-t transition-colors
+                    ${hasExtracted
+                      ? "border-green-900/60 bg-green-950/20 hover:bg-green-950/30"
+                      : r.ok
+                        ? "border-zinc-900 hover:bg-zinc-900/30"
+                        : "border-zinc-900 opacity-40"}`}>
+                    <td className="px-2 py-1 text-cyan-400 font-mono max-w-[140px] truncate" title={r.payload}>{r.payload}</td>
+                    <td className="px-2 py-1 max-w-[260px]">
+                      {hasExtracted ? (
+                        <div className="flex flex-col gap-0.5">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[9px] px-1 border border-green-800 text-green-400 bg-green-950/40 shrink-0">EXTRACTED</span>
+                            {r.outputMethod&&<span className="text-[9px] text-zinc-500">{r.outputMethod}</span>}
+                            {r.outputConf!==undefined&&<span className={`text-[9px] ${confColor}`}>{Math.round(r.outputConf*100)}%</span>}
+                          </div>
+                          <span className="text-green-300 truncate" title={r.commandOutput}>{r.commandOutput!.slice(0,180)}</span>
+                        </div>
+                      ) : (
+                        <span className="text-zinc-400 truncate block" title={r.output}>{r.output||<span className="text-zinc-700">empty</span>}</span>
+                      )}
+                    </td>
+                    <td className="px-2 py-1 text-zinc-600 whitespace-nowrap">{r.elapsed}ms</td>
+                    <td className="px-2 py-1 text-center">
+                      <button onClick={()=>setCmd(fuzzTpl.replace(/FUZZ/g,r.payload))}
+                        className={`uppercase ${hasExtracted?"text-green-600 hover:text-green-300":"text-zinc-600 hover:text-lime-400"}`}>USE</button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

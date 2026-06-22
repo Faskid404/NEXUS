@@ -798,6 +798,8 @@ export default function MainLab() {
   const [attIp,    setAttIp]    = useState("");
   const [attPort,  setAttPort]  = useState("4444");
   const [output,   setOutput]   = useState("NEXUSFORGE v9.0 — 34 Modes · 9 Engines · WS Chain · Scanner · Remote Injection · AMSI/Memfd Shells\n");
+  const [extractedOutput, setExtractedOutput] = useState<{text:string;method:string;confidence:string}|null>(null);
+  const [showRawResponse,  setShowRawResponse]  = useState(false);
   // Remote injection state
   const [injectionUrl,   setInjectionUrl]   = useState("");
   const [injectParam,    setInjectParam]    = useState("cmd");
@@ -866,9 +868,11 @@ export default function MainLab() {
   const noTargetErrRef = useRef(false);
 
   const handleExecMsg = useCallback((msg: unknown) => {
-    const m = msg as {type:string;chunk?:string;message?:string;code?:number;elapsed?:number};
+    const m = msg as {type:string;chunk?:string;message?:string;code?:number;elapsed?:number;output?:string;method?:string;confidence?:string};
     if (m.type === "data" && m.chunk) setOutput(p => p + (m.chunk ?? ""));
-    else if (m.type === "end") {
+    else if (m.type === "commandOutput" && m.output) {
+      setExtractedOutput({ text: m.output, method: m.method ?? "unknown", confidence: m.confidence ?? "medium" });
+    } else if (m.type === "end") {
       const el = m.elapsed ?? 0;
       setScore(p => p + 25 + (el > 3000 ? 55 : 0));
       setStats(p => ({ ...p, total: p.total + 1, [mode]: ((p as Record<string,number>)[mode] ?? 0) + 1 }));
@@ -1091,6 +1095,8 @@ export default function MainLab() {
 
     setOutput(prev => prev + `root@${target||"nexus"}:~# ${cmd}\n`);
     setRunning(true);
+    setExtractedOutput(null);
+    setShowRawResponse(false);
     setChain(cmd.split(/[;&|`$(){}]/).map(s=>s.trim()).filter(s=>s.length>1&&s.length<60));
 
     execWs.connect(withAuthToken(`${wsBase()}/exec`), {
@@ -1256,7 +1262,11 @@ export default function MainLab() {
         <div className="flex items-center gap-3 text-xs">
           <span className={MODE_COLOR[mode]??"text-zinc-400"}>{mode.toUpperCase()}</span>
           <span className="text-zinc-700">{engine}</span>
-          <button onClick={()=>{setOutput("");setChain([]);}} className="text-zinc-700 hover:text-red-400 uppercase">CLR</button>
+          <button onClick={()=>{setOutput("");setChain([]);setExtractedOutput(null);}} className="text-zinc-700 hover:text-red-400 uppercase">CLR</button>
+          <button
+            onClick={()=>setCmd("id && whoami && uname -a && hostname && echo '===NEXUS_OUTPUT_END==='")}
+            title="Set verification payload — output will be cleanly extracted and displayed below"
+            className="text-[9px] uppercase px-1.5 py-0.5 border border-green-900/60 text-green-700 hover:text-green-400 hover:border-green-700 transition-colors">VERIFY</button>
           <button onClick={()=>copy(output,"term-out")} className={`uppercase ${copyId==="term-out"?"text-green-400":"text-zinc-700 hover:text-zinc-400"}`}>
             {copyId==="term-out"?"COPIED":"COPY"}
           </button>
@@ -1270,6 +1280,42 @@ export default function MainLab() {
         </div>
         {running && <span className="inline-block w-2 h-3 bg-lime-400 animate-pulse align-text-bottom ml-0.5"/>}
       </div>
+      {/* ── Extracted Output Panel ────────────────────────── */}
+      {extractedOutput && (
+        <div className="border-t-2 border-green-800 bg-black shrink-0">
+          <div className="flex items-center justify-between px-3 py-1 bg-green-950/40 border-b border-green-900/50">
+            <div className="flex items-center gap-2">
+              <span className="text-green-400 text-[10px] font-bold uppercase tracking-widest">⬡ Extracted Output</span>
+              <span className="text-[9px] px-1.5 py-0.5 bg-green-900/50 border border-green-800/60 text-green-300 uppercase">{extractedOutput.method}</span>
+              <span className={`text-[9px] px-1.5 py-0.5 border uppercase ${extractedOutput.confidence==="high"?"bg-green-900/40 border-green-700 text-green-300":"bg-yellow-900/30 border-yellow-800 text-yellow-400"}`}>{extractedOutput.confidence}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={()=>setShowRawResponse(p=>!p)}
+                className={`text-[9px] uppercase px-2 py-0.5 border transition-colors ${showRawResponse?"border-zinc-600 text-zinc-300 bg-zinc-800":"border-zinc-800 text-zinc-600 hover:text-zinc-400"}`}>
+                {showRawResponse?"HIDE RAW":"SHOW RAW"}
+              </button>
+              <button
+                onClick={()=>copy(extractedOutput.text,"extracted-out")}
+                className={`text-[9px] uppercase px-2 py-0.5 border ${copyId==="extracted-out"?"border-green-600 text-green-300":"border-zinc-800 text-zinc-600 hover:text-green-400"}`}>
+                {copyId==="extracted-out"?"COPIED":"COPY"}
+              </button>
+              <button
+                onClick={()=>setExtractedOutput(null)}
+                className="text-[9px] uppercase text-zinc-700 hover:text-red-400 px-1">✕</button>
+            </div>
+          </div>
+          <pre className="px-3 py-2 text-[11px] font-mono text-green-300 whitespace-pre-wrap break-words leading-relaxed max-h-48 overflow-y-auto">
+            {extractedOutput.text}
+          </pre>
+          {showRawResponse && (
+            <div className="border-t border-zinc-900 px-3 py-2 max-h-40 overflow-y-auto">
+              <div className="text-[9px] text-zinc-600 uppercase mb-1">Raw Terminal Output</div>
+              <pre className="text-[10px] font-mono text-zinc-500 whitespace-pre-wrap break-words">{output.slice(-4000)}</pre>
+            </div>
+          )}
+        </div>
+      )}
       {chain.length>1&&(
         <div className="border-t border-zinc-900 bg-zinc-950 px-3 py-1.5 flex items-center gap-1.5 overflow-x-auto shrink-0">
           <span className="text-[10px] text-red-600 uppercase shrink-0">chain:</span>

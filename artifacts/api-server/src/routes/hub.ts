@@ -1,4 +1,5 @@
 import { Router, type IRouter, type Request, type Response } from "express";
+import { extractCommandOutput } from "../lib/outputExtractor.js";
 import { getWsStats, WS_CHANNEL_META } from "../lib/wsStats.js";
 import {
   applyQuantumBypass,
@@ -483,7 +484,24 @@ router.post("/hub/exec", async (req: Request, res: Response) => {
       /^PATH=\//m.test(text) || /^HOME=\//m.test(text)  ||
       (/total \d+/.test(text) && /drwx/.test(text));
 
-    res.json({ output: text.slice(0, 8192), status: response.status, confirmed, engine, mode, elapsed, processed, payload });
+    const extraction    = extractCommandOutput(text);
+    const commandOutput = extraction?.text    ?? null;
+    const outputMethod  = extraction?.method  ?? null;
+    const outputConf    = extraction?.confidence ?? null;
+
+    res.json({
+      output: text.slice(0, 8192),
+      status: response.status,
+      confirmed,
+      commandOutput,
+      outputMethod,
+      outputConf,
+      engine,
+      mode,
+      elapsed,
+      processed,
+      payload,
+    });
 
   } catch (e: unknown) {
     const msg = (e as Error).message ?? String(e);

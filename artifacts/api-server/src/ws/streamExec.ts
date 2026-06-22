@@ -1,5 +1,6 @@
 import type { WebSocket } from "ws";
 import { sshStreamExec, type SshOptions } from "../lib/sshExec.js";
+import { extractCommandOutput } from "../lib/outputExtractor.js";
 import {
   applyQuantumBypass,
   buildPayloadVariants,
@@ -258,8 +259,34 @@ async function fetchAttempt(
         send(ws, { type: "data", chunk: `  Use OOB or timing mode for zero-noise confirmation\n` });
       } else {
         send(ws, { type: "data", chunk: `\n\u2714 EXECUTION CONFIRMED — command output detected (${baselineLen > 0 ? "\u0394len:" + lenDiff + "b vs baseline" : "no baseline reference"})\n` });
+        // Extract structured command output and emit as a dedicated event
+        const extracted = extractCommandOutput(text, baselineBody);
+        if (extracted) {
+          send(ws, {
+            type:       "commandOutput",
+            output:     extracted.text,
+            method:     extracted.method,
+            confidence: extracted.confidence,
+          });
+          send(ws, { type: "data", chunk: `[EXTRACTED] ${extracted.method} (${extracted.confidence}) — output captured\n` });
+        }
         send(ws, { type: "data", chunk: `--- RESPONSE ---\n${text.slice(0, 2000)}\n` });
         return { blocked: false, done: true, responseLen: rLen, successIndicator: true, elapsed };
+      }
+    }
+
+    // Also attempt extraction on non-confirmed responses — catches cases where detectCommandOutput
+    // missed the signature but the output extractor's raw-HTML or pattern strategies find it
+    if (!execOutput) {
+      const extracted = extractCommandOutput(text, baselineBody);
+      if (extracted) {
+        send(ws, {
+          type:       "commandOutput",
+          output:     extracted.text,
+          method:     extracted.method,
+          confidence: extracted.confidence,
+        });
+        send(ws, { type: "data", chunk: `\n[OUTPUT] Extracted via ${extracted.method} (${extracted.confidence} confidence)\n` });
       }
     }
 

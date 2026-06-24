@@ -1167,7 +1167,7 @@ export default function MainLab() {
               attackerIp:    attIp  || "127.0.0.1",
               attackerPort:  attPort || "4444",
             });
-        const r = await fetch("/api/hub/exec",{method:"POST",headers:{"Content-Type":"application/json",...authHeaders()},body});
+        const r = await fetch(`${_API_URL}/api/hub/exec`,{method:"POST",headers:{"Content-Type":"application/json",...authHeaders()},body});
         const d = await r.json() as {output?:string;elapsed?:number;error?:string;commandOutput?:string;outputMethod?:string;outputConf?:number};
         setFuzzRes(prev=>[...prev,{
           payload,

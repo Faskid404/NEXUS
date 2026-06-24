@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect } from "react";
+import { withAuthToken } from "../lib/auth";
 
 // ─── Public registry endpoints ───────────────────────────────────────────────
 const NPM_REGISTRY  = "https://registry.npmjs.org";
@@ -1771,7 +1772,7 @@ export default function IronWormPanel() {
     if (wormRunning || (!wormPkg.trim() && !wormOrg.trim())) return;
     wormWsRef.current?.close(1000, "new scan");
     setWormLogs([]); setWormResults([]); setWormProgress(null); setWormRunning(true);
-    const ws = new WebSocket(`${wormWsBase()}/ironworm`);
+    const ws = new WebSocket(withAuthToken(`${wormWsBase()}/ironworm`));
     wormWsRef.current = ws;
     ws.onopen = () => ws.send(JSON.stringify({
       packageName:    wormPkg.trim()  || undefined,

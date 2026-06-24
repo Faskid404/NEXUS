@@ -18,7 +18,7 @@ interface ChainRun {
   oobToken:       string;
 }
 
-const API = import.meta.env.VITE_API_URL ?? "";
+const API = (import.meta.env as Record<string, string>)["VITE_API_URL"] ?? "";
 
 export default function ChainReplayPanel() {
   const [runs,         setRuns]         = useState<ChainRun[]>([]);

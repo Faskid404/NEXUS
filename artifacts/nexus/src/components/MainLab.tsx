@@ -24,6 +24,7 @@ import WeaponsPanel from "./WeaponsPanel";
 import IronWormPanel from "./IronWormPanel";
 import C2PollerPanel from "./C2PollerPanel";
 import C2TrafficSniffer from "./C2TrafficSniffer";
+import WsHealthPanel from "./WsHealthPanel";
 import { useReconnectingWs } from "../hooks/use-reconnecting-ws";
 import { authHeaders, withAuthToken } from "../lib/auth";
 
@@ -107,7 +108,7 @@ const MODE_DESC: Record<string, string> = {
 };
 
 // ─── TABS ─────────────────────────────────────────────────
-const TABS = ["AUTOCHAIN","TERMINAL","SCANNER","FUZZER","SHELLS","ENCODER","LIBRARY","OOB","REPLAYS","CVE","MUTATION","DELIVER","PERSIST","REPORT","EXFIL","WEAPONS","IRONWORM","C2POLLER","C2SNIFFER"] as const;
+const TABS = ["AUTOCHAIN","TERMINAL","SCANNER","FUZZER","SHELLS","ENCODER","LIBRARY","OOB","REPLAYS","CVE","MUTATION","DELIVER","PERSIST","REPORT","EXFIL","WEAPONS","IRONWORM","C2POLLER","C2SNIFFER","WSHEALTH"] as const;
 type Tab = typeof TABS[number];
 
 // ─── FUZZER ───────────────────────────────────────────────
@@ -2202,19 +2203,20 @@ export default function MainLab() {
             {tab==="SHELLS"  &&tabShells()}
             {tab==="LIBRARY" &&tabLibrary()}
             {tab==="SCANNER" &&tabScanner()}
-            {tab==="OOB"          &&<OobPanel />}
-            {tab==="AUTOCHAIN"    &&<AutoExploitPanel />}
-            {tab==="REPLAYS"      &&<ChainReplayPanel />}
-        {tab==="CVE"           &&<CvePanel />}
-        {tab==="MUTATION"      &&<MutationScannerPanel />}
-        {tab==="DELIVER"       && <PayloadDeliveryPanel />}
-        {tab==="PERSIST"       && <PersistencePanel />}
-        {tab==="REPORT"        && <ReportPanel />}
-        {tab==="EXFIL"         && <ExfilPanel />}
-        {tab==="WEAPONS"       && <WeaponsPanel />}
-        {tab==="IRONWORM"      && <IronWormPanel />}
-        {tab==="C2POLLER"     && <C2PollerPanel />}
-        {tab==="C2SNIFFER"    && <C2TrafficSniffer />}
+            {tab==="OOB"           &&<OobPanel />}
+            {tab==="AUTOCHAIN"     &&<AutoExploitPanel />}
+            {tab==="REPLAYS"       &&<ChainReplayPanel />}
+            {tab==="CVE"           &&<CvePanel />}
+            {tab==="MUTATION"      &&<MutationScannerPanel />}
+            {tab==="DELIVER"       &&<PayloadDeliveryPanel />}
+            {tab==="PERSIST"       &&<PersistencePanel />}
+            {tab==="REPORT"        &&<ReportPanel />}
+            {tab==="EXFIL"         &&<ExfilPanel />}
+            {tab==="WEAPONS"       &&<WeaponsPanel />}
+            {tab==="IRONWORM"      &&<IronWormPanel />}
+            {tab==="C2POLLER"      &&<C2PollerPanel />}
+            {tab==="C2SNIFFER"     &&<C2TrafficSniffer />}
+            {tab==="WSHEALTH"      &&<WsHealthPanel />}
           </div>
 
           {/* Bottom panel */}

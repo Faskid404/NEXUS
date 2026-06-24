@@ -151,6 +151,64 @@ export function extractCommandOutput(
   /* ── HTML page guard: skip strategies 2-4 for plain HTML ─── */
   if (isPlainHtmlWithoutRce(body)) return null;
 
+  /* ── 1.5 URL-decoded pass ─────────────────────────────────
+     When the server URL-encodes output in response bodies
+     (e.g. %75%69%64%3d…), decode and re-run marker + patterns. */
+  try {
+    const urlDecoded = decodeURIComponent(plain.replace(/\+/g, " "));
+    if (urlDecoded !== plain) {
+      const udIdx = urlDecoded.indexOf(NEXUS_MARKER);
+      if (udIdx !== -1) {
+        const before = urlDecoded.slice(0, udIdx).trim();
+        const lines  = before.split("\n").filter(l => l.trim().length > 0);
+        if (lines.length > 0) {
+          return { text: lines.slice(-80).join("\n").trim().slice(0, 4096), method: "marker-urldecoded", confidence: "high" };
+        }
+      }
+      for (const { re, name, hi, ctx } of RCE_PATTERNS) {
+        const m = urlDecoded.match(re);
+        if (!m || !m[0]) continue;
+        const hitIdx = urlDecoded.indexOf(m[0]);
+        const allLines = urlDecoded.split("\n");
+        const lineNum  = urlDecoded.slice(0, hitIdx).split("\n").length - 1;
+        const chunk    = allLines.slice(Math.max(0, lineNum - 2), Math.min(allLines.length, lineNum + ctx))
+          .filter(l => l.trim().length > 0).join("\n").trim();
+        if (chunk.length > 0) {
+          return { text: chunk.slice(0, 4096), method: `urldecoded/${name}`, confidence: hi ? "high" : "medium" };
+        }
+      }
+    }
+  } catch { /* malformed URL encoding — skip */ }
+
+  /* ── 1.6 Base64-fragment decode pass ─────────────────────
+     When output is base64-encoded in the response (common in
+     OOB-style or echo-piped payloads), try decoding fragments
+     that look like base64 strings adjacent to RCE context. */
+  const b64Re = /[A-Za-z0-9+/]{20,}={0,2}/g;
+  for (const m of body.matchAll(b64Re)) {
+    const fragment = m[0];
+    if (!fragment) continue;
+    try {
+      const decoded = Buffer.from(fragment, "base64").toString("utf8");
+      // Sanity: mostly printable ASCII
+      const printable = decoded.replace(/[\x20-\x7e\n\r\t]/g, "").length;
+      if (printable / decoded.length > 0.3) continue;
+      // Must contain an RCE signature to be worth surfacing
+      for (const { re, name, ctx } of RCE_PATTERNS) {
+        const mm = decoded.match(re);
+        if (!mm || !mm[0]) continue;
+        const hitIdx = decoded.indexOf(mm[0]);
+        const allLines = decoded.split("\n");
+        const lineNum  = decoded.slice(0, hitIdx).split("\n").length - 1;
+        const chunk    = allLines.slice(Math.max(0, lineNum - 2), Math.min(allLines.length, lineNum + ctx))
+          .filter(l => l.trim().length > 0).join("\n").trim();
+        if (chunk.length > 0) {
+          return { text: chunk.slice(0, 4096), method: `b64decoded/${name}`, confidence: "high" };
+        }
+      }
+    } catch { /* not valid base64 — skip */ }
+  }
+
   /* ── 2. Pattern-based on stripped HTML ──────────────────── */
   for (const { re, name, hi, ctx } of RCE_PATTERNS) {
     const m = plain.match(re);

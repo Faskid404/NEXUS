@@ -581,7 +581,14 @@ async function handleRemoteInject(
 }
 
 export function handleStreamExec(ws: WebSocket): void {
+  let executing = false;
+
   ws.on("message", (raw) => {
+    if (executing) {
+      send(ws, { type: "data", chunk: "[WARN] Execution already in progress — ignoring duplicate message\n" });
+      return;
+    }
+
     let parsed: unknown;
     try { parsed = JSON.parse(String(raw)); } catch {
       send(ws, { type: "error", message: "Invalid JSON" });
@@ -613,9 +620,14 @@ export function handleStreamExec(ws: WebSocket): void {
       sshKey,
     } = parse.data;
 
+    executing = true;
     const start     = Date.now();
     const processed = applyQuantumBypass(cmd, mode, attackerIp, attackerPort);
-    void runStreamExec(ws, { cmd, engine, mode, injectionUrl, injectParam, httpMethod, customHeaders, attackerIp, attackerPort, sshHost, sshPort, sshUser, sshPassword, sshKey, start, processed });
+    void runStreamExec(
+      ws,
+      { cmd, engine, mode, injectionUrl, injectParam, httpMethod, customHeaders,
+        attackerIp, attackerPort, sshHost, sshPort, sshUser, sshPassword, sshKey, start, processed },
+    ).finally(() => { executing = false; });
   });
 }
 

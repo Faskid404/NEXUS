@@ -34,6 +34,88 @@ function dnsResolve(hostname: string): Promise<string[]> {
   });
 }
 
+interface DiscoveredParam {
+  name:    string;
+  source:  "form" | "url" | "json" | "api";
+  example: string;
+}
+
+/**
+ * Extracts injectable parameters from a page's HTML body.
+ * Parses <form> input/select/textarea names, URL query params from <a> hrefs,
+ * and JSON key names if the response looks like an API.
+ */
+function extractParamsFromHtml(html: string, baseUrl: string): DiscoveredParam[] {
+  const seen = new Set<string>();
+  const params: DiscoveredParam[] = [];
+
+  const add = (name: string, source: DiscoveredParam["source"], example = "") => {
+    const key = `${source}:${name}`;
+    if (!seen.has(key) && name && name.length <= 64 && /^[\w\-\[\]\.]+$/.test(name)) {
+      seen.add(key);
+      params.push({ name, source, example });
+    }
+  };
+
+  // 1. Form input names: <input name="..." value="...">
+  for (const m of html.matchAll(/<input[^>]+>/gi)) {
+    const tag  = m[0];
+    const nm   = tag.match(/\bname\s*=\s*["']([^"']+)["']/i)?.[1] ?? "";
+    const val  = tag.match(/\bvalue\s*=\s*["']([^"']{0,40})["']/i)?.[1] ?? "";
+    const type = tag.match(/\btype\s*=\s*["'](\w+)["']/i)?.[1]?.toLowerCase() ?? "text";
+    if (nm && type !== "hidden" && type !== "submit" && type !== "button" && type !== "image" && type !== "reset") {
+      add(nm, "form", val);
+    }
+  }
+
+  // 2. Select names: <select name="...">
+  for (const m of html.matchAll(/<select[^>]+>/gi)) {
+    const nm = m[0].match(/\bname\s*=\s*["']([^"']+)["']/i)?.[1] ?? "";
+    if (nm) add(nm, "form", "");
+  }
+
+  // 3. Textarea names: <textarea name="...">
+  for (const m of html.matchAll(/<textarea[^>]+>/gi)) {
+    const nm = m[0].match(/\bname\s*=\s*["']([^"']+)["']/i)?.[1] ?? "";
+    if (nm) add(nm, "form", "");
+  }
+
+  // 4. URL query params from <a href="?param=val"> and <form action="...?param=val">
+  const hrefRe = /(?:href|action|src)\s*=\s*["']([^"'#]{1,300})["']/gi;
+  for (const m of html.matchAll(hrefRe)) {
+    const raw = m[1] ?? "";
+    try {
+      const u = new URL(raw, baseUrl);
+      for (const [k, v] of u.searchParams.entries()) {
+        if (k && !k.startsWith("_") && !["utm_source","utm_medium","utm_campaign","fbclid","gclid"].includes(k)) {
+          add(k, "url", v.slice(0, 30));
+        }
+      }
+    } catch { /* relative URL parse fail — extract manually */ }
+    const qIdx = raw.indexOf("?");
+    if (qIdx !== -1) {
+      for (const part of raw.slice(qIdx + 1).split("&")) {
+        const eqIdx = part.indexOf("=");
+        const k = eqIdx >= 0 ? part.slice(0, eqIdx) : part;
+        const v = eqIdx >= 0 ? decodeURIComponent(part.slice(eqIdx + 1).slice(0, 30)) : "";
+        if (k && k.length <= 40 && /^[\w\-\[\]\.]+$/.test(k)) add(k, "url", v);
+      }
+    }
+  }
+
+  // 5. If the response looks like JSON API, extract top-level keys
+  const trimmed = html.trimStart();
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    try {
+      const obj = JSON.parse(trimmed) as unknown;
+      const keys = typeof obj === "object" && obj !== null ? Object.keys(obj) : [];
+      for (const k of keys.slice(0, 20)) add(k, "json", "");
+    } catch { /* not parseable */ }
+  }
+
+  return params.slice(0, 50);
+}
+
 function tcpProbe(host: string, port: number, timeoutMs: number): Promise<boolean> {
   return new Promise((resolve) => {
     const sock = new net.Socket();
@@ -153,6 +235,19 @@ export function handleProbeTarget(ws: WebSocket): void {
           ].filter((l): l is string => l !== null && l !== undefined && (l !== "" || true)).join("\n");
 
           send(ws, { type: "result", env, summary: summaryLines });
+
+          // Parameter discovery from page HTML
+          if (!aborted && env.bodyPreview) {
+            const discoveredParams = extractParamsFromHtml(env.bodyPreview, url);
+            if (discoveredParams.length > 0) {
+              send(ws, { type: "param_discovery", params: discoveredParams });
+              const pLines = [
+                `── Parameter Discovery (${discoveredParams.length} found) ──`,
+                ...discoveredParams.map(p => `  [${p.source.padEnd(6)}] ${p.name}${p.example ? ` = "${p.example}"` : ""}`),
+              ];
+              send(ws, { type: "progress", message: pLines.join("\n") });
+            }
+          }
 
           // Web discovery
           if (!aborted) {

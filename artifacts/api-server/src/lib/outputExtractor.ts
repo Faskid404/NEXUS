@@ -18,7 +18,8 @@
        being accepted as command output.
    ═══════════════════════════════════════════════════════════════ */
 
-export const NEXUS_MARKER = "===NEXUS_OUTPUT_END===";
+export const NEXUS_MARKER  = "===NEXUS_OUTPUT_END===";
+export const NEXUS_SUCCESS = "===NEXUS_SUCCESS===";  // alias: accepted as confirmed-RCE sentinel
 
 export interface ExtractionResult {
   text:       string;

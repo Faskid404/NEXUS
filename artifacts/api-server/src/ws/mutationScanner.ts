@@ -298,6 +298,7 @@ export function handleMutationScanner(ws: WebSocket): void {
                       ? result.body.slice(0, 2000).split("\n").slice(0, 40).map(l => `  │ ${l.slice(0, 200)}`).join("\n") + "\n"
                       : "") +
                     `  └──────────────────────────────────────────────────────────` });
+            break;  // ── stop inner probe loop on first confirmed RCE ─────────
           }
 
           await new Promise<void>(r => setTimeout(r, 40 + Math.random() * 60));
@@ -312,6 +313,13 @@ export function handleMutationScanner(ws: WebSocket): void {
             sorted.slice(0, 5).map((r, i) =>
               `    ${i + 1}. score=${r.score.toString().padStart(3)}  ${r.payload.slice(0, 70)}`
             ).join("\n") });
+
+        // ── Stop entire scan the moment RCE is confirmed ───────────────────
+        if (confirmed.length > 0) {
+          send(ws, { type: "data",
+            text: `\n  [CHAIN STOP] RCE confirmed in generation ${gen} — halting evolution\n` });
+          break;
+        }
 
         if (gen < generations) {
           const newPop: string[] = [];

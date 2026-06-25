@@ -261,7 +261,7 @@ export default function C2TrafficSniffer() {
           const obj = JSON.parse(ev.data) as { dir?: string; hex?: string; session_id?: string };
           dir = (obj.dir ?? "rx") as "rx" | "tx";
           if (obj.hex) {
-            raw = new Uint8Array(obj.hex.split(" ").map(h => parseInt(h, 16)));
+            raw = new Uint8Array(obj.hex.split(" ").filter(h => h.length > 0).map(h => parseInt(h, 16)));
           } else return;
         } catch { return; }
       } else return;

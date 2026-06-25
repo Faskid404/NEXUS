@@ -339,6 +339,14 @@ function ChainReactorTab() {
     if (logsRef.current) logsRef.current.scrollTop = logsRef.current.scrollHeight;
   }, [logs]);
 
+  // Cleanup WebSocket on unmount to prevent memory leaks
+  useEffect(() => {
+    return () => {
+      wsRef.current?.close();
+      wsRef.current = null;
+    };
+  }, []);
+
   const selectedChain = chains.find(c => c.id === selectedId);
 
   const start = useCallback(() => {
@@ -373,7 +381,7 @@ function ChainReactorTab() {
         }
       } catch { /* ignore */ }
     };
-    ws.onclose = () => setRunning(false);
+    ws.onclose = () => { wsRef.current = null; setRunning(false); };
     ws.onerror = () => { setSummary("WebSocket connection error"); setRunning(false); };
   }, [running, selectedId, target, lhost, lport]);
 
@@ -457,7 +465,7 @@ function C2PollerTab() {
   const [source,    setSource]    = useState("url");
   const [pollUrl,   setPollUrl]   = useState("https://gist.githubusercontent.com/USER/GIST_ID/raw/cmd.txt");
   const [reportUrl, setReportUrl] = useState("");
-  const [interval,  setInterval]  = useState("60");
+  const [pollInterval, setPollInterval] = useState("60");
   const [jitter,    setJitter]    = useState("30");
   const [maxRuns,   setMaxRuns]   = useState("9999");
   const [xorKey,    setXorKey]    = useState("78");
@@ -480,7 +488,7 @@ function C2PollerTab() {
         headers:{"Content-Type":"application/json",...authHeaders()},
         body: JSON.stringify({
           source, pollUrl, reportUrl: reportUrl||undefined,
-          interval:Number(interval), jitter:Number(jitter),
+          interval:Number(pollInterval), jitter:Number(jitter),
           maxRuns:Number(maxRuns), xorKey:Number(xorKey),
           killDate: killDate||undefined, userAgent, os, engine,
         }),
@@ -488,7 +496,7 @@ function C2PollerTab() {
       const j = await r.json() as { payloads: C2Payload[] };
       setData(j.payloads ?? []);
     } catch { setData([]); } finally { setLoading(false); }
-  }, [source, pollUrl, reportUrl, interval, jitter, maxRuns, xorKey, killDate, userAgent, os, engine]);
+  }, [source, pollUrl, reportUrl, pollInterval, jitter, maxRuns, xorKey, killDate, userAgent, os, engine]);
 
   const encodeCmd = useCallback(async () => {
     if (!encCmd) return;
@@ -525,7 +533,7 @@ function C2PollerTab() {
         </Field>
 
         <Field label="Poll Interval (sec)">
-          <Input value={interval} onChange={setInterval} w="w-24" type="number"/>
+          <Input value={pollInterval} onChange={setPollInterval} w="w-24" type="number"/>
         </Field>
         <Field label="Jitter ± (sec)">
           <Input value={jitter} onChange={setJitter} w="w-24" type="number"/>
@@ -533,7 +541,7 @@ function C2PollerTab() {
 
         <div className="col-span-2">
           {(() => {
-            const iv = Math.max(1, Number(interval) || 60);
+            const iv = Math.max(1, Number(pollInterval) || 60);
             const jt = Math.max(0, Math.min(Number(jitter) || 0, iv - 1));
             const lo = iv - jt, hi = iv + jt;
             const pct = jt / (iv + jt) * 100;
@@ -653,6 +661,14 @@ function ProbeTargetTab() {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [log]);
 
+  // Cleanup WebSocket on unmount to prevent memory leaks
+  useEffect(() => {
+    return () => {
+      wsRef.current?.close();
+      wsRef.current = null;
+    };
+  }, []);
+
   const stop = useCallback(() => {
     wsRef.current?.close();
     wsRef.current = null;
@@ -694,7 +710,7 @@ function ProbeTargetTab() {
       } catch { }
     };
     ws.onerror = () => { setLog(l => [...l, "✗ WebSocket error"]); setRunning(false); };
-    ws.onclose = () => setRunning(false);
+    ws.onclose = () => { wsRef.current = null; setRunning(false); };
   }, [url, scanPorts, sshBrute, running]);
 
   const WAF_COLOR: Record<string,string> = {

@@ -355,6 +355,9 @@ function ChainReactorTab() {
     setLogs([]);
     setSummary("");
     stepCounterRef.current = 0;
+    if (wsRef.current && wsRef.current.readyState < WebSocket.CLOSING) {
+      wsRef.current.close(1000, "restart");
+    }
     const ws = new WebSocket(`${wsBase()}/chainreactor`);
     wsRef.current = ws;
     ws.onopen = () => ws.send(JSON.stringify({ chainId: selectedId, target, lhost, lport }));
@@ -433,14 +436,14 @@ function ChainReactorTab() {
             if (phase.label !== lastPhaseLabel) {
               lastPhaseLabel = phase.label;
               rows.push(
-                <div key={`ph-${i}`} className={`flex items-center gap-2 mt-1.5 mb-0.5 px-1 border-t ${phase.color} pt-1`}>
+                <div key={`ph-${phase.label}`} className={`flex items-center gap-2 mt-1.5 mb-0.5 px-1 border-t ${phase.color} pt-1`}>
                   <span className="text-[9px]">{phase.icon}</span>
                   <span className={`text-[8px] uppercase tracking-widest font-bold ${phase.color.split(" ")[0]}`}>{phase.label}</span>
                 </div>
               );
             }
             rows.push(
-              <div key={i} className="flex gap-2 items-start font-mono text-[10px] pl-1">
+              <div key={`log-${l.stepId}-${i}`} className="flex gap-2 items-start font-mono text-[10px] pl-1">
                 <span className={`w-14 shrink-0 uppercase ${STEP_STATUS_COLOR[l.status]??"text-zinc-400"}`}>{l.status}</span>
                 <span className="text-zinc-400 w-40 shrink-0 truncate" title={l.name}>{l.name}</span>
                 {l.elapsed>0 && <span className="text-zinc-700 w-12 shrink-0">{l.elapsed}ms</span>}

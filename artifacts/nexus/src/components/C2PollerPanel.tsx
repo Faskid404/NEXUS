@@ -396,7 +396,7 @@ export default function C2PollerPanel() {
                     <div className="text-[9px] text-zinc-600 uppercase tracking-widest mb-2">Session Traffic</div>
                     <div className="space-y-1 max-h-96 overflow-y-auto">
                       {log.filter(l => l.sid === selSession.id).map((l, i) => (
-                        <div key={i} className={`text-[9px] flex items-start gap-2 font-mono py-0.5 border-b border-white/[.02] ${DIR_CLR[l.dir]}`}>
+                        <div key={`sess-${l.ts}-${i}`} className={`text-[9px] flex items-start gap-2 font-mono py-0.5 border-b border-white/[.02] ${DIR_CLR[l.dir]}`}>
                           <span className="text-zinc-700 shrink-0">{new Date(l.ts).toISOString().slice(11,23)}</span>
                           <span className={`shrink-0 w-14 ${TYPE_CLR[l.type] ?? "text-zinc-500"}`}>{l.type}</span>
                           <span className="truncate text-zinc-500">{JSON.stringify(l.parsed).slice(0, 120)}</span>
@@ -427,7 +427,7 @@ export default function C2PollerPanel() {
           {tab === "traffic" && (
             <div ref={logRef} className="flex-1 overflow-y-auto p-3 min-h-0 space-y-0.5">
               {log.map((l, i) => (
-                <button key={i} onClick={() => setHexView(hv => hv === l ? null : l)}
+                <button key={`traffic-${l.ts}-${i}`} onClick={() => setHexView(hv => hv === l ? null : l)}
                   className={`w-full text-left flex items-center gap-2 text-[9px] font-mono py-0.5 px-2 hover:bg-white/[.03] transition-all ${DIR_CLR[l.dir]}`}>
                   <span className="text-zinc-700 shrink-0 w-24">{new Date(l.ts).toISOString().slice(11,23)}</span>
                   <span className={`shrink-0 font-bold w-4 ${l.dir === "tx" ? "text-cyan-600" : l.dir === "rx" ? "text-green-600" : "text-zinc-600"}`}>{l.dir === "tx" ? "↑" : l.dir === "rx" ? "↓" : "·"}</span>

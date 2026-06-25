@@ -1,9 +1,10 @@
-import React, { useState, useEffect, Component } from "react";
+import React, { useState, useEffect, Component, lazy, Suspense } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { setAuthTokenGetter } from "@workspace/api-client-react";
 import LockScreen from "@/components/LockScreen";
-import MainLab from "@/components/MainLab";
 import { AUTH_KEY, getToken } from "@/lib/auth";
+
+const MainLab = lazy(() => import("@/components/MainLab"));
 
 const API_URL = (import.meta.env as Record<string, string>)["VITE_API_URL"] ?? "";
 
@@ -95,6 +96,27 @@ function AppContent() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Re-check token validity every 5 minutes — handles server restart invalidation
+  useEffect(() => {
+    if (!unlocked) return;
+    const interval = setInterval(() => {
+      const token = sessionStorage.getItem(AUTH_KEY);
+      if (!token) { setUnlocked(false); return; }
+      fetch(`${API_URL}/api/auth/verify`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+        .then((r) => {
+          if (!r.ok) {
+            sessionStorage.removeItem(AUTH_KEY);
+            setUnlocked(false);
+          }
+        })
+        .catch(() => { /* network error — don't log out, server may be temporarily down */ });
+    }, 5 * 60 * 1_000);
+    return () => clearInterval(interval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unlocked]);
+
   const handleUnlock = (token: string) => {
     sessionStorage.setItem(AUTH_KEY, token);
     setUnlocked(true);
@@ -116,9 +138,20 @@ function AppContent() {
     );
   }
 
+  const fallback = (
+    <div className="min-h-screen w-full bg-[#080808] flex items-center justify-center font-mono">
+      <div className="flex flex-col items-center gap-4">
+        <span className="text-red-500 font-black text-2xl tracking-[.18em] uppercase" style={{ textShadow: "0 0 32px rgba(220,38,38,.55)" }}>NEXUS</span>
+        <div className="w-5 h-5 border-2 border-red-700 border-t-transparent rounded-full animate-spin" />
+      </div>
+    </div>
+  );
+
   return unlocked ? (
     <DashboardErrorBoundary>
-      <MainLab />
+      <Suspense fallback={fallback}>
+        <MainLab onLockout={() => { sessionStorage.removeItem(AUTH_KEY); setUnlocked(false); }} />
+      </Suspense>
     </DashboardErrorBoundary>
   ) : (
     <LockScreen onUnlock={handleUnlock} />

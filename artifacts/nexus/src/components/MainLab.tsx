@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from "react";
+import React, { useState, useRef, useEffect, useCallback, lazy, Suspense } from "react";
 import {
   useGetHubStatus,
   useGetEngines,
@@ -12,19 +12,19 @@ import {
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import OobPanel from "./OobPanel";
-import AutoExploitPanel from "./AutoExploitPanel";
-import ChainReplayPanel from "./ChainReplayPanel";
-import CvePanel from "./CvePanel";
-import MutationScannerPanel from "./MutationScannerPanel";
 import PayloadDeliveryPanel from "./PayloadDeliveryPanel";
 import PersistencePanel from "./PersistencePanel";
 import ReportPanel from "./ReportPanel";
 import ExfilPanel from "./ExfilPanel";
-import WeaponsPanel from "./WeaponsPanel";
-import IronWormPanel from "./IronWormPanel";
-import C2PollerPanel from "./C2PollerPanel";
-import C2TrafficSniffer from "./C2TrafficSniffer";
 import WsHealthPanel from "./WsHealthPanel";
+const AutoExploitPanel    = lazy(() => import("./AutoExploitPanel"));
+const ChainReplayPanel    = lazy(() => import("./ChainReplayPanel"));
+const CvePanel            = lazy(() => import("./CvePanel"));
+const MutationScannerPanel = lazy(() => import("./MutationScannerPanel"));
+const WeaponsPanel        = lazy(() => import("./WeaponsPanel"));
+const IronWormPanel       = lazy(() => import("./IronWormPanel"));
+const C2PollerPanel       = lazy(() => import("./C2PollerPanel"));
+const C2TrafficSniffer    = lazy(() => import("./C2TrafficSniffer"));
 import { useReconnectingWs } from "../hooks/use-reconnecting-ws";
 import { authHeaders, withAuthToken } from "../lib/auth";
 
@@ -1008,7 +1008,7 @@ interface ScanResult { port: number; open: boolean; service: string; banner: str
 interface FuzzResult { payload: string; output: string; elapsed: number; ok: boolean; commandOutput?: string; outputMethod?: string; outputConf?: number }
 
 // ─── COMPONENT ────────────────────────────────────────────
-export default function MainLab() {
+export default function MainLab({ onLockout }: { onLockout?: () => void } = {}) {
   const qc = useQueryClient();
 
   // Core state
@@ -1094,6 +1094,7 @@ export default function MainLab() {
     if (m.type === "data" && m.chunk) setOutput(p => p + (m.chunk ?? ""));
     else if (m.type === "commandOutput" && m.output) {
       setExtractedOutput({ text: m.output, method: m.method ?? "unknown", confidence: m.confidence ?? "medium" });
+      setOutput(p => p + `\n✔ EXECUTION CONFIRMED — output extracted (${m.method ?? "unknown"})\n${m.output}\n`);
     } else if (m.type === "end") {
       const el = m.elapsed ?? 0;
       setScore(p => p + 25 + (el > 3000 ? 55 : 0));
@@ -2425,18 +2426,20 @@ export default function MainLab() {
             {tab==="LIBRARY" &&tabLibrary()}
             {tab==="SCANNER" &&tabScanner()}
             {tab==="OOB"           &&<OobPanel />}
-            {tab==="AUTOCHAIN"     &&<AutoExploitPanel />}
-            {tab==="REPLAYS"       &&<ChainReplayPanel />}
-            {tab==="CVE"           &&<CvePanel />}
-            {tab==="MUTATION"      &&<MutationScannerPanel />}
+            <Suspense fallback={<div className="flex-1 flex items-center justify-center text-zinc-600 text-xs font-mono">loading...</div>}>
+              {tab==="AUTOCHAIN"     &&<AutoExploitPanel />}
+              {tab==="REPLAYS"       &&<ChainReplayPanel />}
+              {tab==="CVE"           &&<CvePanel />}
+              {tab==="MUTATION"      &&<MutationScannerPanel />}
+              {tab==="WEAPONS"       &&<WeaponsPanel />}
+              {tab==="IRONWORM"      &&<IronWormPanel />}
+              {tab==="C2POLLER"      &&<C2PollerPanel />}
+              {tab==="C2SNIFFER"     &&<C2TrafficSniffer />}
+            </Suspense>
             {tab==="DELIVER"       &&<PayloadDeliveryPanel />}
             {tab==="PERSIST"       &&<PersistencePanel />}
             {tab==="REPORT"        &&<ReportPanel />}
             {tab==="EXFIL"         &&<ExfilPanel />}
-            {tab==="WEAPONS"       &&<WeaponsPanel />}
-            {tab==="IRONWORM"      &&<IronWormPanel />}
-            {tab==="C2POLLER"      &&<C2PollerPanel />}
-            {tab==="C2SNIFFER"     &&<C2TrafficSniffer />}
             {tab==="WSHEALTH"      &&<WsHealthPanel />}
           </div>
 

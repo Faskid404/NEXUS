@@ -59,12 +59,21 @@ export default defineConfig({
     emptyOutDir: true,
     rollupOptions: {
       output: {
-        manualChunks: {
-          "vendor-react": ["react", "react-dom"],
-          "vendor-query": ["@tanstack/react-query"],
-          "vendor-xterm": ["@xterm/xterm", "@xterm/addon-fit"],
-          "vendor-charts": ["recharts"],
-          "vendor-motion": ["framer-motion"],
+        manualChunks(id: string) {
+          if (id.includes("node_modules/@xterm")) return "vendor-xterm";
+          if (id.includes("node_modules/recharts") || id.includes("node_modules/d3-")) return "vendor-charts";
+          if (id.includes("node_modules/framer-motion")) return "vendor-motion";
+          if (id.includes("node_modules/@tanstack")) return "vendor-query";
+          if (id.includes("node_modules/react-dom")) return "vendor-react-dom";
+          if (id.includes("node_modules/react")) return "vendor-react";
+          if (id.includes("node_modules/openai") || id.includes("node_modules/zod")) return "vendor-misc";
+          if (id.includes("src/components/IronWormPanel")) return "panel-ironworm";
+          if (id.includes("src/components/WeaponsPanel")) return "panel-weapons";
+          if (id.includes("src/components/AutoExploitPanel")) return "panel-autoexploit";
+          if (id.includes("src/components/MutationScannerPanel")) return "panel-mutation";
+          if (id.includes("src/components/ChainReactorPanel")) return "panel-chainreactor";
+          if (id.includes("src/components/CveExploitPanel")) return "panel-cve";
+          if (id.includes("src/components/PostExploitPanel")) return "panel-postexploit";
         },
       },
     },

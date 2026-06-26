@@ -17,6 +17,16 @@ const DEFAULT_JSON_ACCEPT = "application/json, application/problem+json";
 
 let _baseUrl: string | null = null;
 let _authTokenGetter: AuthTokenGetter | null = null;
+let _lockoutHandler: (() => void) | null = null;
+
+/**
+ * Register a handler invoked whenever any API call receives a 401 Unauthorized.
+ * The handler should clear the session and reset the UI to the login screen.
+ * Pass `null` to remove the handler.
+ */
+export function setLockoutHandler(handler: (() => void) | null): void {
+  _lockoutHandler = handler;
+}
 
 /**
  * Set a base URL that is prepended to every relative request URL
@@ -364,6 +374,9 @@ export async function customFetch<T = unknown>(
 
   if (!response.ok) {
     const errorData = await parseErrorBody(response, method);
+    if (response.status === 401 && _lockoutHandler) {
+      try { _lockoutHandler(); } catch { /* must not crash the fetch pipeline */ }
+    }
     throw new ApiError(response, errorData, requestInfo);
   }
 

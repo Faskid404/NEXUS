@@ -1,6 +1,6 @@
 import React, { useState, useEffect, Component, lazy, Suspense } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { setAuthTokenGetter } from "@workspace/api-client-react";
+import { setAuthTokenGetter, setLockoutHandler } from "@workspace/api-client-react";
 import LockScreen from "@/components/LockScreen";
 import { AUTH_KEY, getToken } from "@/lib/auth";
 
@@ -10,6 +10,12 @@ const API_URL = (import.meta.env as Record<string, string>)["VITE_API_URL"] ?? "
 
 // Wire up the generated API hooks to always send the current session token
 setAuthTokenGetter(getToken);
+
+// Global 401 interceptor: fires on any API call that gets Unauthorized
+setLockoutHandler(() => {
+  sessionStorage.removeItem(AUTH_KEY);
+  window.dispatchEvent(new CustomEvent("nexus:lockout"));
+});
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -74,6 +80,13 @@ class DashboardErrorBoundary extends Component<{ children: React.ReactNode }, EB
 function AppContent() {
   const [unlocked, setUnlocked] = useState(false);
   const [checking, setChecking] = useState(true);
+
+  // React to the global 401 lockout event fired by the fetch interceptor
+  useEffect(() => {
+    const handle = () => setUnlocked(false);
+    window.addEventListener("nexus:lockout", handle);
+    return () => window.removeEventListener("nexus:lockout", handle);
+  }, []);
 
   useEffect(() => {
     const token = sessionStorage.getItem(AUTH_KEY);

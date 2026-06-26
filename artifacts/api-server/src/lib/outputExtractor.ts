@@ -278,3 +278,111 @@ export function extractCommandOutput(
 /* ── Verification payload ───────────────────────────────────── */
 export const VERIFY_PAYLOAD =
   `id && whoami && uname -a && hostname && echo '${NEXUS_MARKER}'`;
+
+/* ── JSON context extraction ─────────────────────────────────────────────────
+   Scans every string value in a JSON response body for RCE patterns.
+   Handles APIs that wrap command output: {"output":"uid=0(root)…"} or
+   nested {"result":{"stdout":"…"}}. */
+export function extractFromJson(body: string): ExtractionResult | null {
+  const trimmed = body.trimStart();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return null;
+  let parsed: unknown;
+  try { parsed = JSON.parse(body); } catch { return null; }
+
+  function* walk(val: unknown): Generator<string> {
+    if (typeof val === "string" && val.length > 2) yield val;
+    else if (Array.isArray(val)) for (const v of val) yield* walk(v);
+    else if (val && typeof val === "object")
+      for (const v of Object.values(val as Record<string, unknown>)) yield* walk(v);
+  }
+
+  for (const str of walk(parsed)) {
+    const mIdx = str.indexOf(NEXUS_MARKER);
+    if (mIdx !== -1) {
+      const before = str.slice(0, mIdx).trim();
+      if (before.length > 0) return { text: before.slice(-4096), method: "json/marker", confidence: "high" };
+    }
+    const plain = stripHtml(str);
+    for (const { re, name, hi, ctx } of RCE_PATTERNS) {
+      const m = plain.match(re);
+      if (!m?.[0]) continue;
+      const hitIdx = plain.indexOf(m[0]);
+      const allLines = plain.split("\n");
+      const lineNum  = plain.slice(0, hitIdx).split("\n").length - 1;
+      const chunk    = allLines
+        .slice(Math.max(0, lineNum - 2), Math.min(allLines.length, lineNum + ctx))
+        .filter(l => l.trim()).join("\n").trim();
+      if (chunk) return { text: chunk.slice(0, 4096), method: `json/${name}`, confidence: hi ? "high" : "medium" };
+    }
+    for (const { re, name } of RAW_PATTERNS) {
+      if (re.test(str)) return { text: str.trim().slice(0, 4096), method: `json-raw/${name}`, confidence: "high" };
+    }
+  }
+  return null;
+}
+
+/* ── ANSI-stripped extraction ────────────────────────────────────────────────
+   Some targets return colorized terminal output embedded in HTTP responses.
+   Strips ANSI escape codes then re-runs all pattern matchers. */
+export function extractFromAnsiOutput(body: string): ExtractionResult | null {
+  const ansiRe = /\x1b\[[0-9;]*[mGKHFABCDSTJsu]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\r/g;
+  const stripped = body.replace(ansiRe, "");
+  if (stripped === body) return null;
+
+  const mIdx = stripped.indexOf(NEXUS_MARKER);
+  if (mIdx !== -1) {
+    const before = stripped.slice(0, mIdx).trim();
+    if (before.length > 0) return { text: before.slice(-4096), method: "ansi/marker", confidence: "high" };
+  }
+  for (const { re, name, hi, ctx } of RCE_PATTERNS) {
+    const m = stripped.match(re);
+    if (!m?.[0]) continue;
+    const hitIdx   = stripped.indexOf(m[0]);
+    const allLines = stripped.split("\n");
+    const lineNum  = stripped.slice(0, hitIdx).split("\n").length - 1;
+    const chunk    = allLines
+      .slice(Math.max(0, lineNum - 2), Math.min(allLines.length, lineNum + ctx))
+      .filter(l => l.trim()).join("\n").trim();
+    if (chunk) return { text: chunk.slice(0, 4096), method: `ansi/${name}`, confidence: hi ? "high" : "medium" };
+  }
+  return null;
+}
+
+/* ── Server-Sent Events / chunked stream extraction ──────────────────────────
+   Handles SSE streams where each line is prefixed with "data: ".
+   Concatenates all SSE payloads and runs extraction across the full text. */
+export function extractFromSseBody(body: string): ExtractionResult | null {
+  if (!body.includes("data:")) return null;
+  const lines = body.split(/\r?\n/)
+    .filter(l => l.startsWith("data:"))
+    .map(l => l.slice(5).trim());
+  if (lines.length === 0) return null;
+
+  // Try JSON extraction on each SSE frame first
+  for (const line of lines) {
+    if (line.startsWith("{")) {
+      const r = extractFromJson(line);
+      if (r) return { ...r, method: `sse/${r.method}` };
+    }
+  }
+
+  // Plain-text SSE fallback
+  const joined = lines.join("\n");
+  const mIdx   = joined.indexOf(NEXUS_MARKER);
+  if (mIdx !== -1) {
+    const before = joined.slice(0, mIdx).trim();
+    if (before.length > 0) return { text: before.slice(-4096), method: "sse/marker", confidence: "high" };
+  }
+  for (const { re, name, hi, ctx } of RCE_PATTERNS) {
+    const m = joined.match(re);
+    if (!m?.[0]) continue;
+    const hitIdx   = joined.indexOf(m[0]);
+    const allLines = joined.split("\n");
+    const lineNum  = joined.slice(0, hitIdx).split("\n").length - 1;
+    const chunk    = allLines
+      .slice(Math.max(0, lineNum - 2), Math.min(allLines.length, lineNum + ctx))
+      .filter(l => l.trim()).join("\n").trim();
+    if (chunk) return { text: chunk.slice(0, 4096), method: `sse/${name}`, confidence: hi ? "high" : "medium" };
+  }
+  return null;
+}

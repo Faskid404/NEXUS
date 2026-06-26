@@ -272,6 +272,18 @@ export function extractCommandOutput(
     }
   }
 
+  /* ── 5. JSON context extraction ─────────────────────────── */
+  const jsonR = extractFromJson(body);
+  if (jsonR) return jsonR;
+
+  /* ── 6. ANSI-stripped extraction ────────────────────────── */
+  const ansiR = extractFromAnsiOutput(body);
+  if (ansiR) return ansiR;
+
+  /* ── 7. SSE / chunked-stream extraction ─────────────────── */
+  const sseR = extractFromSseBody(body);
+  if (sseR) return sseR;
+
   return null;
 }
 

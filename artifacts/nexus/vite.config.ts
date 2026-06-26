@@ -71,9 +71,8 @@ export default defineConfig({
           if (id.includes("src/components/WeaponsPanel")) return "panel-weapons";
           if (id.includes("src/components/AutoExploitPanel")) return "panel-autoexploit";
           if (id.includes("src/components/MutationScannerPanel")) return "panel-mutation";
-          if (id.includes("src/components/ChainReactorPanel")) return "panel-chainreactor";
-          if (id.includes("src/components/CveExploitPanel")) return "panel-cve";
-          if (id.includes("src/components/PostExploitPanel")) return "panel-postexploit";
+          if (id.includes("src/components/ChainReplayPanel")) return "panel-chainreactor";
+          if (id.includes("src/components/CvePanel")) return "panel-cve";
         },
       },
     },

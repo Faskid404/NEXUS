@@ -1,5 +1,6 @@
 import { createLogger } from "./logger.js";
 import { createConnection } from "net";
+import { connect as tlsConnect } from "tls";
 import { networkInterfaces, hostname, userInfo, platform } from "os";
 import { spawnSync } from "child_process";
 import { readFileSync, existsSync, writeFileSync, readdirSync, statSync } from "fs";
@@ -89,8 +90,9 @@ const SERVICE_PORTS = [
 
 function tcpConnect(host: string, port: number, timeoutMs = 1500): Promise<{ open: boolean; banner: string }> {
   return new Promise(resolve => {
-    let banner = "";
-    let done   = false;
+    let banner    = "";
+    let done      = false;
+    let connected = false;
     const sock  = createConnection({ host, port });
     const timer = setTimeout(() => {
       if (done) return;
@@ -98,11 +100,11 @@ function tcpConnect(host: string, port: number, timeoutMs = 1500): Promise<{ ope
       sock.destroy();
       resolve({ open: false, banner: "" });
     }, timeoutMs);
-    sock.on("connect",  () => { sock.setTimeout(600); });
+    sock.on("connect",  () => { connected = true; sock.setTimeout(600); });
     sock.on("data",     d  => { banner += d.toString("utf8", 0, 512); });
     sock.on("timeout",  () => { if (done) return; done = true; clearTimeout(timer); sock.destroy(); resolve({ open: true, banner }); });
     sock.on("error",    () => { if (done) return; done = true; clearTimeout(timer); resolve({ open: false, banner: "" }); });
-    sock.on("close",    () => { if (done) return; done = true; clearTimeout(timer); resolve({ open: true, banner }); });
+    sock.on("close",    () => { if (done) return; done = true; clearTimeout(timer); resolve({ open: connected, banner }); });
   });
 }
 
@@ -157,7 +159,9 @@ function httpFetch(
   return new Promise(resolve => {
     let raw  = "";
     let done = false;
-    const sock  = createConnection({ host, port });
+    const sock  = useTls
+      ? tlsConnect({ host, port, rejectUnauthorized: false })
+      : createConnection({ host, port });
     const timer = setTimeout(() => { if (done) return; done = true; sock.destroy(); resolve({ status: 0, body: "", headers: {} }); }, timeoutMs);
 
     const parseResp = () => {

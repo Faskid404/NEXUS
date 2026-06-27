@@ -115,7 +115,6 @@ export function buildSshJumpChain(
   onClose: (code:number|null, elapsed:number)=>void,
   onError: (err:Error)=>void,
 ): ()=>void {
-  const { Client } = require("ssh2") as typeof import("ssh2");
   const t0 = Date.now();
   let ended = false;
   const clients: InstanceType<typeof Client>[] = [];

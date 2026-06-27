@@ -48,13 +48,15 @@ export function rawFetch(
     const proto = isHttps ? https : http;
     const req = proto.request(opts, (res) => {
       let d = "";
-      res.on("data", (c: Buffer) => { d += c.toString(); if (d.length > 131072) res.destroy(); });
+      let truncated = false;
+      res.on("data", (c: Buffer) => { d += c.toString(); if (d.length > 131072) { truncated = true; res.destroy(); } });
       res.on("end", () => {
         const rh: Record<string, string> = {};
         for (const [k, v] of Object.entries(res.headers)) {
           if (v !== undefined) rh[k.toLowerCase()] = Array.isArray(v) ? v.join(", ") : v;
         }
-        resolve({ status: res.statusCode ?? 0, body: d.slice(0, 131072), headers: rh });
+        const body = d.slice(0, 131072) + (truncated ? "\n[...response truncated at 128 KB...]" : "");
+        resolve({ status: res.statusCode ?? 0, body, headers: rh });
       });
     });
     req.on("error", reject);

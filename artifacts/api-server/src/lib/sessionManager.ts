@@ -153,7 +153,7 @@ export function enrichCmd(id: string, rawCmd: string): string {
   const envPrefix = Object.entries(s.env)
     .map(([k, v]) => `export ${k}='${v.replace(/'/g, "'\\''")}'`)
     .join("; ");
-  const cdPart  = s.cwd !== "/" ? `cd '${s.cwd}'` : "";
+  const cdPart  = s.cwd !== "/" ? `cd '${s.cwd.replace(/'/g, "'\\''")}'` : "";
   const prefix  = [envPrefix, cdPart].filter(Boolean).join("; ");
   return prefix ? `${prefix}; ${rawCmd}` : rawCmd;
 }
@@ -170,7 +170,7 @@ export function updateCwdFromOutput(id: string, cmd: string, output: string): vo
   } else if (target === "..") {
     const parts = s.cwd.split("/").filter(Boolean);
     parts.pop();
-    s.cwd = "/" + parts.join("/") || "/";
+    s.cwd = "/" + parts.join("/");
   } else {
     s.cwd = (s.cwd === "/" ? "" : s.cwd) + "/" + target;
   }

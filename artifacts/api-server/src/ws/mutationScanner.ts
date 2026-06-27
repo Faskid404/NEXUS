@@ -262,16 +262,17 @@ export function handleMutationScanner(ws: WebSocket): void {
 
       send(ws, { type: "phase", phase: "baseline", text: "Establishing 3-request baseline..." });
 
-      let baseLen = 0;
-      let baseElapsed = 0;
-      let baseStatus  = 0;
+      let baseLen        = 0;
+      let baseElapsed    = 0;
+      let baseStatus     = 0;
+      let baselineBodyRef = "";       // declared outside try so evolution loop can use it
       try {
         const bases = await Promise.all([
           probe(targetUrl, injectParam, "nexus_baseline_1", httpMethod, headers),
           probe(targetUrl, injectParam, "nexus_baseline_2", httpMethod, headers),
           probe(targetUrl, injectParam, "nexus_baseline_3", httpMethod, headers),
         ]);
-        const baselineBodyRef = bases[1]?.body ?? "";
+        baselineBodyRef = bases[1]?.body ?? "";   // assign here
         baseLen     = Math.round(bases.reduce((a, b) => a + b.body.length, 0) / 3);
         baseElapsed = Math.round(bases.reduce((a, b) => a + b.elapsed, 0) / 3);
         baseStatus  = bases[1]?.status ?? 0;

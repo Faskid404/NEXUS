@@ -962,8 +962,14 @@ function decodeText(t: string, type: EncType): string {
 
 // ─── TERMINAL COLORIZER ───────────────────────────────────
 function colorLine(line: string): string {
-  if (/\u2714\s+EXECUTION\s+CONFIRMED/.test(line)) return "text-green-300 font-bold";
-  if (/POSSIBLE\s+BLIND\s+RCE/.test(line))         return "text-yellow-300 font-bold";
+  if (/\u2714\s+EXECUTION\s+CONFIRMED|AUTOCHAIN COMPLETE/.test(line)) return "text-green-300 font-bold text-shadow-green";
+  if (/POSSIBLE\s+BLIND\s+RCE|timing_oracle/.test(line))              return "text-yellow-300 font-bold";
+  if (/HONEYPOT HINT/.test(line))                                        return "text-yellow-400 font-bold";
+  if (/WAF-SWITCH|auto-escalat/.test(line))                              return "text-orange-400";
+  if (/RCE CONFIRMED|NEXUS_SUCCESS|NEXUS_OUTPUT_END/.test(line))        return "text-green-400 font-bold";
+  if (/POST-EXPLOITATION|Privesc checks/.test(line))                     return "text-red-300";
+  if (/uid=0\(root\)|NT AUTHORITY\\SYSTEM/.test(line))               return "text-green-200 font-bold bg-green-950/20";
+  if (/\broot:\b|\bshadow:\b/.test(line))                             return "text-green-200";
   if (/\u2716\s+WAF:/.test(line))                  return "text-orange-400 font-bold";
   if (/^\[NEXUSFORGE\]/.test(line))                return "text-red-400 font-bold";
   if (/^\[TARGET\]/.test(line))                    return "text-amber-400";
@@ -1089,12 +1095,36 @@ export default function MainLab({ onLockout }: { onLockout?: () => void } = {}) 
   const scanT0Ref = useRef<number>(0);
   const noTargetErrRef = useRef(false);
 
+  const [rceConfirmed,  setRceConfirmed]  = useState<{via:string;mode:string;data:string}|null>(null);
+  const [honeypotWarn,  setHoneypotWarn]  = useState<string|null>(null);
+
+  const PRIVESC_CHECKS = [
+    "sudo -l 2>/dev/null",
+    "find / -perm -4000 -type f 2>/dev/null | head -20",
+    "cat /etc/crontab 2>/dev/null",
+    "env | grep -iE 'secret|pass|key|token|api' | head -10",
+    "cat /proc/1/cgroup 2>/dev/null | head -3",
+    "id && cat /proc/net/fib_trie 2>/dev/null | grep 'LOCAL' | head -5",
+    "ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null | head -15",
+    "ls -la /etc/passwd /etc/shadow /etc/sudoers 2>/dev/null",
+  ];
+
   const handleExecMsg = useCallback((msg: unknown) => {
-    const m = msg as {type:string;chunk?:string;message?:string;code?:number;elapsed?:number;output?:string;method?:string;confidence?:string};
+    const m = msg as {
+      type:string; chunk?:string; message?:string; code?:number; elapsed?:number;
+      output?:string; method?:string; confidence?:string;
+      via?:string; mode?:string; data?:string; reason?:string;
+    };
     if (m.type === "data" && m.chunk) setOutput(p => p + (m.chunk ?? ""));
     else if (m.type === "commandOutput" && m.output) {
       setExtractedOutput({ text: m.output, method: m.method ?? "unknown", confidence: m.confidence ?? "medium" });
       setOutput(p => p + `\n✔ EXECUTION CONFIRMED — output extracted (${m.method ?? "unknown"})\n${m.output}\n`);
+    } else if (m.type === "confirmed" && m.data) {
+      // autoExploit confirmed message
+      setRceConfirmed({ via: m.via ?? "unknown", mode: m.mode ?? mode, data: m.data });
+      setExtractedOutput({ text: m.data, method: m.via ?? "unknown", confidence: "high" });
+      setOutput(p => p + `\n╔══════════════════════════════════════════╗\n║  ✔  EXECUTION CONFIRMED                  ║\n║  VIA: ${(m.via ?? "unknown").padEnd(35)}║\n╚══════════════════════════════════════════╝\n${m.data}\n`);
+      setScore(p => p + 100);
     } else if (m.type === "end") {
       const el = m.elapsed ?? 0;
       setScore(p => p + 25 + (el > 3000 ? 55 : 0));
@@ -1493,7 +1523,7 @@ export default function MainLab({ onLockout }: { onLockout?: () => void } = {}) 
         <div className="flex items-center gap-3 text-xs">
           <span className={MODE_COLOR[mode]??"text-zinc-400"}>{mode.toUpperCase()}</span>
           <span className="text-zinc-700">{engine}</span>
-          <button onClick={()=>{setOutput("");setChain([]);setExtractedOutput(null);}} className="text-zinc-700 hover:text-red-400 uppercase">CLR</button>
+          <button onClick={()=>{setOutput("");setChain([]);setExtractedOutput(null);setRceConfirmed(null);setHoneypotWarn(null);}} className="text-zinc-700 hover:text-red-400 uppercase">CLR</button>
           <button
             onClick={()=>setCmd("id && whoami && uname -a && hostname && echo '===NEXUS_OUTPUT_END==='")}
             title="Set verification payload — output will be cleanly extracted and displayed below"
@@ -1512,6 +1542,46 @@ export default function MainLab({ onLockout }: { onLockout?: () => void } = {}) 
         {running && <span className="inline-block w-2 h-3 bg-lime-400 animate-pulse align-text-bottom ml-0.5"/>}
       </div>
       {/* ── Extracted Output Panel ────────────────────────── */}
+      {/* ── Honeypot Warning ─────────────────────────────── */}
+      {honeypotWarn && (
+        <div className="border-t-2 border-yellow-700 bg-yellow-950/30 px-3 py-2 flex items-center justify-between shrink-0">
+          <div className="flex items-center gap-2">
+            <span className="text-yellow-400 text-[11px]">⚠</span>
+            <span className="text-yellow-400 text-[10px] font-bold uppercase tracking-wide">HONEYPOT HINT</span>
+            <span className="text-yellow-300 text-[10px]">{honeypotWarn}</span>
+          </div>
+          <button onClick={()=>setHoneypotWarn(null)} className="text-yellow-700 hover:text-yellow-400 text-[9px]">✕</button>
+        </div>
+      )}
+      {/* ── RCE Confirmed Badge ───────────────────────────── */}
+      {rceConfirmed && (
+        <div className="border-t-2 border-green-500 bg-green-950/20 px-3 py-2 shrink-0">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-[13px] text-green-400">✔</span>
+              <span className="text-green-300 text-[11px] font-bold uppercase tracking-widest">RCE CONFIRMED</span>
+              <span className="text-[9px] px-1.5 py-0.5 bg-green-900/60 border border-green-700 text-green-300 uppercase">{rceConfirmed.via}</span>
+              <span className="text-[9px] px-1.5 py-0.5 bg-zinc-900 border border-zinc-700 text-zinc-300 uppercase">{rceConfirmed.mode}</span>
+            </div>
+            <div className="flex gap-1">
+              <button onClick={()=>copy(rceConfirmed.data,"rce-data")} className={`text-[9px] uppercase px-2 py-0.5 border ${copyId==="rce-data"?"border-green-600 text-green-300":"border-zinc-800 text-zinc-500 hover:text-green-400"}`}>{copyId==="rce-data"?"COPIED":"COPY"}</button>
+              <button onClick={()=>setRceConfirmed(null)} className="text-zinc-700 hover:text-red-400 text-[9px] px-1">✕</button>
+            </div>
+          </div>
+          {/* Privesc shortcuts */}
+          <div className="mt-2">
+            <div className="text-[9px] text-zinc-600 uppercase mb-1">Post-exploitation quick-checks →</div>
+            <div className="flex flex-wrap gap-1">
+              {PRIVESC_CHECKS.slice(0,6).map((c,i)=>(
+                <button key={i} onClick={()=>setCmd(c)} title={c}
+                  className="text-[9px] bg-zinc-900 text-red-400 px-1.5 py-0.5 border border-red-900/50 hover:border-red-600 hover:text-red-300 max-w-[180px] truncate">
+                  {c.length>40?c.slice(0,40)+"…":c}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
       {extractedOutput && (
         <div className="border-t-2 border-green-800 bg-black shrink-0">
           <div className="flex items-center justify-between px-3 py-1 bg-green-950/40 border-b border-green-900/50">
@@ -1541,7 +1611,7 @@ export default function MainLab({ onLockout }: { onLockout?: () => void } = {}) 
           </pre>
           {showRawResponse && (
             <div className="border-t border-zinc-900 px-3 py-2 max-h-40 overflow-y-auto">
-              <div className="text-[9px] text-zinc-600 uppercase mb-1">Raw Terminal Output</div>
+              <div className="text-[9px] text-zinc-600 uppercase mb-1">Raw Response — last 4KB</div>
               <pre className="text-[10px] font-mono text-zinc-500 whitespace-pre-wrap break-words">{output.slice(-4000)}</pre>
             </div>
           )}

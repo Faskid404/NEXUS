@@ -338,6 +338,12 @@ async function fetchAttempt(
             method:     extracted.method,
             confidence: extracted.confidence,
           });
+          // Honeypot hint — warn if deception environment detected
+          const _hp = detectHoneypotHint(text, baselineBody, 0);
+          if (_hp.likelyHoneypot) {
+            send(ws, { type: "data", chunk: `\n  [HP] ${_hp.reason}\n` });
+            send(ws, { type: "honeypot", reason: _hp.reason });
+          }
           send(ws, { type: "data", chunk:
             `[EXTRACTED] method=${extracted.method} confidence=${extracted.confidence}\n` +
             `────────────────────────────────────────\n` +
@@ -701,7 +707,11 @@ export function handleStreamExec(ws: WebSocket): void {
 
     executing = true;
     const start     = Date.now();
-    const processed = applyQuantumBypass(cmd, mode, attackerIp, attackerPort);
+    const _raw = applyQuantumBypass(cmd, mode, attackerIp, attackerPort);
+    const _noMark = new Set(["timing","windows_timing","blind","oob","rev_shell","windows_rev","log4shell","xxe"]);
+    const processed = (_noMark.has(mode) || _raw.includes(NEXUS_MARKER))
+      ? _raw
+      : `${_raw};echo '${NEXUS_MARKER}' 2>/dev/null`;
     void runStreamExec(
       ws,
       { cmd, engine, mode, injectionUrl, injectParam, httpMethod, customHeaders,

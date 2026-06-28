@@ -39,7 +39,7 @@ export interface IronWormResult {
 
 interface PortScan  { host: string; port: number; open: boolean; banner: string; }
 interface SshResult { success: boolean; user: string; pass: string; output: string; }
-interface ExploitHit { host: string; port: number; method: string; output: string; }
+interface ExploitHit { host: string; port: number; method: string; output: string; service?: string; success?: boolean; elapsed?: number; }
 
 const ATTACKER_PUBKEY =
   "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC7Kj3vXk2eU9Lm8nQpRtYwZxVbNcFdIoHsGqJuAeMhTlP nexus-worm";

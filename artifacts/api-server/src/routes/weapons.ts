@@ -11,7 +11,7 @@ import { ironWormScan } from "../lib/ironWorm.js";
 const router = Router();
 
 /* ── GET /api/weapons/echoes ────────────────────────────────────────── */
-router.get("/api/weapons/echoes", (req, res) => {
+router.get("/weapons/echoes", (req, res) => {
   const cbUrl = String(req.query["cbUrl"]  ?? "http://oob.nexusforge.local");
   const token = String(req.query["token"]  ?? "NEXUSTOKEN");
   const proto = req.query["protocol"] as string | undefined;
@@ -25,7 +25,7 @@ router.get("/api/weapons/echoes", (req, res) => {
 });
 
 /* ── GET /api/weapons/shadows ───────────────────────────────────────── */
-router.get("/api/weapons/shadows", (req, res) => {
+router.get("/weapons/shadows", (req, res) => {
   const lhost = String(req.query["lhost"] ?? "127.0.0.1");
   const lport = String(req.query["lport"] ?? "4444");
   const os    = req.query["os"]  as string | undefined;
@@ -39,7 +39,7 @@ router.get("/api/weapons/shadows", (req, res) => {
 });
 
 /* ── GET /api/weapons/veils ─────────────────────────────────────────── */
-router.get("/api/weapons/veils", (req, res) => {
+router.get("/weapons/veils", (req, res) => {
   const lhost = String(req.query["lhost"] ?? "127.0.0.1");
   const lport = String(req.query["lport"] ?? "4444");
   const os    = req.query["os"]    as string | undefined;
@@ -55,7 +55,7 @@ router.get("/api/weapons/veils", (req, res) => {
 });
 
 /* ── GET /api/weapons/chains ────────────────────────────────────────── */
-router.get("/api/weapons/chains", (_req, res) => {
+router.get("/weapons/chains", (_req, res) => {
   res.json({
     chains: KILL_CHAINS.map(c => ({
       id:          c.id,
@@ -70,7 +70,7 @@ router.get("/api/weapons/chains", (_req, res) => {
 });
 
 /* ── POST /api/weapons/c2 ───────────────────────────────────────────── */
-router.post("/api/weapons/c2", (req, res) => {
+router.post("/weapons/c2", (req, res) => {
   const b = req.body as Partial<C2PollerConfig>;
   if (!b.pollUrl) { res.status(400).json({ error: "pollUrl is required" }); return; }
   const cfg: C2PollerConfig = {
@@ -91,7 +91,7 @@ router.post("/api/weapons/c2", (req, res) => {
 });
 
 /* ── GET /api/weapons/c2/encode ─────────────────────────────────────── */
-router.get("/api/weapons/c2/encode", (req, res) => {
+router.get("/weapons/c2/encode", (req, res) => {
   const cmd    = String(req.query["cmd"]    ?? "id");
   const xorKey = Number(req.query["xorKey"] ?? 0x4e);
   if (xorKey < 0 || xorKey > 255) { res.status(400).json({ error: "xorKey must be 0-255" }); return; }
@@ -99,7 +99,7 @@ router.get("/api/weapons/c2/encode", (req, res) => {
 });
 
 /* ── GET /api/weapons/stats ─────────────────────────────────────────── */
-router.get("/api/weapons/stats", (req: Request, res: Response) => {
+router.get("/weapons/stats", (req: Request, res: Response) => {
   const lhost  = String(req.query["lhost"] ?? "127.0.0.1");
   const lport  = String(req.query["lport"] ?? "4444");
   const cbUrl  = String(req.query["cbUrl"] ?? "http://oob.nexusforge.local");
@@ -132,7 +132,7 @@ router.get("/api/weapons/stats", (req: Request, res: Response) => {
 });
 
 /* ── GET /api/weapons/search ─────────────────────────────────────────── */
-router.get("/api/weapons/search", (req: Request, res: Response) => {
+router.get("/weapons/search", (req: Request, res: Response) => {
   const q     = ((req.query["q"] as string | undefined) ?? "").toLowerCase();
   const lhost = String(req.query["lhost"] ?? "127.0.0.1");
   const lport = String(req.query["lport"] ?? "4444");
@@ -166,7 +166,7 @@ router.get("/api/weapons/search", (req: Request, res: Response) => {
 });
 
 /* ── GET /api/weapons/categories ────────────────────────────────────── */
-router.get("/api/weapons/categories", (req: Request, res: Response) => {
+router.get("/weapons/categories", (req: Request, res: Response) => {
   const lhost = String(req.query["lhost"] ?? "127.0.0.1");
   const lport = String(req.query["lport"] ?? "4444");
 
@@ -184,7 +184,7 @@ router.get("/api/weapons/categories", (req: Request, res: Response) => {
 });
 
 /* ── POST /api/weapons/ironworm ─────────────────────────────────────── */
-router.post("/api/weapons/ironworm", async (req, res) => {
+router.post("/weapons/ironworm", async (req, res) => {
   const { mode, packageName, githubOrg, githubRepo, depConfusionOrg, cbHost, cbPort } = req.body as Record<string,string|undefined>;
   try {
     const results = await ironWormScan({

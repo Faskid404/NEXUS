@@ -681,7 +681,7 @@ function ProbeTargetTab() {
   const probe = useCallback(() => {
     if (!url || running) return;
     setLog([]); setEnv(null); setSvcs([]); setDisc(null); setRunning(true);
-    const ws = new WebSocket(`${wsBase()}/probeTarget`);
+    const ws = new WebSocket(withAuthToken(`${wsBase()}/probe`));
     wsRef.current = ws;
     ws.onopen = () => {
       ws.send(JSON.stringify({ url, scanPorts, sshBrute, ...authHeaders() }));

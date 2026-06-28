@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { authHeaders } from "../lib/auth";
+import { authHeaders, withAuthToken } from "../lib/auth";
 
 const API_URL = (import.meta.env as Record<string, string>)["VITE_API_URL"] ?? "";
 const API = (p: string) => `${API_URL}${p}`;
@@ -358,7 +358,7 @@ function ChainReactorTab() {
     if (wsRef.current && wsRef.current.readyState < WebSocket.CLOSING) {
       wsRef.current.close(1000, "restart");
     }
-    const ws = new WebSocket(`${wsBase()}/chainreactor`);
+    const ws = new WebSocket(withAuthToken(`${wsBase()}/chainreactor`));
     wsRef.current = ws;
     ws.onopen = () => ws.send(JSON.stringify({ chainId: selectedId, target, lhost, lport }));
     ws.onmessage = (ev) => {

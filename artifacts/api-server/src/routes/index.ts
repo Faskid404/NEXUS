@@ -7,7 +7,7 @@ import suggestionsRouter    from "./suggestions.js";
 import scannerRouter        from "./scanner.js";
 import chainRouter          from "./exploitChain.js";
 import authRouter           from "./auth.js";
-import oobRouter            from "./oob.js";
+import oobRouter, { oobPublicRouter } from "./oob.js";
 import chainLogRouter       from "./chainLog.js";
 import cveRouter            from "./cve.js";
 import aiRouter             from "./ai.js";
@@ -18,8 +18,9 @@ import weaponsRouter        from "./weapons.js";
 const router: IRouter = Router();
 
 /* ── Public (no auth required) ─────────────────────────────────────── */
-router.use(authRouter);    // POST /api/auth/login, GET /api/auth/verify
-router.use(healthRouter);  // GET  /api/healthz
+router.use(authRouter);       // POST /api/auth/login, GET /api/auth/verify
+router.use(healthRouter);     // GET  /api/healthz
+router.use(oobPublicRouter);  // GET|POST /api/oob/cb/:token, /api/oob/dns-chunk/...
 
 /* ── Protected (valid Bearer token required) ────────────────────────── */
 router.use(requireAuth);

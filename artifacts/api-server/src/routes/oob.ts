@@ -175,6 +175,15 @@ router.post("/oob/cb/:token", receiveCallback);
 router.get("/oob/cb",        receiveCallback);
 router.post("/oob/cb",       receiveCallback);
 
+/* ── Public router — only callback receivers (no auth required) ────── */
+export const oobPublicRouter: IRouter = Router();
+oobPublicRouter.get("/oob/cb/:token", receiveCallback);
+oobPublicRouter.post("/oob/cb/:token", receiveCallback);
+oobPublicRouter.get("/oob/cb",         receiveCallback);
+oobPublicRouter.post("/oob/cb",        receiveCallback);
+oobPublicRouter.get("/oob/dns-chunk/:token/:prefix/:idx/:total",  receiveDnsChunk);
+oobPublicRouter.post("/oob/dns-chunk/:token/:prefix/:idx/:total", receiveDnsChunk);
+
 /* ── GET /oob/hits — retrieve captured hits ─────────────────────────── */
 router.get("/oob/hits", (_req: Request, res: Response) => {
   const hits = getHits();

@@ -4,6 +4,7 @@ import {
   deriveKey, hexToKey,
   HEADER_SIZE, HMAC_SIZE,
 } from "../lib/c2-protocol";
+import { withAuthToken } from "../lib/auth";
 
 const API_URL = (import.meta.env as Record<string, string>)["VITE_API_URL"] ?? "";
 function wsBase() {
@@ -241,7 +242,7 @@ export default function C2TrafficSniffer() {
     capStart.current = Date.now();
     frameCount.current = 0;
 
-    const ws = new WebSocket(wsUrl);
+    const ws = new WebSocket(withAuthToken(wsUrl));
     ws.binaryType = "arraybuffer";
     wsRef.current = ws;
 

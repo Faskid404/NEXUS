@@ -1,4 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from "react";
+import { withAuthToken } from "../lib/auth";
 import {
   encodeFrame, decodeFrame, buildPayload, parseFramePayload,
   FrameType, FrameTypeName, deriveKey, randomKey, keyToHex, hexToKey,
@@ -144,7 +145,7 @@ export default function C2PollerPanel() {
   const connect = useCallback(() => {
     if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
     addLog({ dir: "info", type: "CONNECT", seq: -1, hex: "", parsed: { url: wsUrl }, hmacOk: true });
-    const ws = new WebSocket(wsUrl);
+    const ws = new WebSocket(withAuthToken(wsUrl));
     ws.binaryType = "arraybuffer";
     wsRef.current = ws;
 

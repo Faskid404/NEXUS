@@ -1,6 +1,8 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { extractCommandOutput } from "../lib/outputExtractor.js";
 import { getWsStats, WS_CHANNEL_META } from "../lib/wsStats.js";
+import { getHits } from "../oob/oobStore.js";
+import { getSessionStats } from "../ws/c2Relay.js";
 import {
   applyQuantumBypass,
   buildPayloadVariants,
@@ -512,6 +514,22 @@ router.post("/hub/exec", async (req: Request, res: Response) => {
 router.get("/hub/ws-stats", (_req: Request, res: Response) => {
   const stats = getWsStats();
   res.json({ ...stats, channels_meta: WS_CHANNEL_META });
+});
+
+router.get("/hub/status", (_req: Request, res: Response) => {
+  const wsStats  = getWsStats();
+  const c2       = getSessionStats();
+  const oobHits  = getHits(1000);
+  res.json({
+    oobHits:      oobHits.length,
+    oobWithData:  oobHits.filter(h => h.decodedData).length,
+    c2Sessions:   c2.sessions,
+    c2Sniffers:   c2.sniffer_count,
+    c2Operators:  c2.operator_count,
+    wsActiveTotal: wsStats.activeTotal,
+    wsTotalEver:  wsStats.totalEver,
+    uptimeMs:     wsStats.uptimeMs,
+  });
 });
 
 export default router;

@@ -2,6 +2,7 @@ import React, { useState, useEffect, Component, lazy, Suspense } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { setAuthTokenGetter, setLockoutHandler } from "@workspace/api-client-react";
 import LockScreen from "@/components/LockScreen";
+import StatusBar from "@/components/StatusBar";
 import { AUTH_KEY, getToken } from "@/lib/auth";
 
 const MainLab = lazy(() => import("@/components/MainLab"));
@@ -162,9 +163,12 @@ function AppContent() {
 
   return unlocked ? (
     <DashboardErrorBoundary>
-      <Suspense fallback={fallback}>
-        <MainLab onLockout={() => { sessionStorage.removeItem(AUTH_KEY); setUnlocked(false); }} />
-      </Suspense>
+      <div className="flex flex-col h-screen overflow-hidden">
+        <StatusBar />
+        <Suspense fallback={fallback}>
+          <MainLab onLockout={() => { sessionStorage.removeItem(AUTH_KEY); setUnlocked(false); }} />
+        </Suspense>
+      </div>
     </DashboardErrorBoundary>
   ) : (
     <LockScreen onUnlock={handleUnlock} />

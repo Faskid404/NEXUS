@@ -16,6 +16,12 @@ interface DnsSession {
   receivedAt:number; lastChunkAt:number; completedAt:number|null;
 }
 interface TokenInfo { token:string; cbUrl:string; payloads:Record<string,string>; }
+interface ActivateResult {
+  ok:boolean; token:string; cbUrl:string; payload:string; payloadType:string;
+  targetUrl:string; method:string; injectParam:string;
+  status:"sent"|"error"|"timeout"; statusCode:number|null; responseMs:number;
+  responseBody:string; error?:string; hint:string;
+}
 
 const PREFIX_LABELS:Record<string,string> = {
   p:"passwd", e:"env-secrets", s:"shadow", aws:"aws-creds",
@@ -53,46 +59,59 @@ const PAYLOAD_LABELS:Record<string,string>={
 };
 
 export default function OobPanel(){
-  const [tab,       setTab]       = useState<"hits"|"dns">("hits");
-  const [hits,      setHits]      = useState<OobHit[]>([]);
-  const [dnsSessions, setDnsSessions] = useState<DnsSession[]>([]);
-  const [tokenInfo, setTokenInfo] = useState<TokenInfo|null>(null);
-  const [connected, setConnected] = useState(false);
+  const [tab,          setTab]          = useState<"activate"|"hits"|"dns">("activate");
+  const [hits,         setHits]         = useState<OobHit[]>([]);
+  const [dnsSessions,  setDnsSessions]  = useState<DnsSession[]>([]);
+  const [tokenInfo,    setTokenInfo]    = useState<TokenInfo|null>(null);
+  const [connected,    setConnected]    = useState(false);
   const [dnsConnected, setDnsConnected] = useState(false);
-  const [expanded,  setExpanded]  = useState<string|null>(null);
-  const [copied,    setCopied]    = useState<string|null>(null);
-  const [filter,    setFilter]    = useState("");
-  const [selPayload,setSelPayload]= useState("curl_exfil");
-  const [loading,   setLoading]   = useState(false);
-  const [expandedDns, setExpandedDns] = useState<string|null>(null);
+  const [expanded,     setExpanded]     = useState<string|null>(null);
+  const [copied,       setCopied]       = useState<string|null>(null);
+  const [filter,       setFilter]       = useState("");
+  const [selPayload,   setSelPayload]   = useState("curl_exfil");
+  const [loading,      setLoading]      = useState(false);
+  const [expandedDns,  setExpandedDns]  = useState<string|null>(null);
+
+  const [activateTarget,  setActivateTarget]  = useState("");
+  const [activateParam,   setActivateParam]   = useState("q");
+  const [activateMethod,  setActivateMethod]  = useState("GET");
+  const [activatePayload, setActivatePayload] = useState("curl_exfil");
+  const [activating,      setActivating]      = useState(false);
+  const [activateResult,  setActivateResult]  = useState<ActivateResult|null>(null);
+  const [callbackReceived,setCallbackReceived]= useState(false);
+
   const esRef    = useRef<EventSource|null>(null);
   const dnsEsRef = useRef<EventSource|null>(null);
 
-  /* ── HTTP hits SSE ─────────────────────────────────────────────────── */
   useEffect(()=>{
     const es = new EventSource(withAuthToken(`${API_URL}/api/oob/hits/stream`));
     esRef.current = es;
     es.onopen  = ()=>setConnected(true);
     es.onerror = ()=>setConnected(false);
     es.addEventListener("hit",(e:MessageEvent)=>{
-      try{ setHits(p=>[JSON.parse(e.data),...p].slice(0,500)); }catch{/**/}
+      try{
+        const hit:OobHit = JSON.parse(e.data as string);
+        setHits(p=>[hit,...p].slice(0,500));
+        setActivateResult(prev=>{
+          if(prev && hit.token===prev.token){ setCallbackReceived(true); }
+          return prev;
+        });
+      }catch{/**/}
     });
     es.addEventListener("cleared",()=>setHits([]));
     return()=>{ es.close(); setConnected(false); };
   },[]);
 
-  /* ── DNS sessions SSE ─────────────────────────────────────────────── */
   useEffect(()=>{
     const es = new EventSource(withAuthToken(`${API_URL}/api/oob/dns-sessions/stream`));
     dnsEsRef.current = es;
     es.onopen  = ()=>setDnsConnected(true);
     es.onerror = ()=>setDnsConnected(false);
-
     es.addEventListener("session",(e:MessageEvent)=>{
       try{
-        const s:DnsSession = JSON.parse(e.data);
+        const s:DnsSession = JSON.parse(e.data as string);
         setDnsSessions(prev=>{
-          const idx = prev.findIndex(x=>x.key===s.key);
+          const idx=prev.findIndex(x=>x.key===s.key);
           if(idx>=0){ const n=[...prev]; n[idx]=s; return n; }
           return [s,...prev].slice(0,200);
         });
@@ -100,15 +119,15 @@ export default function OobPanel(){
     });
     es.addEventListener("chunk",(e:MessageEvent)=>{
       try{
-        const d = JSON.parse(e.data) as {key:string;received:number;total:number};
+        const d=JSON.parse(e.data as string) as {key:string;received:number;total:number};
         setDnsSessions(prev=>prev.map(s=>s.key===d.key?{...s,received:d.received,total:d.total}:s));
       }catch{/**/}
     });
     es.addEventListener("complete",(e:MessageEvent)=>{
       try{
-        const s:DnsSession = JSON.parse(e.data);
+        const s:DnsSession=JSON.parse(e.data as string);
         setDnsSessions(prev=>{
-          const idx = prev.findIndex(x=>x.key===s.key);
+          const idx=prev.findIndex(x=>x.key===s.key);
           if(idx>=0){ const n=[...prev]; n[idx]=s; return n; }
           return [s,...prev];
         });
@@ -124,7 +143,7 @@ export default function OobPanel(){
 
   const genToken = useCallback(async()=>{
     setLoading(true);
-    try{ const r=await fetch(`${API_URL}/api/oob/token`,{headers:authHeaders()}); setTokenInfo(await r.json()); }catch{/**/}
+    try{ const r=await fetch(`${API_URL}/api/oob/token`,{headers:authHeaders()}); setTokenInfo(await r.json() as TokenInfo); }catch{/**/}
     setLoading(false);
   },[]);
 
@@ -140,66 +159,245 @@ export default function OobPanel(){
 
   useEffect(()=>{ genToken(); },[genToken]);
 
+  const fireActivate = useCallback(async()=>{
+    if(!activateTarget.trim()) return;
+    setActivating(true);
+    setActivateResult(null);
+    setCallbackReceived(false);
+    try{
+      const r = await fetch(`${API_URL}/api/oob/activate`,{
+        method:"POST",
+        headers:{...authHeaders(),"Content-Type":"application/json"},
+        body: JSON.stringify({
+          targetUrl:   activateTarget.trim(),
+          payloadType: activatePayload,
+          injectParam: activateParam.trim()||"q",
+          method:      activateMethod,
+        }),
+      });
+      const d = await r.json() as ActivateResult;
+      setActivateResult(d);
+      if(tab!=="activate") setTab("activate");
+    }catch(e){
+      setActivateResult({
+        ok:false, token:"", cbUrl:"", payload:"", payloadType:activatePayload,
+        targetUrl:activateTarget, method:activateMethod, injectParam:activateParam,
+        status:"error", statusCode:null, responseMs:0, responseBody:"",
+        error:(e as Error).message, hint:"",
+      });
+    }
+    setActivating(false);
+  },[activateTarget,activatePayload,activateParam,activateMethod,tab]);
+
   const filtered=hits.filter(h=>!filter||h.token.includes(filter)||h.sourceIp.includes(filter)||
     (h.data||"").toLowerCase().includes(filter.toLowerCase())||h.method.includes(filter.toUpperCase()));
 
   const downloadDecoded = (s:DnsSession)=>{
-    const data = s.decoded ?? (s.assembled ? atob(s.assembled) : "");
-    const blob = new Blob([data],{type:"text/plain"});
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `dns_exfil_${s.token.slice(0,8)}_${s.prefix}.txt`;
+    const data=s.decoded??(s.assembled?atob(s.assembled):"");
+    const blob=new Blob([data],{type:"text/plain"});
+    const a=document.createElement("a");
+    a.href=URL.createObjectURL(blob);
+    a.download=`dns_exfil_${s.token.slice(0,8)}_${s.prefix}.txt`;
     a.click();
     URL.revokeObjectURL(a.href);
   };
 
+  const statusColor = (s:"sent"|"error"|"timeout")=>
+    s==="sent"?"text-green-400":s==="timeout"?"text-yellow-400":"text-red-400";
+
   return(
     <div className="flex flex-col h-full bg-black text-zinc-300 font-mono text-xs overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center gap-3 px-3 py-1.5 bg-zinc-950 border-b border-zinc-900 shrink-0">
-        <span className="text-red-500 font-bold uppercase tracking-widest text-[11px]">OOB Listener</span>
+      <div className="flex items-center gap-2 px-3 py-1.5 bg-zinc-950 border-b border-zinc-900 shrink-0">
+        <span className="text-red-500 font-bold uppercase tracking-widest text-[11px]">OOB</span>
 
-        {/* Tab switcher */}
-        <div className="flex items-center gap-1 ml-2">
+        <div className="flex items-center gap-1 ml-1">
+          <button onClick={()=>setTab("activate")}
+            className={`px-2 py-0.5 text-[10px] uppercase font-bold border transition-colors ${tab==="activate"?"border-red-700 bg-red-950/40 text-red-400":"border-zinc-800 text-zinc-600 hover:text-zinc-400"}`}>
+            ACTIVATE
+          </button>
           <button onClick={()=>setTab("hits")}
-            className={`px-2 py-0.5 text-[10px] uppercase font-bold border transition-colors ${tab==="hits"?"border-red-800 bg-red-950/40 text-red-400":"border-zinc-800 text-zinc-600 hover:text-zinc-400"}`}>
+            className={`px-2 py-0.5 text-[10px] uppercase font-bold border transition-colors ${tab==="hits"?"border-orange-700 bg-orange-950/30 text-orange-400":"border-zinc-800 text-zinc-600 hover:text-zinc-400"}`}>
             HTTP {hits.length>0&&<span className="ml-1 text-[9px]">({hits.length})</span>}
           </button>
           <button onClick={()=>setTab("dns")}
             className={`px-2 py-0.5 text-[10px] uppercase font-bold border transition-colors ${tab==="dns"?"border-cyan-800 bg-cyan-950/40 text-cyan-400":"border-zinc-800 text-zinc-600 hover:text-zinc-400"}`}>
-            DNS CHUNKS {dnsSessions.filter(s=>s.complete).length>0&&<span className="ml-1 text-[9px] text-green-500">({dnsSessions.filter(s=>s.complete).length}✓)</span>}
+            DNS {dnsSessions.filter(s=>s.complete).length>0&&<span className="ml-1 text-[9px] text-green-500">({dnsSessions.filter(s=>s.complete).length}✓)</span>}
           </button>
         </div>
 
-        {/* Status dot */}
-        {tab==="hits"?(
-          <div className="flex items-center gap-1.5">
-            <div className={`w-1.5 h-1.5 rounded-full ${connected?"bg-green-500 animate-pulse":"bg-red-600"}`}/>
-            <span className={`text-[10px] ${connected?"text-green-500":"text-red-500"}`}>{connected?"LIVE":"OFFLINE"}</span>
-          </div>
-        ):(
-          <div className="flex items-center gap-1.5">
-            <div className={`w-1.5 h-1.5 rounded-full ${dnsConnected?"bg-cyan-500 animate-pulse":"bg-red-600"}`}/>
-            <span className={`text-[10px] ${dnsConnected?"text-cyan-400":"text-red-500"}`}>{dnsConnected?"LIVE":"OFFLINE"}</span>
-          </div>
-        )}
-
-        {tab==="hits"
-          ? <><span className="ml-auto text-zinc-700 text-[10px]">{filtered.length} hits</span>
-              <button onClick={doClear} className="text-[10px] text-zinc-600 hover:text-red-400 border border-zinc-800 px-2 py-0.5 hover:border-red-700">CLEAR</button></>
-          : <><span className="ml-auto text-zinc-700 text-[10px]">{dnsSessions.length} sessions</span>
-              <button onClick={doClearDns} className="text-[10px] text-zinc-600 hover:text-red-400 border border-zinc-800 px-2 py-0.5 hover:border-red-700">CLEAR</button></>
-        }
+        <div className="flex items-center gap-1.5 ml-auto">
+          <div className={`w-1.5 h-1.5 rounded-full ${connected?"bg-green-500 animate-pulse":"bg-red-700"}`}/>
+          <span className={`text-[10px] ${connected?"text-green-600":"text-red-600"}`}>{connected?"LIVE":"OFFLINE"}</span>
+        </div>
       </div>
 
-      {/* ── HTTP HITS tab ─────────────────────────────────────────────── */}
+      {/* ── ACTIVATE TAB ───────────────────────────────────────────────── */}
+      {tab==="activate"&&(
+        <div className="flex flex-1 min-h-0 overflow-hidden">
+          <div className="w-80 shrink-0 border-r border-zinc-900 flex flex-col overflow-hidden">
+            <div className="p-3 border-b border-zinc-900 space-y-2.5">
+              <div className="text-[10px] text-red-400 uppercase font-bold tracking-wider">Remote OOB Trigger</div>
+              <div className="space-y-1.5">
+                <label className="text-[9px] text-zinc-600 uppercase">Target URL</label>
+                <input
+                  value={activateTarget}
+                  onChange={e=>setActivateTarget(e.target.value)}
+                  placeholder="http://target.host/vulnerable?param="
+                  className="w-full bg-zinc-900 border border-zinc-800 text-zinc-200 text-[10px] px-2 py-1.5 placeholder-zinc-700 focus:outline-none focus:border-red-800"
+                />
+              </div>
+              <div className="flex gap-2">
+                <div className="flex-1 space-y-1">
+                  <label className="text-[9px] text-zinc-600 uppercase">Method</label>
+                  <select value={activateMethod} onChange={e=>setActivateMethod(e.target.value)}
+                    className="w-full bg-zinc-900 border border-zinc-800 text-zinc-300 text-[10px] px-2 py-1.5 focus:outline-none">
+                    <option value="GET">GET</option>
+                    <option value="POST">POST</option>
+                  </select>
+                </div>
+                <div className="flex-1 space-y-1">
+                  <label className="text-[9px] text-zinc-600 uppercase">Inject Param</label>
+                  <input
+                    value={activateParam}
+                    onChange={e=>setActivateParam(e.target.value)}
+                    placeholder="q"
+                    className="w-full bg-zinc-900 border border-zinc-800 text-zinc-200 text-[10px] px-2 py-1.5 placeholder-zinc-700 focus:outline-none focus:border-zinc-600"
+                  />
+                </div>
+              </div>
+              <div className="space-y-1">
+                <label className="text-[9px] text-zinc-600 uppercase">Payload Type</label>
+                <select value={activatePayload} onChange={e=>setActivatePayload(e.target.value)}
+                  className="w-full bg-zinc-900 border border-zinc-800 text-zinc-300 text-[10px] px-2 py-1.5 focus:outline-none">
+                  {Object.entries(PAYLOAD_LABELS).map(([k,v])=><option key={k} value={k}>{v}</option>)}
+                </select>
+              </div>
+              <button
+                onClick={()=>void fireActivate()}
+                disabled={activating||!activateTarget.trim()}
+                className="w-full py-1.5 border border-red-800 text-red-400 text-[10px] uppercase tracking-wider hover:bg-red-950/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors font-bold">
+                {activating?"FIRING…":"⚡ FIRE PAYLOAD"}
+              </button>
+            </div>
+
+            {activateResult&&(
+              <div className="p-3 space-y-2 border-b border-zinc-900 overflow-y-auto">
+                <div className="flex items-center gap-2">
+                  <span className={`text-[10px] font-bold uppercase ${activateResult.ok?"text-green-400":"text-red-400"}`}>
+                    {activateResult.ok?"FIRED":"FAILED"}
+                  </span>
+                  <span className={`text-[10px] ${statusColor(activateResult.status)}`}>{activateResult.status}</span>
+                  {activateResult.statusCode!=null&&(
+                    <span className="text-zinc-600 text-[10px]">HTTP {activateResult.statusCode}</span>
+                  )}
+                  <span className="text-zinc-700 text-[10px] ml-auto">{activateResult.responseMs}ms</span>
+                </div>
+
+                {activateResult.error&&(
+                  <div className="bg-red-950/20 border border-red-900/40 p-2 text-[10px] text-red-400">{activateResult.error}</div>
+                )}
+
+                {callbackReceived&&(
+                  <div className="bg-green-950/30 border border-green-800 px-2 py-1.5 flex items-center gap-2">
+                    <span className="text-green-400 text-[11px]">✔</span>
+                    <span className="text-green-400 text-[10px] font-bold uppercase">CALLBACK RECEIVED</span>
+                  </div>
+                )}
+                {!callbackReceived&&activateResult.ok&&(
+                  <div className="bg-zinc-900 border border-zinc-800 px-2 py-1.5 flex items-center gap-2">
+                    <span className="text-yellow-600 animate-pulse text-[10px]">●</span>
+                    <span className="text-zinc-500 text-[10px]">Waiting for callback…</span>
+                  </div>
+                )}
+
+                <div className="bg-zinc-900 border border-zinc-800 p-2 space-y-1">
+                  <div className="flex justify-between">
+                    <span className="text-[9px] text-zinc-600">TOKEN</span>
+                    <button onClick={()=>copy(activateResult.token,"act-tok")} className="text-[9px] text-zinc-600 hover:text-green-400">{copied==="act-tok"?"✓":"COPY"}</button>
+                  </div>
+                  <code className="text-green-400 text-[10px] break-all">{activateResult.token}</code>
+                </div>
+
+                <div className="bg-zinc-900 border border-zinc-800 p-2 space-y-1">
+                  <div className="flex justify-between">
+                    <span className="text-[9px] text-zinc-600">CALLBACK URL</span>
+                    <button onClick={()=>copy(activateResult.cbUrl,"act-cb")} className="text-[9px] text-zinc-600 hover:text-green-400">{copied==="act-cb"?"✓":"COPY"}</button>
+                  </div>
+                  <code className="text-orange-400 text-[10px] break-all">{activateResult.cbUrl}</code>
+                </div>
+
+                <div className="bg-zinc-900 border border-zinc-800 p-2 space-y-1">
+                  <div className="flex justify-between">
+                    <span className="text-[9px] text-zinc-600">FIRED PAYLOAD</span>
+                    <button onClick={()=>copy(activateResult.payload,"act-pl")} className="text-[9px] text-zinc-600 hover:text-green-400">{copied==="act-pl"?"✓":"COPY"}</button>
+                  </div>
+                  <code className="text-cyan-400 text-[10px] break-all whitespace-pre-wrap">{activateResult.payload}</code>
+                </div>
+
+                {activateResult.responseBody&&(
+                  <div className="bg-zinc-950 border border-zinc-900 p-2 space-y-1">
+                    <span className="text-[9px] text-zinc-600">TARGET RESPONSE</span>
+                    <pre className="text-zinc-500 text-[10px] whitespace-pre-wrap break-all">{activateResult.responseBody}</pre>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+            <div className="p-3 border-b border-zinc-900 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-zinc-500 uppercase">Manual Callback URL</span>
+                <button onClick={genToken} disabled={loading}
+                  className="text-[9px] text-zinc-500 hover:text-green-400 border border-zinc-800 px-2 py-0.5 disabled:opacity-40">
+                  {loading?"…":"NEW TOKEN"}
+                </button>
+              </div>
+              {tokenInfo&&(
+                <>
+                  <div className="bg-zinc-900 border border-zinc-800 rounded p-2">
+                    <div className="flex justify-between mb-1">
+                      <span className="text-[9px] text-zinc-600">CALLBACK URL</span>
+                      <button onClick={()=>copy(tokenInfo.cbUrl,"cb2")} className="text-[9px] text-zinc-600 hover:text-green-400">{copied==="cb2"?"✓":"COPY"}</button>
+                    </div>
+                    <code className="text-orange-400 text-[10px] break-all">{tokenInfo.cbUrl}</code>
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-[9px] text-zinc-600 uppercase">Sample Payload</span>
+                      <select value={selPayload} onChange={e=>setSelPayload(e.target.value)}
+                        className="bg-zinc-900 border border-zinc-800 text-zinc-400 text-[9px] px-1 py-0.5">
+                        {Object.entries(PAYLOAD_LABELS).map(([k,v])=><option key={k} value={k}>{v}</option>)}
+                      </select>
+                    </div>
+                    {tokenInfo.payloads[selPayload]&&(
+                      <div className="bg-zinc-950 border border-zinc-800 rounded p-2 relative">
+                        <button onClick={()=>copy(tokenInfo.payloads[selPayload]!,"pl2")}
+                          className="absolute top-1 right-1 text-[9px] text-zinc-600 hover:text-green-400">
+                          {copied==="pl2"?"✓":"COPY"}
+                        </button>
+                        <code className="text-cyan-400 text-[10px] break-all whitespace-pre-wrap">{tokenInfo.payloads[selPayload]}</code>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+            <div className="flex-1 flex items-center justify-center text-zinc-700 text-[11px] flex-col gap-2">
+              <span>Enter a target URL on the left and fire a payload</span>
+              <span className="text-zinc-800 text-[10px]">Callbacks appear in the HTTP tab in real-time</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── HTTP HITS TAB ─────────────────────────────────────────────── */}
       {tab==="hits"&&(
         <div className="flex flex-1 min-h-0 overflow-hidden">
-          {/* Left panel: token + hits list */}
           <div className="w-80 shrink-0 border-r border-zinc-900 flex flex-col overflow-hidden">
             <div className="p-3 border-b border-zinc-900 space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-[10px] text-red-400 uppercase">Callback URL</span>
+                <span className="text-[10px] text-orange-400 uppercase">Callback URL</span>
                 <button onClick={genToken} disabled={loading}
                   className="text-[9px] text-zinc-500 hover:text-green-400 border border-zinc-800 px-2 py-0.5 disabled:opacity-40">
                   {loading?"…":"NEW TOKEN"}
@@ -240,9 +438,11 @@ export default function OobPanel(){
                 </div>
               </>)}
             </div>
-            <div className="px-3 py-2 border-b border-zinc-900">
+            <div className="px-3 py-2 border-b border-zinc-900 flex items-center gap-2">
               <input value={filter} onChange={e=>setFilter(e.target.value)} placeholder="Filter by token / IP / data…"
-                className="w-full bg-zinc-950 border border-zinc-800 text-zinc-300 text-[10px] px-2 py-1 placeholder-zinc-700 focus:outline-none focus:border-zinc-600"/>
+                className="flex-1 bg-zinc-950 border border-zinc-800 text-zinc-300 text-[10px] px-2 py-1 placeholder-zinc-700 focus:outline-none focus:border-zinc-600"/>
+              <span className="text-zinc-700 text-[10px] shrink-0">{filtered.length}</span>
+              <button onClick={doClear} className="text-[10px] text-zinc-600 hover:text-red-400 border border-zinc-800 px-2 py-0.5 hover:border-red-700">CLR</button>
             </div>
             <div className="flex-1 overflow-y-auto">
               {filtered.length===0&&(
@@ -292,29 +492,27 @@ export default function OobPanel(){
           </div>
           <div className="flex-1 flex items-center justify-center text-zinc-800 text-[11px]">
             {filtered.length===0
-              ? <span>No OOB hits yet — fire a payload with OOB mode enabled</span>
+              ? <span>No OOB hits yet — use ACTIVATE tab to fire a payload</span>
               : <span className="text-zinc-700">Select a hit on the left to expand details</span>}
           </div>
         </div>
       )}
 
-      {/* ── DNS CHUNKS tab ─────────────────────────────────────────────── */}
+      {/* ── DNS CHUNKS TAB ─────────────────────────────────────────────── */}
       {tab==="dns"&&(
         <div className="flex flex-1 min-h-0 overflow-hidden">
-          {/* Sessions list */}
           <div className="w-72 shrink-0 border-r border-zinc-900 flex flex-col overflow-hidden">
-            <div className="px-3 py-2 border-b border-zinc-900 text-[10px] text-zinc-600">
-              DNS-chunked exfil sessions. Use an <span className="text-cyan-400">HTTP DNS-chunk</span> payload from the EXFIL tab to start receiving.
+            <div className="px-3 py-2 border-b border-zinc-900 flex items-center justify-between">
+              <span className="text-[10px] text-zinc-600">{dnsSessions.length} sessions</span>
+              <button onClick={doClearDns} className="text-[10px] text-zinc-600 hover:text-red-400 border border-zinc-800 px-2 py-0.5 hover:border-red-700">CLEAR</button>
             </div>
             <div className="flex-1 overflow-y-auto">
               {dnsSessions.length===0&&(
-                <div className="p-4 text-center text-zinc-700 text-[10px]">
-                  Waiting for DNS chunk sessions…
-                </div>
+                <div className="p-4 text-center text-zinc-700 text-[10px]">Waiting for DNS chunk sessions…</div>
               )}
               {dnsSessions.map(s=>{
-                const pct = s.total>0 ? Math.round((s.received/s.total)*100) : 0;
-                const label = PREFIX_LABELS[s.prefix] ?? s.prefix;
+                const pct=s.total>0?Math.round((s.received/s.total)*100):0;
+                const label=PREFIX_LABELS[s.prefix]??s.prefix;
                 return(
                   <div key={s.key} onClick={()=>setExpandedDns(k=>k===s.key?null:s.key)}
                     className={`px-3 py-2 border-b border-zinc-900 cursor-pointer hover:bg-zinc-950 ${expandedDns===s.key?"bg-zinc-950":""}`}>
@@ -327,12 +525,11 @@ export default function OobPanel(){
                       <span className="text-zinc-600 text-[9px] ml-auto">{timeAgo(s.lastChunkAt)}</span>
                     </div>
                     <div className="text-zinc-600 text-[9px] truncate mb-1">{s.token}</div>
-                    {/* Progress bar */}
                     <div className="h-1 bg-zinc-900 rounded-full overflow-hidden mb-1">
                       <div className={`h-full transition-all ${s.complete?"bg-green-600":"bg-cyan-700"}`} style={{width:`${pct}%`}}/>
                     </div>
                     <div className="flex justify-between text-[9px] text-zinc-600">
-                      <span>{s.received}/{s.total} chunks ({pct}%)</span>
+                      <span>{s.received}/{s.total} ({pct}%)</span>
                       {s.byteLen>0&&<span>{fmtBytes(s.byteLen)}</span>}
                     </div>
                   </div>
@@ -341,13 +538,12 @@ export default function OobPanel(){
             </div>
           </div>
 
-          {/* Session detail */}
           <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
             {expandedDns&&(()=>{
-              const s = dnsSessions.find(x=>x.key===expandedDns);
-              if(!s) return <div className="flex-1 flex items-center justify-center text-zinc-800 text-[11px]">Session not found</div>;
-              const label = PREFIX_LABELS[s.prefix] ?? s.prefix;
-              const pct = s.total>0?Math.round((s.received/s.total)*100):0;
+              const s=dnsSessions.find(x=>x.key===expandedDns);
+              if(!s)return <div className="flex-1 flex items-center justify-center text-zinc-800 text-[11px]">Session not found</div>;
+              const label=PREFIX_LABELS[s.prefix]??s.prefix;
+              const pct=s.total>0?Math.round((s.received/s.total)*100):0;
               return(
                 <div className="flex flex-col flex-1 min-h-0 overflow-hidden p-3 gap-3">
                   <div className="flex items-center gap-3">
@@ -376,7 +572,6 @@ export default function OobPanel(){
                     Token: <code className="text-zinc-400">{s.token}</code> · Prefix: <code className="text-cyan-400">{s.prefix}</code>
                     {s.completedAt&&<> · Completed: <span className="text-green-400">{new Date(s.completedAt).toLocaleTimeString()}</span></>}
                   </div>
-
                   {!s.complete&&(
                     <div className="border border-zinc-900 p-2">
                       <div className="h-2 bg-zinc-900 rounded-full overflow-hidden mb-1">
@@ -385,14 +580,13 @@ export default function OobPanel(){
                       <div className="text-[10px] text-zinc-600">{s.received} of {s.total} chunks received ({pct}%)</div>
                     </div>
                   )}
-
                   {s.complete&&(
                     <div className="flex-1 min-h-0 overflow-auto border border-zinc-900 bg-zinc-950 p-2">
                       {s.decoded
                         ? <pre className="text-green-400 text-[10px] whitespace-pre-wrap break-all">{s.decoded}</pre>
                         : (
                           <div>
-                            <div className="text-zinc-600 text-[10px] mb-2">Binary data — base64 representation:</div>
+                            <div className="text-zinc-600 text-[10px] mb-2">Binary — base64:</div>
                             <pre className="text-cyan-400 text-[10px] whitespace-pre-wrap break-all">{s.assembled?.slice(0,4096)}</pre>
                           </div>
                         )

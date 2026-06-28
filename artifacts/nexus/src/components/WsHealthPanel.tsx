@@ -299,7 +299,7 @@ export default function WsHealthPanel() {
       setChannels(prev => prev.map(c =>
         c.path === path ? { ...c, probeStatus: status, latencyMs, probeError: error, lastProbed: now } : c
       ));
-      const lat = `${latencyMs}ms`;
+      const lat = latencyMs < 1000 ? `${latencyMs}ms` : `${(latencyMs / 1000).toFixed(1)}s`;
       addLog(`[${now}] ${status === "ok" ? "✓" : "✗"} ${ch.label} — ${PROBE_LABEL[status]} ${lat}${error ? `: ${error}` : ""}`);
     });
     cleanups.current.push(cancel);
@@ -396,7 +396,7 @@ export default function WsHealthPanel() {
                             <span className={`text-[8px] font-bold uppercase ${lblCls}`}>{PROBE_LABEL[ch.probeStatus]}</span>
                             {ch.latencyMs !== null && (
                               <span className={`text-[8px] font-mono ${ch.latencyMs < 200 ? "text-green-500" : ch.latencyMs < 800 ? "text-yellow-500" : "text-red-500"}`}>
-                                {ch.latencyMs}ms
+                                {ch.latencyMs < 1000 ? `${ch.latencyMs}ms` : `${(ch.latencyMs / 1000).toFixed(1)}s`}
                               </span>
                             )}
                           </div>

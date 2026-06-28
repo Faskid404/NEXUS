@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import {
   decodeFrame, parseFramePayload, FrameType, FrameTypeName,
-  deriveKey, hexToKey, keyToHex,
+  deriveKey, hexToKey,
   HEADER_SIZE, HMAC_SIZE,
 } from "../lib/c2-protocol";
 

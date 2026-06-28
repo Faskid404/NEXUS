@@ -100,7 +100,10 @@ export function useReconnectingWs(options: UseReconnectingWsOptions): UseReconne
         } catch { }
       };
 
-      ws.onerror = () => { };
+      ws.onerror = () => {
+        // Trigger close path so reconnect logic kicks in
+        if (ws === wsRef.current) ws.close();
+      };
 
       ws.onclose = (ev: CloseEvent) => {
         if (ws !== wsRef.current) return;

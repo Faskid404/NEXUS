@@ -1710,7 +1710,7 @@ export default function MainLab({ onLockout }: { onLockout?: () => void } = {}) 
         </select>
       </div>
       <div className="flex gap-2 items-center">
-        <button onClick={handleFuzz} disabled={fuzzing||!fuzzTpl.includes("FUZZ")}
+        <button onClick={()=>{ void handleFuzz(); }} disabled={fuzzing||!fuzzTpl.includes("FUZZ")}
           className="px-4 py-1.5 bg-red-900 text-white text-xs uppercase font-bold hover:bg-red-800 disabled:opacity-40">
           {fuzzing?`FUZZING ${fuzzProg}%`:"FUZZ"}
         </button>
@@ -2450,7 +2450,7 @@ export default function MainLab({ onLockout }: { onLockout?: () => void } = {}) 
                   className="flex-1 bg-red-900 text-white font-bold py-1.5 text-xs uppercase hover:bg-red-800 disabled:opacity-40 transition-colors">
                   {running?"STREAMING…":"INJECT"}
                 </button>
-                <button onClick={()=>fetchSuggestions()} title="Payload suggestions"
+                <button onClick={()=>{ void fetchSuggestions(); }} title="Payload suggestions"
                   className="px-2.5 bg-zinc-900 border border-zinc-800 text-zinc-500 text-[10px] uppercase hover:bg-zinc-800">SUGGEST</button>
               </div>
             </div>

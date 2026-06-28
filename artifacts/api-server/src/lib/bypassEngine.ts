@@ -1626,14 +1626,27 @@ export function buildWafSpecificHeaders(waf: string): Array<Record<string, strin
     return [
       ...base,
       {
-        "User-Agent":       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.86 Safari/537.36",
-        "CF-Connecting-IP": "127.0.0.1",
-        "CF-IPCountry":     "US",
-        "CF-RAY":           `${rid()}-IAD`,
-        "CF-Visitor":       '{"scheme":"https"}',
-        "X-Forwarded-For":  "127.0.0.1",
-        "X-Real-IP":        "127.0.0.1",
-        "True-Client-IP":   "127.0.0.1",
+        "User-Agent":          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.86 Safari/537.36",
+        "CF-Connecting-IP":    "127.0.0.1",
+        "CF-IPCountry":        "US",
+        "CF-RAY":              `${rid()}-IAD`,
+        "CF-Visitor":          '{"scheme":"https"}',
+        "X-Forwarded-For":     "127.0.0.1",
+        "X-Real-IP":           "127.0.0.1",
+        "True-Client-IP":      "127.0.0.1",
+        // Chrome 131 TLS/HTTP2 fingerprint — required for Cloudflare Bot Management bypass
+        "sec-ch-ua":           '"Chromium";v="131", "Google Chrome";v="131", "Not_A Brand";v="24"',
+        "sec-ch-ua-mobile":    "?0",
+        "sec-ch-ua-platform":  '"Windows"',
+        "sec-fetch-dest":      "document",
+        "sec-fetch-mode":      "navigate",
+        "sec-fetch-site":      "none",
+        "sec-fetch-user":      "?1",
+        "Upgrade-Insecure-Requests": "1",
+        "Accept":              "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language":     "en-US,en;q=0.9",
+        "Accept-Encoding":     "gzip, deflate, br",
+        "Connection":          "keep-alive",
       },
       {
         "User-Agent":       "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
@@ -1780,6 +1793,145 @@ export function buildWafSpecificHeaders(waf: string): Array<Record<string, strin
         "X-Varnish": "12345678",
         "X-Forwarded-For": "127.0.0.1",
         "X-Real-IP": "127.0.0.1",
+      },
+    ];
+  }
+
+  if (w.includes("datadome")) {
+    /* DataDome — JS challenge bot manager. Their detection relies on:
+       1. Missing/wrong sec-ch-ua fingerprint
+       2. Missing browser-native sec-fetch-* headers
+       3. User-Agent inconsistency with TLS JA3 fingerprint
+       Bypass: present a consistent Chrome 131 browser fingerprint + known
+       non-bot IPs in X-Forwarded-For to pass their IP reputation check. */
+    return [
+      ...base,
+      {
+        "User-Agent":         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.86 Safari/537.36",
+        "sec-ch-ua":          '"Chromium";v="131", "Google Chrome";v="131", "Not_A Brand";v="24"',
+        "sec-ch-ua-mobile":   "?0",
+        "sec-ch-ua-platform": '"Windows"',
+        "sec-fetch-dest":     "document",
+        "sec-fetch-mode":     "navigate",
+        "sec-fetch-site":     "none",
+        "sec-fetch-user":     "?1",
+        "Accept":             "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language":    "en-US,en;q=0.9",
+        "Accept-Encoding":    "gzip, deflate, br",
+        "Connection":         "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "X-Forwarded-For":    "8.8.8.8",   // Google DNS — high reputation IP
+        "X-Real-IP":          "8.8.8.8",
+      },
+      {
+        "User-Agent":         "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Safari/605.1.15",
+        "sec-ch-ua":          '"Not=A?Brand";v="99"',
+        "sec-ch-ua-mobile":   "?0",
+        "sec-ch-ua-platform": '"macOS"',
+        "sec-fetch-dest":     "document",
+        "sec-fetch-mode":     "navigate",
+        "sec-fetch-site":     "none",
+        "Accept":             "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language":    "en-GB,en;q=0.9",
+        "Accept-Encoding":    "gzip, deflate, br",
+        "X-Forwarded-For":    "1.1.1.1",   // Cloudflare DNS — high reputation
+        "X-Real-IP":          "1.1.1.1",
+      },
+    ];
+  }
+
+  if (w.includes("perimeterx") || w.includes("px")) {
+    /* PerimeterX (HUMAN) — uses sensor data, mouse movement timing, and
+       canvas fingerprinting. Header-level bypass focuses on making the
+       initial HTTP request look like a legitimate browser to pass the
+       first-pass IP reputation + header consistency check. Full bypass
+       requires JS execution; this covers the cases where only the
+       first-pass static analysis blocks the request. */
+    return [
+      ...base,
+      {
+        "User-Agent":         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.86 Safari/537.36",
+        "sec-ch-ua":          '"Chromium";v="131", "Google Chrome";v="131", "Not_A Brand";v="24"',
+        "sec-ch-ua-mobile":   "?0",
+        "sec-ch-ua-platform": '"Windows"',
+        "sec-fetch-dest":     "document",
+        "sec-fetch-mode":     "navigate",
+        "sec-fetch-site":     "cross-site",
+        "sec-fetch-user":     "?1",
+        "Accept":             "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language":    "en-US,en;q=0.9",
+        "Accept-Encoding":    "gzip, deflate, br",
+        "Connection":         "keep-alive",
+        "Referer":            "https://www.google.com/",
+        "X-Forwarded-For":    "8.8.8.8",
+        "X-Real-IP":          "8.8.8.8",
+      },
+      {
+        // Mobile Safari — PX mobile scoring is sometimes less aggressive
+        "User-Agent":         "Mozilla/5.0 (iPhone; CPU iPhone OS 18_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Mobile/15E148 Safari/604.1",
+        "sec-ch-ua":          '"Not=A?Brand";v="99"',
+        "sec-ch-ua-mobile":   "?1",
+        "sec-ch-ua-platform": '"iOS"',
+        "sec-fetch-dest":     "document",
+        "sec-fetch-mode":     "navigate",
+        "sec-fetch-site":     "none",
+        "Accept":             "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language":    "en-US,en;q=0.5",
+        "Accept-Encoding":    "gzip, deflate, br",
+        "X-Forwarded-For":    "1.1.1.1",
+        "X-Real-IP":          "1.1.1.1",
+      },
+    ];
+  }
+
+  if (w.includes("kasada")) {
+    /* Kasada — uses cryptographic proof-of-work challenges and advanced
+       TLS fingerprinting (JA3/JA3S). Header bypass targets their
+       first-pass static request analysis before the PoW challenge. */
+    return [
+      ...base,
+      {
+        "User-Agent":         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.86 Safari/537.36",
+        "sec-ch-ua":          '"Chromium";v="131", "Google Chrome";v="131", "Not_A Brand";v="24"',
+        "sec-ch-ua-mobile":   "?0",
+        "sec-ch-ua-platform": '"Windows"',
+        "sec-fetch-dest":     "document",
+        "sec-fetch-mode":     "navigate",
+        "sec-fetch-site":     "none",
+        "sec-fetch-user":     "?1",
+        "Accept":             "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language":    "en-US,en;q=0.9",
+        "Accept-Encoding":    "gzip, deflate, br",
+        "Connection":         "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "X-Forwarded-For":    "8.8.8.8",
+        "X-Real-IP":          "8.8.8.8",
+        "Priority":           "u=0, i",
+      },
+    ];
+  }
+
+  if (w.includes("shape") || w.includes("f5-shape")) {
+    /* Shape Security (F5 Distributed Cloud) — advanced behavioural analysis.
+       First-pass header check: requires consistent browser fingerprint. */
+    return [
+      ...base,
+      {
+        "User-Agent":         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.86 Safari/537.36",
+        "sec-ch-ua":          '"Chromium";v="131", "Google Chrome";v="131", "Not_A Brand";v="24"',
+        "sec-ch-ua-mobile":   "?0",
+        "sec-ch-ua-platform": '"Windows"',
+        "sec-fetch-dest":     "document",
+        "sec-fetch-mode":     "navigate",
+        "sec-fetch-site":     "none",
+        "sec-fetch-user":     "?1",
+        "Accept":             "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language":    "en-US,en;q=0.9",
+        "Accept-Encoding":    "gzip, deflate, br",
+        "Connection":         "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "X-Forwarded-For":    "8.8.4.4",
+        "X-Real-IP":          "8.8.4.4",
       },
     ];
   }

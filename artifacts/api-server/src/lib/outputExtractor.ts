@@ -155,7 +155,7 @@ const RCE_PATTERNS: Pattern[] = [
   // Generic secret key patterns
   { re: /(?:AWS_SECRET|GITHUB_TOKEN|STRIPE_SK|NPM_TOKEN|GITLAB_TOKEN)\s*=\s*\S{8,}/i, name: "secret-env", hi: true, ctx: 5 },
   // Process substitution / command output confirmation
-  { re: /\bexec\b[^\n]*/bin\/sh[^\n]*/,                                        name: "exec-sh",     hi: true,  ctx: 8  },
+  { re: /\bexec\b[^\n]*\/bin\/sh[^\n]*/,                                        name: "exec-sh",     hi: true,  ctx: 8  },
   // Apache / Nginx version leak in error page
   { re: /Apache\/\d+\.\d+\.\d+[^\n]*Server at/i,                              name: "apache-ver",  hi: false, ctx: 5  },
   { re: /nginx\/\d+\.\d+\.\d+/i,                                               name: "nginx-ver",   hi: false, ctx: 5  },

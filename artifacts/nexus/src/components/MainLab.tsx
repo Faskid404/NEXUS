@@ -2201,7 +2201,7 @@ export default function MainLab({ onLockout }: { onLockout?: () => void } = {}) 
 
   // ─── MAIN RENDER ──────────────────────────────────────
   return (
-    <div className="min-h-screen bg-black text-zinc-300 font-mono flex flex-col select-none">
+    <div className="h-screen bg-black text-zinc-300 font-mono flex flex-col select-none overflow-hidden">
 
       {/* Header */}
       <header className="flex items-center justify-between px-4 py-2 border-b border-red-900/50 bg-zinc-950 shrink-0 flex-wrap gap-2">

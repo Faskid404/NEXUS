@@ -2201,7 +2201,7 @@ export default function MainLab({ onLockout }: { onLockout?: () => void } = {}) 
 
   // ─── MAIN RENDER ──────────────────────────────────────
   return (
-    <div className="h-screen bg-black text-zinc-300 font-mono flex flex-col select-none overflow-hidden">
+    <div className="min-h-screen md:h-screen bg-black text-zinc-300 font-mono flex flex-col select-none md:overflow-hidden">
 
       {/* Header */}
       <header className="flex items-center justify-between px-4 py-2 border-b border-red-900/50 bg-zinc-950 shrink-0 flex-wrap gap-2">
@@ -2228,10 +2228,10 @@ export default function MainLab({ onLockout }: { onLockout?: () => void } = {}) 
         </div>
       </header>
 
-      <div className="flex-1 flex flex-col md:flex-row overflow-hidden min-h-0">
+      <div className="flex-1 flex flex-col md:flex-row md:overflow-hidden md:min-h-0">
 
         {/* Sidebar */}
-        <aside className="w-full md:w-60 border-r border-red-900/30 bg-zinc-950 flex flex-col overflow-y-auto shrink-0 max-h-[45vh] md:max-h-none">
+        <aside className="w-full md:w-60 border-r border-red-900/30 bg-zinc-950 flex flex-col md:overflow-y-auto shrink-0">
           <div className="p-3 space-y-3">
 
             <div>
@@ -2473,7 +2473,7 @@ export default function MainLab({ onLockout }: { onLockout?: () => void } = {}) 
         </aside>
 
         {/* Main area */}
-        <main className="flex-1 flex flex-col min-w-0 min-h-0">
+        <main className="flex-1 flex flex-col min-w-0 md:min-h-0">
 
           {/* Tabs */}
           <div className="flex items-center border-b border-zinc-900 bg-zinc-950 shrink-0 overflow-x-auto">
@@ -2488,7 +2488,7 @@ export default function MainLab({ onLockout }: { onLockout?: () => void } = {}) 
             <div className="ml-auto px-3 text-[9px] text-zinc-700 hidden md:block whitespace-nowrap">Ctrl+Enter inject</div>
           </div>
 
-          <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+          <div className="flex-1 flex flex-col min-h-[500px] md:min-h-0 overflow-hidden">
             {tab==="TERMINAL"&&tabTerminal()}
             {tab==="FUZZER"  &&tabFuzzer()}
             {tab==="ENCODER" &&tabEncoder()}

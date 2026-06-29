@@ -116,6 +116,49 @@ const RCE_PATTERNS: Pattern[] = [
   // Windows privesc
   { re: /SeImpersonatePrivilege\s+\w+\s+Enabled/i,                            name: "se-imperson", hi: true,  ctx: 8  },
   { re: /SeDebugPrivilege\s+\w+\s+Enabled/i,                                   name: "se-debug",    hi: true,  ctx: 8  },
+  // PHP error output — Fatal error / Warning / Notice headers
+  { re: /\bFatal error\b[^\n]*on line \d+/i,                                   name: "php-fatal",   hi: true,  ctx: 10 },
+  { re: /\bParse error\b[^\n]*on line \d+/i,                                   name: "php-parse",   hi: true,  ctx: 8  },
+  { re: /\bWarning\b[^\n]*on line \d+/i,                                        name: "php-warn",    hi: false, ctx: 5  },
+  // PHP wrapper / LFI disclosure
+  { re: /\broot:x:0:0:/,                                                        name: "php-lfi-pw",  hi: true,  ctx: 25 },
+  { re: /content of file [^\n]* could not/i,                                    name: "php-incl-err",hi: false, ctx: 6  },
+  // Java RCE confirmation
+  { re: /Exception in thread "main" java\./,                                    name: "java-exc",    hi: false, ctx: 15 },
+  { re: /at (?:com|org|net|java|sun)\.[a-zA-Z0-9_.]+\([\w.]+:\d+\)/,          name: "java-trace",  hi: false, ctx: 20 },
+  { re: /java\.lang\.Runtime(?:Exec|exec)\b/,                                   name: "java-rce",    hi: true,  ctx: 8  },
+  { re: /Process\[pid=\d+, exitValue=/,                                         name: "java-proc",   hi: true,  ctx: 8  },
+  // GraphQL error / introspection response
+  { re: /"__schema"\s*:\s*\{/,                                                   name: "gql-schema",  hi: true,  ctx: 20 },
+  { re: /"errors"\s*:\s*\[\s*\{\s*"message"/,                                  name: "gql-error",   hi: false, ctx: 10 },
+  { re: /"data"\s*:\s*\{\s*"[a-z]\w+"\s*:/,                                    name: "gql-data",    hi: false, ctx: 10 },
+  // SSRF — cloud metadata response indicators
+  { re: /ami-[0-9a-f]{8,17}/,                                                   name: "ssrf-aws-ami",hi: true,  ctx: 10 },
+  { re: /"AccessKeyId"\s*:\s*"ASIA[A-Z0-9]{16}"/,                              name: "ssrf-aws-key",hi: true,  ctx: 15 },
+  { re: /"Token"\s*:\s*"[A-Za-z0-9+/]{200,}"/,                                 name: "ssrf-aws-tok",hi: true,  ctx: 10 },
+  { re: /google-cloud-project\s*=\s*[\w-]+/i,                                  name: "ssrf-gcp",    hi: true,  ctx: 10 },
+  { re: /"access_token"\s*:\s*"ya29\.[A-Za-z0-9_-]{50,}"/,                    name: "ssrf-gcp-tok",hi: true,  ctx: 10 },
+  // Redis / Memcached response headers
+  { re: /^\+PONG\r?$/m,                                                         name: "redis-pong",  hi: true,  ctx: 5  },
+  { re: /\$\d+\r\nredis_version/m,                                              name: "redis-info",  hi: true,  ctx: 15 },
+  { re: /^VERSION \d+\.\d+\.\d+\r?$/m,                                         name: "memcached",   hi: false, ctx: 5  },
+  // Docker API response
+  { re: /"Id"\s*:\s*"[0-9a-f]{64}"/,                                           name: "docker-api",  hi: true,  ctx: 15 },
+  { re: /"Image"\s*:\s*"[^"]{2,80}"/,                                           name: "docker-img",  hi: false, ctx: 10 },
+  // Kubernetes pod list
+  { re: /"kind"\s*:\s*"PodList"/,                                               name: "k8s-podlist", hi: true,  ctx: 20 },
+  { re: /"serviceAccountToken"\s*:\s*"eyJ[A-Za-z0-9_-]{20,}"/,                name: "k8s-sat",     hi: true,  ctx: 10 },
+  // JWT disclosure
+  { re: /eyJ[A-Za-z0-9_-]{20,}\.eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/,  name: "jwt",         hi: true,  ctx: 5  },
+  // SSH private key
+  { re: /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/,                    name: "privkey",     hi: true,  ctx: 10 },
+  // Generic secret key patterns
+  { re: /(?:AWS_SECRET|GITHUB_TOKEN|STRIPE_SK|NPM_TOKEN|GITLAB_TOKEN)\s*=\s*\S{8,}/i, name: "secret-env", hi: true, ctx: 5 },
+  // Process substitution / command output confirmation
+  { re: /\bexec\b[^\n]*/bin\/sh[^\n]*/,                                        name: "exec-sh",     hi: true,  ctx: 8  },
+  // Apache / Nginx version leak in error page
+  { re: /Apache\/\d+\.\d+\.\d+[^\n]*Server at/i,                              name: "apache-ver",  hi: false, ctx: 5  },
+  { re: /nginx\/\d+\.\d+\.\d+/i,                                               name: "nginx-ver",   hi: false, ctx: 5  },
 ];
 
 /* Raw-body patterns — test against un-stripped HTML for output

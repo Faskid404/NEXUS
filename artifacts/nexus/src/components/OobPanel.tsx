@@ -80,6 +80,16 @@ export default function OobPanel(){
   const [activateResult,  setActivateResult]  = useState<ActivateResult|null>(null);
   const [callbackReceived,setCallbackReceived]= useState(false);
 
+  const [streamPhase,    setStreamPhase]    = useState<"idle"|"init"|"fired"|"waiting"|"callback"|"timeout"|"error">("idle");
+  const [streamCountdown,setStreamCountdown] = useState(0);
+  const [streamElapsed,  setStreamElapsed]   = useState(0);
+  const [streamToken,    setStreamToken]     = useState("");
+  const [streamCbUrl,    setStreamCbUrl]     = useState("");
+  const [streamPayload,  setStreamPayload]   = useState("");
+  const [streamCallback, setStreamCallback]  = useState<{hit:OobHit;decodedData:string}|null>(null);
+  const [streamFireStatus,setStreamFireStatus] = useState<{status:string;statusCode:number|null;responseMs:number;responseBody:string;error?:string}|null>(null);
+  const streamEsRef = useRef<EventSource|null>(null);
+
   const esRef    = useRef<EventSource|null>(null);
   const dnsEsRef = useRef<EventSource|null>(null);
 
@@ -159,35 +169,81 @@ export default function OobPanel(){
 
   useEffect(()=>{ genToken(); },[genToken]);
 
-  const fireActivate = useCallback(async()=>{
+  const fireActivate = useCallback(()=>{
     if(!activateTarget.trim()) return;
+    if(streamEsRef.current){ streamEsRef.current.close(); streamEsRef.current=null; }
     setActivating(true);
     setActivateResult(null);
     setCallbackReceived(false);
-    try{
-      const r = await fetch(`${API_URL}/api/oob/activate`,{
-        method:"POST",
-        headers:{...authHeaders(),"Content-Type":"application/json"},
-        body: JSON.stringify({
-          targetUrl:   activateTarget.trim(),
-          payloadType: activatePayload,
-          injectParam: activateParam.trim()||"q",
-          method:      activateMethod,
-        }),
-      });
-      const d = await r.json() as ActivateResult;
-      setActivateResult(d);
-      if(tab!=="activate") setTab("activate");
-    }catch(e){
-      setActivateResult({
-        ok:false, token:"", cbUrl:"", payload:"", payloadType:activatePayload,
-        targetUrl:activateTarget, method:activateMethod, injectParam:activateParam,
-        status:"error", statusCode:null, responseMs:0, responseBody:"",
-        error:(e as Error).message, hint:"",
-      });
-    }
-    setActivating(false);
-  },[activateTarget,activatePayload,activateParam,activateMethod,tab]);
+    setStreamPhase("init");
+    setStreamCountdown(60);
+    setStreamElapsed(0);
+    setStreamToken("");
+    setStreamCbUrl("");
+    setStreamPayload("");
+    setStreamCallback(null);
+    setStreamFireStatus(null);
+
+    const params = new URLSearchParams({
+      targetUrl:   activateTarget.trim(),
+      payloadType: activatePayload,
+      injectParam: activateParam.trim()||"q",
+      method:      activateMethod,
+      timeout:     "60",
+    });
+    const url = withAuthToken(`${API_URL}/api/oob/activate/stream?${params.toString()}`);
+    const es  = new EventSource(url);
+    streamEsRef.current = es;
+
+    es.addEventListener("init",(e:MessageEvent)=>{
+      try{
+        const d=JSON.parse(e.data as string) as {token:string;cbUrl:string;payload:string;timeoutSec:number};
+        setStreamToken(d.token);
+        setStreamCbUrl(d.cbUrl);
+        setStreamPayload(d.payload);
+        setStreamCountdown(d.timeoutSec??60);
+        setStreamPhase("init");
+      }catch{/**/}
+    });
+    es.addEventListener("fired",(e:MessageEvent)=>{
+      try{
+        const d=JSON.parse(e.data as string) as {status:string;statusCode:number|null;responseMs:number;responseBody:string;error?:string};
+        setStreamFireStatus(d);
+        setStreamPhase("fired");
+        setActivating(false);
+      }catch{/**/}
+    });
+    es.addEventListener("waiting",(e:MessageEvent)=>{
+      try{
+        const d=JSON.parse(e.data as string) as {remaining:number;elapsed:number};
+        setStreamCountdown(d.remaining);
+        setStreamElapsed(d.elapsed);
+        setStreamPhase("waiting");
+      }catch{/**/}
+    });
+    es.addEventListener("callback",(e:MessageEvent)=>{
+      try{
+        const d=JSON.parse(e.data as string) as {hit:OobHit;decodedData:string;elapsed:number};
+        setStreamCallback({hit:d.hit,decodedData:d.decodedData});
+        setStreamElapsed(d.elapsed);
+        setStreamPhase("callback");
+        setCallbackReceived(true);
+        setActivating(false);
+        es.close();
+        streamEsRef.current=null;
+      }catch{/**/}
+    });
+    es.addEventListener("timeout",()=>{
+      setStreamPhase("timeout");
+      setActivating(false);
+      es.close();
+      streamEsRef.current=null;
+    });
+    es.onerror=()=>{
+      setStreamPhase(p=>p==="idle"?"error":p);
+      setActivating(false);
+    };
+  },[activateTarget,activatePayload,activateParam,activateMethod]);
 
   const filtered=hits.filter(h=>!filter||h.token.includes(filter)||h.sourceIp.includes(filter)||
     (h.data||"").toLowerCase().includes(filter.toLowerCase())||h.method.includes(filter.toUpperCase()));
@@ -280,64 +336,82 @@ export default function OobPanel(){
               </button>
             </div>
 
-            {activateResult&&(
-              <div className="p-3 space-y-2 border-b border-zinc-900 overflow-y-auto">
+            {streamPhase!=="idle"&&(
+              <div className="p-3 space-y-2 border-b border-zinc-900 overflow-y-auto flex-1">
+
+                {/* Phase badge */}
                 <div className="flex items-center gap-2">
-                  <span className={`text-[10px] font-bold uppercase ${activateResult.ok?"text-green-400":"text-red-400"}`}>
-                    {activateResult.ok?"FIRED":"FAILED"}
-                  </span>
-                  <span className={`text-[10px] ${statusColor(activateResult.status)}`}>{activateResult.status}</span>
-                  {activateResult.statusCode!=null&&(
-                    <span className="text-zinc-600 text-[10px]">HTTP {activateResult.statusCode}</span>
-                  )}
-                  <span className="text-zinc-700 text-[10px] ml-auto">{activateResult.responseMs}ms</span>
+                  {streamPhase==="init"&&<><span className="text-yellow-400 animate-pulse text-[10px]">●</span><span className="text-yellow-400 text-[10px] font-bold uppercase">INITIALIZING</span></>}
+                  {streamPhase==="fired"&&<><span className="text-blue-400 text-[10px]">●</span><span className="text-blue-400 text-[10px] font-bold uppercase">PAYLOAD FIRED</span></>}
+                  {streamPhase==="waiting"&&<><span className="text-yellow-500 animate-pulse text-[10px]">●</span><span className="text-yellow-500 text-[10px] font-bold uppercase">WAITING</span><span className="ml-auto text-[10px] font-mono text-yellow-600">{streamCountdown}s</span></>}
+                  {streamPhase==="callback"&&<><span className="text-green-400 text-[11px]">✔</span><span className="text-green-400 text-[10px] font-bold uppercase">CALLBACK RECEIVED</span><span className="ml-auto text-[9px] text-green-700">{streamElapsed}s</span></>}
+                  {streamPhase==="timeout"&&<><span className="text-zinc-500 text-[10px]">✗</span><span className="text-zinc-500 text-[10px] font-bold uppercase">TIMEOUT — NO CALLBACK</span></>}
+                  {streamPhase==="error"&&<><span className="text-red-400 text-[10px]">✗</span><span className="text-red-400 text-[10px] font-bold uppercase">STREAM ERROR</span></>}
                 </div>
 
-                {activateResult.error&&(
-                  <div className="bg-red-950/20 border border-red-900/40 p-2 text-[10px] text-red-400">{activateResult.error}</div>
-                )}
-
-                {callbackReceived&&(
-                  <div className="bg-green-950/30 border border-green-800 px-2 py-1.5 flex items-center gap-2">
-                    <span className="text-green-400 text-[11px]">✔</span>
-                    <span className="text-green-400 text-[10px] font-bold uppercase">CALLBACK RECEIVED</span>
-                  </div>
-                )}
-                {!callbackReceived&&activateResult.ok&&(
-                  <div className="bg-zinc-900 border border-zinc-800 px-2 py-1.5 flex items-center gap-2">
-                    <span className="text-yellow-600 animate-pulse text-[10px]">●</span>
-                    <span className="text-zinc-500 text-[10px]">Waiting for callback…</span>
+                {/* Countdown bar */}
+                {(streamPhase==="waiting"||streamPhase==="fired")&&(
+                  <div className="w-full bg-zinc-900 rounded h-1">
+                    <div className="bg-yellow-600 h-1 rounded transition-all duration-1000"
+                      style={{width:`${Math.min(100,((60-streamCountdown)/60)*100)}%`}}/>
                   </div>
                 )}
 
-                <div className="bg-zinc-900 border border-zinc-800 p-2 space-y-1">
-                  <div className="flex justify-between">
-                    <span className="text-[9px] text-zinc-600">TOKEN</span>
-                    <button onClick={()=>copy(activateResult.token,"act-tok")} className="text-[9px] text-zinc-600 hover:text-green-400">{copied==="act-tok"?"✓":"COPY"}</button>
+                {/* Fire status */}
+                {streamFireStatus&&(
+                  <div className={`bg-zinc-900 border ${streamFireStatus.status==="sent"?"border-blue-900":"border-red-900/40"} p-2 space-y-1`}>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[9px] text-zinc-600 uppercase">Target Response</span>
+                      <span className={`text-[10px] font-bold ${streamFireStatus.status==="sent"?"text-blue-400":streamFireStatus.status==="timeout"?"text-yellow-400":"text-red-400"}`}>{streamFireStatus.status.toUpperCase()}</span>
+                      {streamFireStatus.statusCode!=null&&<span className="text-zinc-500 text-[10px]">HTTP {streamFireStatus.statusCode}</span>}
+                      <span className="ml-auto text-[9px] text-zinc-700">{streamFireStatus.responseMs}ms</span>
+                    </div>
+                    {streamFireStatus.error&&<div className="text-red-400 text-[10px]">{streamFireStatus.error}</div>}
+                    {streamFireStatus.responseBody&&<pre className="text-zinc-500 text-[10px] whitespace-pre-wrap break-all">{streamFireStatus.responseBody}</pre>}
                   </div>
-                  <code className="text-green-400 text-[10px] break-all">{activateResult.token}</code>
-                </div>
+                )}
 
-                <div className="bg-zinc-900 border border-zinc-800 p-2 space-y-1">
-                  <div className="flex justify-between">
-                    <span className="text-[9px] text-zinc-600">CALLBACK URL</span>
-                    <button onClick={()=>copy(activateResult.cbUrl,"act-cb")} className="text-[9px] text-zinc-600 hover:text-green-400">{copied==="act-cb"?"✓":"COPY"}</button>
+                {/* Callback data */}
+                {streamPhase==="callback"&&streamCallback&&(
+                  <div className="bg-green-950/20 border border-green-800 p-2 space-y-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[9px] text-green-700 uppercase">Exfil Data</span>
+                      <button onClick={()=>copy(streamCallback.decodedData,"cb-data")} className="ml-auto text-[9px] text-green-700 hover:text-green-400">{copied==="cb-data"?"✓":"COPY"}</button>
+                    </div>
+                    <code className="text-green-400 text-[10px] break-all whitespace-pre-wrap block">{streamCallback.decodedData.slice(0,600)}</code>
+                    <div className="grid grid-cols-2 gap-1 text-[9px]">
+                      <div><span className="text-zinc-600">IP: </span><span className="text-zinc-400">{streamCallback.hit.sourceIp}</span></div>
+                      <div><span className="text-zinc-600">UA: </span><span className="text-zinc-400 truncate">{streamCallback.hit.userAgent?.slice(0,30)}</span></div>
+                    </div>
                   </div>
-                  <code className="text-orange-400 text-[10px] break-all">{activateResult.cbUrl}</code>
-                </div>
+                )}
 
-                <div className="bg-zinc-900 border border-zinc-800 p-2 space-y-1">
-                  <div className="flex justify-between">
-                    <span className="text-[9px] text-zinc-600">FIRED PAYLOAD</span>
-                    <button onClick={()=>copy(activateResult.payload,"act-pl")} className="text-[9px] text-zinc-600 hover:text-green-400">{copied==="act-pl"?"✓":"COPY"}</button>
+                {/* Token / CB URL */}
+                {streamToken&&(
+                  <div className="bg-zinc-900 border border-zinc-800 p-2 space-y-1">
+                    <div className="flex justify-between">
+                      <span className="text-[9px] text-zinc-600">TOKEN</span>
+                      <button onClick={()=>copy(streamToken,"st-tok")} className="text-[9px] text-zinc-600 hover:text-green-400">{copied==="st-tok"?"✓":"COPY"}</button>
+                    </div>
+                    <code className="text-green-400 text-[10px] break-all">{streamToken}</code>
                   </div>
-                  <code className="text-cyan-400 text-[10px] break-all whitespace-pre-wrap">{activateResult.payload}</code>
-                </div>
-
-                {activateResult.responseBody&&(
-                  <div className="bg-zinc-950 border border-zinc-900 p-2 space-y-1">
-                    <span className="text-[9px] text-zinc-600">TARGET RESPONSE</span>
-                    <pre className="text-zinc-500 text-[10px] whitespace-pre-wrap break-all">{activateResult.responseBody}</pre>
+                )}
+                {streamCbUrl&&(
+                  <div className="bg-zinc-900 border border-zinc-800 p-2 space-y-1">
+                    <div className="flex justify-between">
+                      <span className="text-[9px] text-zinc-600">CALLBACK URL</span>
+                      <button onClick={()=>copy(streamCbUrl,"st-cb")} className="text-[9px] text-zinc-600 hover:text-green-400">{copied==="st-cb"?"✓":"COPY"}</button>
+                    </div>
+                    <code className="text-orange-400 text-[10px] break-all">{streamCbUrl}</code>
+                  </div>
+                )}
+                {streamPayload&&(
+                  <div className="bg-zinc-900 border border-zinc-800 p-2 space-y-1">
+                    <div className="flex justify-between">
+                      <span className="text-[9px] text-zinc-600">FIRED PAYLOAD</span>
+                      <button onClick={()=>copy(streamPayload,"st-pl")} className="text-[9px] text-zinc-600 hover:text-green-400">{copied==="st-pl"?"✓":"COPY"}</button>
+                    </div>
+                    <code className="text-cyan-400 text-[10px] break-all whitespace-pre-wrap">{streamPayload}</code>
                   </div>
                 )}
               </div>

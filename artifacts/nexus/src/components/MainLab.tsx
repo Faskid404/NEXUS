@@ -2473,7 +2473,7 @@ export default function MainLab({ onLockout }: { onLockout?: () => void } = {}) 
         </aside>
 
         {/* Main area */}
-        <main className="flex-1 flex flex-col min-w-0 md:min-h-0">
+        <main className="flex flex-col min-w-0 md:flex-1 md:min-h-0">
 
           {/* Tabs */}
           <div className="flex items-center border-b border-zinc-900 bg-zinc-950 shrink-0 overflow-x-auto">
@@ -2488,7 +2488,7 @@ export default function MainLab({ onLockout }: { onLockout?: () => void } = {}) 
             <div className="ml-auto px-3 text-[9px] text-zinc-700 hidden md:block whitespace-nowrap">Ctrl+Enter inject</div>
           </div>
 
-          <div className="flex-1 flex flex-col min-h-[500px] md:min-h-0 overflow-hidden">
+          <div className="flex flex-col min-h-[60vh] md:flex-1 md:min-h-0 overflow-hidden">
             {tab==="TERMINAL"&&tabTerminal()}
             {tab==="FUZZER"  &&tabFuzzer()}
             {tab==="ENCODER" &&tabEncoder()}

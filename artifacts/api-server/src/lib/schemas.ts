@@ -18,10 +18,13 @@ export const ExploitChainRequestSchema = z.object({
   skipServices:z.array(z.string()).optional(),
 });
 
+const HTTP_METHODS = ["GET","POST","PUT","PATCH","DELETE","OPTIONS","HEAD",
+  "JSON","MULTIPART","COOKIE","HEADER","PATH","XML"] as const;
+
 export const AutoExploitRequestSchema = z.object({
   targetUrl:       z.string().url(),
   injectParam:     z.string().min(1).max(256).optional(),
-  httpMethod:      z.enum(["GET","POST","PUT","PATCH","DELETE","OPTIONS","HEAD"]).optional(),
+  httpMethod:      z.enum(HTTP_METHODS).optional(),
   cmd:             z.string().max(1024).optional(),
   attackerIp:      z.string().max(128).optional(),
   attackerPort:    z.union([z.string(), z.number()]).optional(),
@@ -40,7 +43,7 @@ export const MutationScannerRequestSchema = z.object({
   targetUrl:    z.string().url(),
   injectParam:  z.string().min(1).max(256).default("cmd"),
   technique:    z.enum(["sqli","ssti","xss","cmdi","xxe","lfi","redirect"]).optional(),
-  httpMethod:   z.enum(["GET","POST","PUT","PATCH","DELETE","OPTIONS","HEAD"]).optional(),
+  httpMethod:   z.enum(HTTP_METHODS).optional(),
   generations:  z.coerce.number().int().min(1).max(200).optional(),
   popSize:      z.coerce.number().int().min(2).max(100).optional(),
   eliteRatio:   z.coerce.number().min(0).max(1).optional(),
@@ -117,7 +120,7 @@ export const StreamExecRequestSchema = z.object({
   mode:          z.string().optional(),
   injectionUrl:  z.string().optional(),
   injectParam:   z.string().optional(),
-  httpMethod:    z.enum(["GET","POST","PUT","PATCH","DELETE","OPTIONS","HEAD"]).optional(),
+  httpMethod:    z.enum(HTTP_METHODS).optional(),
   customHeaders: z.string().max(2048).optional(),
   attackerIp:    z.string().max(128).optional(),
   attackerPort:  z.string().max(10).optional(),

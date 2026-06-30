@@ -1850,7 +1850,7 @@ export default function MainLab({ onLockout }: { onLockout?: () => void } = {}) 
 
   // ── SHELLS ────────────────────────────────────────────
   const tabShells = () => (
-    <div className="flex-1 flex flex-col p-3 gap-2 overflow-hidden">
+    <div className="flex-1 flex flex-col p-3 gap-2 md:overflow-hidden">
       {/* Search */}
       <input
         value={shellSearch} onChange={e=>{setShellSearch(e.target.value);setShellCat("All");}}
@@ -1942,7 +1942,7 @@ export default function MainLab({ onLockout }: { onLockout?: () => void } = {}) 
 
   // ── LIBRARY ───────────────────────────────────────────
   const tabLibrary = () => (
-    <div className="flex-1 flex flex-col p-3 gap-2 overflow-hidden">
+    <div className="flex-1 flex flex-col p-3 gap-2 md:overflow-hidden">
       <input value={libSearch} onChange={e=>setLibSearch(e.target.value)}
         className="w-full bg-black border border-zinc-800 px-2 py-1.5 text-[11px] text-zinc-300 focus:outline-none focus:border-red-700 shrink-0"
         placeholder="Search payloads..."/>
@@ -2201,7 +2201,7 @@ export default function MainLab({ onLockout }: { onLockout?: () => void } = {}) 
 
   // ─── MAIN RENDER ──────────────────────────────────────
   return (
-    <div className="min-h-screen md:h-screen bg-black text-zinc-300 font-mono flex flex-col select-none md:overflow-hidden">
+    <div className="bg-black text-zinc-300 font-mono flex flex-col select-none md:flex-1 md:min-h-0 md:overflow-hidden">
 
       {/* Header */}
       <header className="flex items-center justify-between px-4 py-2 border-b border-red-900/50 bg-zinc-950 shrink-0 flex-wrap gap-2">

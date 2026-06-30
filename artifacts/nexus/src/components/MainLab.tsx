@@ -1047,6 +1047,7 @@ export default function MainLab({ onLockout }: { onLockout?: () => void } = {}) 
   const [history,  setHistory]  = useState<string[]>([]);
   const [histIdx,  setHistIdx]  = useState(-1);
   const [draft,    setDraft]    = useState("");
+  const [mobileView, setMobileView] = useState<"config"|"output">("config");
   const [libCat,   setLibCat]   = useState(0);
   const [libSearch,setLibSearch]= useState("");
   const [shellCat,    setShellCat]    = useState("All");
@@ -1326,6 +1327,7 @@ export default function MainLab({ onLockout }: { onLockout?: () => void } = {}) 
 
   const handleInject = useCallback(() => {
     if (!cmd.trim() || running) return;
+    setMobileView("output");
     if (cmd.trim()) {
       setHistory(h => [cmd, ...h.filter(x=>x!==cmd)].slice(0,100));
       setHistIdx(-1);
@@ -2201,7 +2203,7 @@ export default function MainLab({ onLockout }: { onLockout?: () => void } = {}) 
 
   // ─── MAIN RENDER ──────────────────────────────────────
   return (
-    <div className="min-h-screen md:h-screen bg-black text-zinc-300 font-mono flex flex-col select-none md:overflow-hidden">
+    <div className="h-screen bg-black text-zinc-300 font-mono flex flex-col select-none overflow-hidden">
 
       {/* Header */}
       <header className="flex items-center justify-between px-4 py-2 border-b border-red-900/50 bg-zinc-950 shrink-0 flex-wrap gap-2">
@@ -2228,10 +2230,22 @@ export default function MainLab({ onLockout }: { onLockout?: () => void } = {}) 
         </div>
       </header>
 
-      <div className="md:flex-1 flex flex-col md:flex-row md:overflow-hidden md:min-h-0">
+      {/* Mobile-only tab switcher */}
+      <div className="md:hidden flex border-b border-zinc-800 bg-zinc-950 shrink-0">
+        <button onClick={()=>setMobileView("config")}
+          className={`flex-1 py-2.5 text-[11px] uppercase tracking-widest font-bold transition-colors ${mobileView==="config"?"text-red-400 border-b-2 border-red-600 bg-black":"text-zinc-600 hover:text-zinc-400"}`}>
+          ⚙ Config
+        </button>
+        <button onClick={()=>setMobileView("output")}
+          className={`flex-1 py-2.5 text-[11px] uppercase tracking-widest font-bold transition-colors ${mobileView==="output"?"text-red-400 border-b-2 border-red-600 bg-black":"text-zinc-600 hover:text-zinc-400"}`}>
+          ⌨ Terminal
+        </button>
+      </div>
+
+      <div className="flex-1 flex flex-col md:flex-row overflow-hidden min-h-0">
 
         {/* Sidebar */}
-        <aside className="w-full md:w-60 border-r border-red-900/30 bg-zinc-950 flex flex-col md:overflow-y-auto shrink-0">
+        <aside className={`w-full md:w-60 border-r border-red-900/30 bg-zinc-950 flex-col overflow-y-auto shrink-0 ${mobileView==="config"?"flex":"hidden"} md:flex`}>
           <div className="p-3 space-y-3">
 
             <div>
@@ -2473,7 +2487,7 @@ export default function MainLab({ onLockout }: { onLockout?: () => void } = {}) 
         </aside>
 
         {/* Main area */}
-        <main className="flex flex-col min-w-0 md:flex-1 md:min-h-0">
+        <main className={`flex-col min-w-0 flex-1 min-h-0 ${mobileView==="output"?"flex":"hidden"} md:flex`}>
 
           {/* Tabs */}
           <div className="flex items-center border-b border-zinc-900 bg-zinc-950 shrink-0 overflow-x-auto">
@@ -2488,7 +2502,7 @@ export default function MainLab({ onLockout }: { onLockout?: () => void } = {}) 
             <div className="ml-auto px-3 text-[9px] text-zinc-700 hidden md:block whitespace-nowrap">Ctrl+Enter inject</div>
           </div>
 
-          <div className="flex flex-col min-h-[60vh] md:flex-1 md:min-h-0 overflow-hidden">
+          <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
             {tab==="TERMINAL"&&tabTerminal()}
             {tab==="FUZZER"  &&tabFuzzer()}
             {tab==="ENCODER" &&tabEncoder()}

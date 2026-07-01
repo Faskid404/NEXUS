@@ -645,7 +645,8 @@ function C2PollerTab() {
 }
 
 interface ProbeEnv { server:string; language:string; framework:string; cms:string; waf:string|null; wafConfidence:string; cdn?:string; ip?:string; }
-interface ProbeSvc { port:number; service:string; banner:string; version?:string; cveHints:string[]; }
+// Field name matches the server-side ServiceFingerprint: backend sends `vulnHints`, not `cveHints`
+interface ProbeSvc { port:number; service:string; banner:string; version?:string; vulnHints:string[]; }
 interface ProbeDisc { paths:string[]; techs:string[]; }
 
 function ProbeTargetTab() {
@@ -684,7 +685,8 @@ function ProbeTargetTab() {
     const ws = new WebSocket(withAuthToken(`${wsBase()}/probe`));
     wsRef.current = ws;
     ws.onopen = () => {
-      ws.send(JSON.stringify({ url, scanPorts, sshBrute, ...authHeaders() }));
+      // Auth token is already in the WS URL via withAuthToken() — do NOT re-send it in the body.
+      ws.send(JSON.stringify({ url, scanPorts, sshBrute }));
     };
     ws.onmessage = (e) => {
       try {
@@ -748,9 +750,9 @@ function ProbeTargetTab() {
             ["Server",    env.server    || "—"],
             ["Language",  env.language  || "—"],
             ["Framework", env.framework || "—"],
-            ["CMS",       (env as unknown as Record<string,string>)["cms"] || "—"],
-            ["CDN",       env.cdn        || "—"],
-            ["IP",        env.ip         || "—"],
+            ["CMS",       env.cms       || "—"],
+            ["CDN",       env.cdn       || "—"],
+            ["IP",        env.ip        || "—"],
           ].map(([k,v]) => (
             <div key={k} className="flex gap-1 items-baseline">
               <span className="text-[9px] text-zinc-600 uppercase w-16 shrink-0">{k}</span>
@@ -777,7 +779,7 @@ function ProbeTargetTab() {
                 <span className="text-yellow-400 w-10 shrink-0">{s.port}</span>
                 <span className="text-zinc-300 w-20 shrink-0">{s.service}</span>
                 {s.version && <span className="text-zinc-500">{s.version}</span>}
-                {s.cveHints.length > 0 && <span className="text-red-400 text-[9px]">{s.cveHints.slice(0,2).join(" ")}</span>}
+                {(s.vulnHints?.length ?? 0) > 0 && <span className="text-red-400 text-[9px]">{s.vulnHints.slice(0,2).join(" ")}</span>}
               </div>
             ))}
           </div>

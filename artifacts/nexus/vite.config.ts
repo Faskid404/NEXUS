@@ -87,7 +87,9 @@ export default defineConfig({
     },
     proxy: {
       "/api": {
-        target: "http://localhost:5001",
+        // Prefer VITE_API_URL env var (set by docker/CI/replit env), fall back to the
+        // api-server default port so local `pnpm dev` works without extra config.
+        target: process.env.VITE_API_URL ?? "http://localhost:8080",
         changeOrigin: true,
         ws: true,
       },

